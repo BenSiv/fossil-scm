@@ -51,6 +51,7 @@ set srcDirExt ../extsrc
 
 set src {
   add
+  agent
   ajax
   alerts
   allrepo

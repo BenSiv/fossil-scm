@@ -367,6 +367,7 @@ SHELL_OPTIONS = /DNDEBUG=1 \
 PIKCHR_OPTIONS = /DPIKCHR_TOKEN_LIMIT=10000
 
 SRC   = "$(OX)\add_.c" \
+        "$(OX)\agent_.c" \
         "$(OX)\ajax_.c" \
         "$(OX)\alerts_.c" \
         "$(OX)\allrepo_.c" \
@@ -635,6 +636,7 @@ EXTRA_FILES   = "$(SRCDIR)\..\extsrc\pikchr-worker.js" \
         "$(SRCDIR)\wiki.wiki"
 
 OBJ   = "$(OX)\add$O" \
+        "$(OX)\agent$O" \
         "$(OX)\ajax$O" \
         "$(OX)\alerts$O" \
         "$(OX)\allrepo$O" \
@@ -887,6 +889,7 @@ APPTARGETS = $(APPTARGETS) openssl
 
 "$(OX)\linkopts": "$(B)\win\Makefile.msc"
 	echo "$(OX)\add.obj" > $@
+	echo "$(OX)\agent.obj" >> $@
 	echo "$(OX)\ajax.obj" >> $@
 	echo "$(OX)\alerts.obj" >> $@
 	echo "$(OX)\allrepo.obj" >> $@
@@ -1276,6 +1279,12 @@ realclean: clean
 	$(TCC) /Fo$@ /Fd$(@D)\ -c "$(OX)\add_.c"
 
 "$(OX)\add_.c" : "$(SRCDIR)\add.c"
+	"$(OBJDIR)\translate$E" $** > $@
+
+"$(OX)\agent$O" : "$(OX)\agent_.c" "$(OX)\agent.h"
+	$(TCC) /Fo$@ /Fd$(@D)\ -c "$(OX)\agent_.c"
+
+"$(OX)\agent_.c" : "$(SRCDIR)\agent.c"
 	"$(OBJDIR)\translate$E" $** > $@
 
 "$(OX)\ajax$O" : "$(OX)\ajax_.c" "$(OX)\ajax.h"
@@ -2177,6 +2186,7 @@ realclean: clean
 
 "$(OX)\headers": "$(OBJDIR)\makeheaders$E" "$(OX)\page_index.h" "$(OX)\builtin_data.h" "$(OX)\VERSION.h"
 	"$(OBJDIR)\makeheaders$E" "$(OX)\add_.c":"$(OX)\add.h" \
+			"$(OX)\agent_.c":"$(OX)\agent.h" \
 			"$(OX)\ajax_.c":"$(OX)\ajax.h" \
 			"$(OX)\alerts_.c":"$(OX)\alerts.h" \
 			"$(OX)\allrepo_.c":"$(OX)\allrepo.h" \
