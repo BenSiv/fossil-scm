@@ -221,10 +221,10 @@ void pclose2(int fdIn, FILE *pOut, int childPid){
 #ifdef _WIN32
   /* Not implemented, yet */
   close(fdIn);
-  fclose(pOut);
+  if( pOut ) fclose(pOut);
 #else
   close(fdIn);
-  fclose(pOut);
+  if( pOut ) fclose(pOut);
   while( waitpid(0, 0, WNOHANG)>0 ) {}
 #endif
 }

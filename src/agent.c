@@ -256,6 +256,9 @@ static void agent_wiki_sync_cmd(void){
 **
 ** Returns 0 on success and non-zero on error.
 */
+static void agent_strip_ansi(Blob *pText);
+static void agent_strip_prefix_noise(Blob *pText);
+
 static int agent_run_ollama(
   const char *zModel,
   const char *zPrompt,
@@ -275,6 +278,7 @@ static int agent_run_ollama(
   blob_append_escaped_arg(&cmd, zOllamaCmd, 1);
   blob_append(&cmd, " run", 4);
   blob_append_escaped_arg(&cmd, zModel, 0);
+  blob_append_escaped_arg(&cmd, zPrompt, 0);
   blob_append(&cmd, " 2>&1", 5);
   rc = popen2(blob_str(&cmd), &fdIn, &out, &childPid, 0);
   if( rc!=0 || fdIn<0 || out==0 ){
@@ -282,8 +286,11 @@ static int agent_run_ollama(
     blob_reset(&cmd);
     return 1;
   }
-  fprintf(out, "%s\n", zPrompt);
-  fflush(out);
+  /* The current Ollama CLI supports one-shot prompts as a positional
+  ** argument. Close stdin immediately so the child never enters its
+  ** interactive prompt loop. */
+  fclose(out);
+  out = 0;
   in = fdopen(fdIn, "rb");
   if( in==0 ){
     pclose2(fdIn, out, childPid);
@@ -293,6 +300,8 @@ static int agent_run_ollama(
   }
   blob_read_from_channel(pReply, in, -1);
   pclose2(fdIn, out, childPid);
+  agent_strip_ansi(pReply);
+  agent_strip_prefix_noise(pReply);
   blob_trim(pReply);
   if( blob_size(pReply)==0 ){
     blob_appendf(pErr,
@@ -308,6 +317,67 @@ static int agent_run_ollama(
   }
   blob_reset(&cmd);
   return 0;
+}
+
+/*
+** Remove ANSI/VT100 escape sequences from CLI output so the web UI gets
+** readable text instead of terminal control codes.
+*/
+static void agent_strip_ansi(Blob *pText){
+  char *z = blob_buffer(pText);
+  int n = blob_size(pText);
+  int i;
+  int j = 0;
+
+  for(i=0; i<n; i++){
+    unsigned char c = (unsigned char)z[i];
+    if( c==0x1b && i+1<n ){
+      unsigned char c1 = (unsigned char)z[i+1];
+      if( c1=='[' ){
+        i += 2;
+        while( i<n ){
+          c = (unsigned char)z[i];
+          if( c>=0x40 && c<=0x7e ) break;
+          i++;
+        }
+        continue;
+      }else if( c1==']' ){
+        i += 2;
+        while( i<n ){
+          c = (unsigned char)z[i];
+          if( c==0x07 ) break;
+          if( c==0x1b && i+1<n && z[i+1]=='\\' ){
+            i++;
+            break;
+          }
+          i++;
+        }
+        continue;
+      }
+    }
+    z[j++] = z[i];
+  }
+  blob_resize(pText, j);
+}
+
+/*
+** Drop any leading spinner glyphs or other console noise which may remain
+** after ANSI escapes are removed.
+*/
+static void agent_strip_prefix_noise(Blob *pText){
+  char *z = blob_buffer(pText);
+  int n = blob_size(pText);
+  int i = 0;
+
+  while( i<n ){
+    unsigned char c = (unsigned char)z[i];
+    if( c>0x20 && c<0x7f ) break;
+    i++;
+  }
+  if( i>0 && i<n ){
+    memmove(z, z+i, n-i);
+    blob_resize(pText, n-i);
+  }
 }
 
 /*
