@@ -30,6 +30,9 @@
 **
 */
 #include "config.h"
+
+/* Avoid ai.h include here to prevent header duplication. */
+void ai_schema_ensure(void);
 #if defined(_WIN32)
 #  if USE_SEE
 #    include <windows.h>
@@ -2774,6 +2777,8 @@ void db_open_repository(const char *zDbName){
     g.eHashPolicy = hname_default_policy();
     db_set_int("hash-policy", g.eHashPolicy, 0);
   }
+
+  ai_schema_ensure();
 
 #if 0  /* No longer automatic.  Need to run "fossil rebuild" to migrate */
   /* Make a change to the CHECK constraint on the BLOB table for

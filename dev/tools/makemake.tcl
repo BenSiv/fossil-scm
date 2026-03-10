@@ -51,6 +51,7 @@ set srcDirExt ../../dep/vendor/extsrc
 
 set src {
   add
+  ai
   agent
   ajax
   alerts

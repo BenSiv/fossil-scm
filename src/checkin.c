@@ -20,6 +20,9 @@
 */
 #include "config.h"
 #include "checkin.h"
+
+/* Avoid ai.h here to prevent header duplication. */
+void ai_record_commit(int rid, const char *zComment);
 #include <assert.h>
 
 /*
@@ -3314,6 +3317,7 @@ void commit_cmd(void){
     db_end_transaction(1);
     return;
   }
+  ai_record_commit(nvid, blob_str(&comment));
   db_end_transaction(0);
 
   if( !g.markPrivate ){
