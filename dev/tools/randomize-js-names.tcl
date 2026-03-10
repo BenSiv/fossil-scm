@@ -1,17 +1,17 @@
 #!/usr/bin/tclsh
 #
 # This script is run as part of "make wasm".  After emcc has
-# run to generate extsrc/pikchr.wasm and extsrc/pikchr.js from
-# extsrc/pikchr.c, we need to make changes to these filenames to
+# run to generate dep/vendor/extsrc/pikchr.wasm and dep/vendor/extsrc/pikchr.js from
+# dep/vendor/extsrc/pikchr.c, we need to make changes to these filenames to
 # work around caching problems.
 #
-#    (1)  in extsrc/pikchr.js ->  change "pikchr.wasm" into
+#    (1)  in dep/vendor/extsrc/pikchr.js ->  change "pikchr.wasm" into
 #         "pikchr-vNNNNNNNN.wasm" where Ns are random digits.
 #
-#    (2)  in extsrc/pikchr-worker.js -> change "pikchr-vNNNNNNNN.js"
+#    (2)  in dep/vendor/extsrc/pikchr-worker.js -> change "pikchr-vNNNNNNNN.js"
 #         by altering the random digits N.
 #
-set DIR extsrc
+set DIR dep/vendor/extsrc
 if {[llength $argv]>0} {
   set DIR [lindex $argv 0]
 }

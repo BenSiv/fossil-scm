@@ -62,7 +62,7 @@ if {[string first " " $autosetup(builddir)] != -1} {
 }
 
 set outOfTreeBuild 0
-if {![file exists fossil.1]} {
+if {![file exists doc/man/fossil.1]} {
   puts "This appears to be an out-of-tree build."
   set outOfTreeBuild 1
 }
@@ -214,7 +214,7 @@ if {![opt-bool internal-sqlite]} {
     set cmdline {}
     lappend cmdline {*}[get-define CCACHE]
     lappend cmdline {*}[get-define CC] {*}[get-define CFLAGS]
-    lappend cmdline $::autosetup(dir)/../tools/sqlcompattest.c -o conftest__
+    lappend cmdline $::autosetup(dir)/../../dev/tools/sqlcompattest.c -o conftest__
     lappend cmdline {*}[get-define LDFLAGS]
     lappend cmdline {*}[get-define LIBS]
     set sqlite-version [string cat "-D MINIMUM_SQLITE_VERSION=" [get-define MINIMUM_SQLITE_VERSION]]
@@ -943,14 +943,14 @@ proc proj-check-emsdk {} {
 }
 
 if {[proj-check-emsdk]} {
-  define EMCC_WRAPPER $::autosetup(dir)/../tools/emcc.sh
+  define EMCC_WRAPPER $::autosetup(dir)/../../dev/tools/emcc.sh
   define EMCC_OPT [get-env EMCC_OPT "-Oz"]; # optional flags to pass to emcc
-  make-template tools/emcc.sh.in
-  catch {exec chmod u+x tools/emcc.sh}
+  make-template dev/tools/emcc.sh.in
+  catch {exec chmod u+x dev/tools/emcc.sh}
 } else {
   define EMCC_WRAPPER ""
   define EMCC_OPT ""
-  catch {exec rm -f tools/emcc.sh}
+  catch {exec rm -f dev/tools/emcc.sh}
 }
 
 handle-with-openssl

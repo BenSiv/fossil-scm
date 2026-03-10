@@ -1,4 +1,4 @@
 #!/bin/sh
-dir="`dirname "$0"`/autosetup"
+dir="`dirname "$0"`/dep/vendor/autosetup"
 #@@INITCHECK@@#
 WRAPPER="$0"; export WRAPPER; exec "`"$dir/autosetup-find-tclsh"`" "$dir/autosetup" "$@"

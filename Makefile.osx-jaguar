@@ -51,9 +51,9 @@ TCCFLAGS = $(CFLAGS)
 TCLSH = tclsh
 
 # LIB =	  -lz
-LIB = compat/zlib/libz.a
+LIB = dep/vendor/compat/zlib/libz.a
 TCC +=	  -g -O0 -DHAVE_AUTOCONFIG_H
-TCC += -Icompat/zlib
+TCC += -Idep/vendor/compat/zlib
 TCC += -DSQLITE_WITHOUT_ZONEMALLOC
 TCC += -D_BSD_SOURCE=1
 TCC += -DWITHOUT_ICONV
