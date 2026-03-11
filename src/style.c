@@ -812,6 +812,12 @@ void style_header(const char *zTitleFormat, ...){
 
   /* Generate the header up through the main menu */
   style_init_th1_vars(zTitle);
+  if( zHeader==0 || zHeader[0]==0 ){
+    zHeader = zDfltHeader;
+  }
+  if( zHeader==0 ){
+    zHeader = "";
+  }
   if( sqlite3_strlike("%<body%", zHeader, 0)!=0 ){
     Th_Render(zDfltHeader);
   }

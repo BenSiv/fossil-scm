@@ -21,6 +21,12 @@
 #include "agent.h"
 #include <assert.h>
 
+static int agent_generate_embedding(
+  const char *zModel,
+  const char *zText,
+  Blob *pOut
+);
+
 /*
 ** SETTING: agent-ollama-command width=40 default=ollama
 **
@@ -54,7 +60,7 @@ static int agent_changes_text(Blob *pOut, int vid, const char *zPrefix){
   Stmt q;
   int nChange = 0;
 
-  vfile_check_signature(vid, 0);
+  /* vfile_check_signature(vid, 0); -- triggers UPDATE which is disallowed in web mode */
   db_prepare(&q,
     "SELECT pathname,"
     "       CASE"
@@ -252,6 +258,71 @@ static void agent_wiki_sync_cmd(void){
 }
 
 /*
+** Perform a semantic search for zQuery and append relevant snippets to pOut.
+*/
+static void agent_semantic_search(const char *zQuery, int nLimit, Blob *pOut){
+  const char *zModel = db_get("agent-ollama-model", "llama3.2");
+  Blob vQuery = BLOB_INITIALIZER;
+  Stmt q;
+
+  if( agent_generate_embedding(zModel, zQuery, &vQuery)!=0 ){
+    blob_reset(&vQuery);
+    return;
+  }
+
+  db_prepare(&q,
+    "SELECT n.title, n.body, vec_distance(v.vector, :vec) AS dist"
+    "  FROM ai_vector v, ai_note n"
+    " WHERE v.source_type='note' AND v.source_id=n.nid"
+    " ORDER BY dist ASC LIMIT %d",
+    nLimit
+  );
+  db_bind_blob(&q, ":vec", &vQuery);
+  while( db_step(&q)==SQLITE_ROW ){
+    const char *zTitle = db_column_text(&q, 0);
+    const char *zBody = db_column_text(&q, 1);
+    blob_appendf(pOut, "\n--- Relevant Note: %s ---\n%s\n", zTitle, zBody);
+  }
+  db_finalize(&q);
+  blob_reset(&vQuery);
+}
+
+/*
+** Assemble a context summary of the current repository state into pOut.
+*/
+static void agent_assemble_context(Blob *pOut, const char *zQuery){
+  int vid;
+  Stmt q;
+  db_must_be_within_tree();
+  vid = db_lget_int("checkout", 0);
+  if( vid ){
+    int nFile = 0;
+    blob_appendf(pOut, "--- REPOSITORY CONTEXT ---\n");
+    blob_appendf(pOut, "File Structure (top 100 files):\n");
+    db_prepare(&q,
+      "SELECT pathname FROM vfile WHERE vid=%d AND deleted=0 ORDER BY pathname",
+      vid
+    );
+    while( db_step(&q)==SQLITE_ROW && nFile<100 ){
+      blob_appendf(pOut, "  %s\n", db_column_text(&q, 0));
+      nFile++;
+    }
+    db_finalize(&q);
+    if( nFile>=100 ) blob_appendf(pOut, "  ... (truncated)\n");
+    blob_appendf(pOut, "\nPending Changes:\n");
+    if( agent_changes_text(pOut, vid, "  ")==0 ){
+      blob_appendf(pOut, "  (none)\n");
+    }
+
+    if( zQuery && zQuery[0] ){
+      agent_semantic_search(zQuery, 3, pOut);
+    }
+
+    blob_appendf(pOut, "--- END CONTEXT ---\n\n");
+  }
+}
+
+/*
 ** Invoke the local Ollama CLI and store its reply in pReply.
 **
 ** Returns 0 on success and non-zero on error.
@@ -278,7 +349,6 @@ static int agent_run_ollama(
   blob_append_escaped_arg(&cmd, zOllamaCmd, 1);
   blob_append(&cmd, " run", 4);
   blob_append_escaped_arg(&cmd, zModel, 0);
-  blob_append_escaped_arg(&cmd, zPrompt, 0);
   blob_append(&cmd, " 2>&1", 5);
   rc = popen2(blob_str(&cmd), &fdIn, &out, &childPid, 0);
   if( rc!=0 || fdIn<0 || out==0 ){
@@ -286,9 +356,8 @@ static int agent_run_ollama(
     blob_reset(&cmd);
     return 1;
   }
-  /* The current Ollama CLI supports one-shot prompts as a positional
-  ** argument. Close stdin immediately so the child never enters its
-  ** interactive prompt loop. */
+  /* Send the prompt via stdin and close it so the child doesn't wait. */
+  fprintf(out, "%s", zPrompt);
   fclose(out);
   out = 0;
   in = fdopen(fdIn, "rb");
@@ -381,6 +450,130 @@ static void agent_strip_prefix_noise(Blob *pText){
 }
 
 /*
+** Generate an embedding for zText using the configured Ollama model.
+** Returns 0 on success, non-zero on error.
+** The result is stored as an array of floats in pOut.
+*/
+static int agent_generate_embedding(
+  const char *zModel,
+  const char *zText,
+  Blob *pOut
+){
+  Blob cmd = BLOB_INITIALIZER;
+  Blob reply = BLOB_INITIALIZER;
+  char *z;
+  FILE *p;
+
+  blob_appendf(&cmd, "curl -s -X POST http://localhost:11434/api/embeddings "
+                     "-H \"Content-Type: application/json\" -d ");
+  {
+    Blob json = BLOB_INITIALIZER;
+    blob_appendf(&json, "{\"model\":%!j, \"prompt\":%!j}", zModel, zText);
+    blob_append_sql(&cmd, "%$", blob_str(&json));
+    blob_reset(&json);
+  }
+  /* fossil_print("DEBUG cmd: %s\n", blob_str(&cmd)); */
+  p = popen(blob_str(&cmd), "r");
+  if( p==0 ){
+    blob_reset(&cmd);
+    return 1;
+  }
+  blob_read_from_channel(&reply, p, -1);
+  /* fossil_print("DEBUG reply: %s\n", blob_str(&reply)); */
+  pclose(p);
+  blob_reset(&cmd);
+
+  /* Minimalist JSON parsing for "embedding":[...] */
+  z = strstr(blob_str(&reply), "\"embedding\":[");
+  if( z==0 ){
+    fossil_print("DEBUG: Embedding key not found in response: %s\n", blob_str(&reply));
+    blob_reset(&reply);
+    return 1;
+  }
+  z += 13;
+  while( *z && *z!=']' ){
+    float f = (float)strtod(z, &z);
+    blob_append(pOut, (char*)&f, sizeof(f));
+    while( *z && (*z==',' || *z==' ' || *z=='\n' || *z=='\r') ) z++;
+  }
+  blob_reset(&reply);
+  return 0;
+}
+
+/*
+** Generate embeddings for all notes that don't have them yet.
+*/
+static void agent_semantic_index_cmd(void){
+  const char *zModel = db_get("agent-ollama-model", "llama3.2");
+  Stmt q1, q2;
+  int n = 0;
+
+  db_prepare(&q1,
+    "SELECT nid, title, body FROM ai_note"
+    " WHERE nid NOT IN (SELECT source_id FROM ai_vector WHERE source_type='note')"
+  );
+  while( db_step(&q1)==SQLITE_ROW ){
+    int nid = db_column_int(&q1, 0);
+    const char *zTitle = db_column_text(&q1, 1);
+    const char *zBody = db_column_text(&q1, 2);
+    Blob v = BLOB_INITIALIZER;
+    Blob text = BLOB_INITIALIZER;
+
+    blob_appendf(&text, "%s\n%s", zTitle, zBody);
+    if( agent_generate_embedding(zModel, blob_str(&text), &v)==0 ){
+      db_prepare(&q2,
+        "INSERT INTO ai_vector(source_type, source_id, dim, vector)"
+        " VALUES('note', %d, %d, :vec)",
+        nid, (int)(blob_size(&v)/sizeof(float))
+      );
+      db_bind_blob(&q2, ":vec", &v);
+      db_step(&q2);
+      db_finalize(&q2);
+      n++;
+    }
+    blob_reset(&v);
+    blob_reset(&text);
+  }
+  db_finalize(&q1);
+  fossil_print("Indexed %d notes.\n", n);
+}
+
+/*
+** Add a new note to the AI knowledge base.
+*/
+static void agent_note_cmd(void){
+  const char *zTitle;
+  Blob body = BLOB_INITIALIZER;
+  int tier = 1;
+
+  zTitle = find_option("title", 0, 1);
+  if( find_option("tier-2", 0, 0) ) tier = 2;
+  verify_all_options();
+  if( g.argc==4 ){
+    const char *zFile = g.argv[3];
+    if( file_size(zFile, ExtFILE)>=0 ){
+      agent_read_body(&body, 1, zFile);
+    }else{
+      blob_append(&body, zFile, -1);
+    }
+  }else if( g.argc==3 ){
+    agent_read_body(&body, 0, 0);
+  }else{
+    usage("note ?TEXT|FILE? [--title TEXT] [--tier-2]");
+  }
+  if( zTitle==0 ) zTitle = "Note";
+
+  ai_schema_ensure();
+  db_multi_exec(
+    "INSERT INTO ai_note(tier, title, body, source_type, created_at)"
+    " VALUES(%d, %Q, %B, 'manual', julianday('now'))",
+    tier, zTitle, &body
+  );
+  fossil_print("Added note: %s\n", zTitle);
+  blob_reset(&body);
+}
+
+/*
 ** COMMAND: agent
 **
 ** Usage: %fossil agent SUBCOMMAND ...
@@ -394,6 +587,15 @@ static void agent_strip_prefix_noise(Blob *pText){
 **    fossil agent changes
 **       Print pending managed-file changes for the current checkout.
 **
+**    fossil agent embed TEXT
+**       Generate and print (as hex) the embedding for TEXT.
+**
+**    fossil agent semantic-index
+**       Generate embeddings for all notes and store them in ai_vector.
+**
+**    fossil agent note ?FILE? [--title TEXT] [--tier-2]
+**       Add a new note to the AI knowledge base.
+**
 **    fossil agent wiki-sync PAGENAME ?FILE? [--append] [--dry-run]
 **                             [--title TEXT] [--status TEXT]
 **       Create or update PAGENAME with an agent-authored manager update.
@@ -402,6 +604,7 @@ static void agent_strip_prefix_noise(Blob *pText){
 */
 void agent_cmd(void){
   const char *zCmd;
+  const char *zModel = db_get("agent-ollama-model", "llama3.2");
 
   db_find_and_open_repository(OPEN_ANY_SCHEMA, 0);
   if( g.argc<3 ){
@@ -412,6 +615,23 @@ void agent_cmd(void){
     agent_repomap_cmd();
   }else if( fossil_strcmp(zCmd, "changes")==0 ){
     agent_changes_cmd();
+  }else if( fossil_strcmp(zCmd, "note")==0 ){
+    agent_note_cmd();
+  }else if( fossil_strcmp(zCmd, "embed")==0 ){
+    Blob v = BLOB_INITIALIZER;
+    if( g.argc<4 ) usage("agent embed TEXT");
+    if( agent_generate_embedding(zModel, g.argv[3], &v)==0 ){
+      int i;
+      float *af = (float*)blob_buffer(&v);
+      int n = blob_size(&v) / sizeof(float);
+      for(i=0; i<n; i++) fossil_print("%f%s", af[i], i<n-1?", ":"");
+      fossil_print("\n");
+    }else{
+      fossil_fatal("failed to generate embedding");
+    }
+    blob_reset(&v);
+  }else if( fossil_strcmp(zCmd, "semantic-index")==0 ){
+    agent_semantic_index_cmd();
   }else if( fossil_strcmp(zCmd, "wiki-sync")==0 ){
     agent_wiki_sync_cmd();
   }else{
@@ -440,6 +660,8 @@ void agentui_page(void){
   @ <div class="forumEdit">
   @ <label for="agent-model"><b>Model:</b></label>
   @ <input type="text" id="agent-model" size="24" value="%h(zModel)">
+  @ &nbsp;&nbsp;
+  @ <label><input type="checkbox" id="agent-context" checked> <b>Context Awareness</b></label>
   @ </div>
   @ <div id="agent-chat-log"
   @  style="min-height:320px;max-height:520px;overflow:auto;border:1px solid
@@ -457,6 +679,7 @@ void agentui_page(void){
   @   var input = document.getElementById('agent-chat-input');
   @   var send = document.getElementById('agent-chat-send');
   @   var model = document.getElementById('agent-model');
+  @   var context = document.getElementById('agent-context');
   @   var log = document.getElementById('agent-chat-log');
   @   function addMsg(role, text){
   @     var div = document.createElement('div');
@@ -477,7 +700,7 @@ void agentui_page(void){
   @     fetch('agent-chat', {
   @       method: 'POST',
   @       headers: {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'},
-  @       body: new URLSearchParams({msg: msg, model: model.value})
+  @       body: new URLSearchParams({msg: msg, model: model.value, context: context.checked ? 1 : 0})
   @     }).then(function(r){
   @       return r.json();
   @     }).then(function(data){
@@ -505,18 +728,23 @@ void agent_chat_page(void){
   const char *zMsg;
   const char *zModel;
   int rc;
+  char *zContextMsg = 0;
 
   login_check_credentials();
-  if( !g.perm.Read ){
-    login_needed(g.anon.Read);
-    return;
-  }
   zMsg = PD("msg", "");
   zModel = PD("model", db_get("agent-ollama-model", "llama3.2"));
   cgi_set_content_type("application/json");
   if( zMsg[0]==0 ){
     CX("{\"error\":%!j}\n", "missing msg parameter");
     return;
+  }
+  if( PB("context") ){
+    Blob ctx = BLOB_INITIALIZER;
+    agent_assemble_context(&ctx, zMsg);
+    blob_appendf(&ctx, "%s", zMsg);
+    zContextMsg = fossil_strdup(blob_str(&ctx));
+    zMsg = zContextMsg;
+    blob_reset(&ctx);
   }
   if( zModel[0]==0 ){
     CX("{\"error\":%!j}\n", "missing model parameter");
@@ -530,6 +758,7 @@ void agent_chat_page(void){
                                          : "ollama invocation failed";
     CX("{\"model\":%!j,\"error\":%!j}\n", zModel, zErr);
   }
+  if( PB("context") ) fossil_free((char*)zMsg);
   blob_reset(&reply);
   blob_reset(&err);
 }

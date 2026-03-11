@@ -2223,6 +2223,7 @@ LOCAL sqlite3 *db_open(const char *zDbName){
   if( g.fSqlTrace ) sqlite3_trace_v2(db, SQLITE_TRACE_PROFILE, db_sql_trace, 0);
   db_add_aux_functions(db);
   re_add_sql_func(db);  /* The REGEXP operator */
+  ai_add_sql_func(db);  /* Vector similarity search */
   foci_register(db);    /* The "files_of_checkin" virtual table */
   sqlite3_set_authorizer(db, db_top_authorizer, db);
   db_register_fts5(db) /* in search.c */;

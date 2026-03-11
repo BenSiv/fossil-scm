@@ -282,13 +282,13 @@ const char *skin_get(const char *zWhat){
     }
   }
   if( pAltSkin ){
-    z = mprintf("skins/%s/%s.txt", pAltSkin->zLabel, zWhat);
+    z = mprintf("pub/skins/%s/%s.txt", pAltSkin->zLabel, zWhat);
     zOut = builtin_text(z);
     fossil_free(z);
   }else{
     zOut = db_get(zWhat, 0);
     if( zOut==0 ){
-      z = mprintf("skins/default/%s.txt", zWhat);
+      z = mprintf("pub/skins/default/%s.txt", zWhat);
       zOut = builtin_text(z);
       fossil_free(z);
     }else if( iSkinSource==SKIN_FROM_DEFAULT ){
@@ -460,13 +460,13 @@ static char *getSkin(const char *zName){
   blob_zero(&val);
   for(i=0; i<count(azSkinFile); i++){
     if( zName ){
-      zLabel = mprintf("skins/%s/%s.txt", zName, azSkinFile[i]);
+      zLabel = mprintf("pub/skins/%s/%s.txt", zName, azSkinFile[i]);
       z = builtin_text(zLabel);
       fossil_free(zLabel);
     }else{
       z = db_get(azSkinFile[i], 0);
       if( z==0 ){
-        zLabel = mprintf("skins/default/%s.txt", azSkinFile[i]);
+        zLabel = mprintf("pub/skins/default/%s.txt", azSkinFile[i]);
         z = builtin_text(zLabel);
         fossil_free(zLabel);
       }
@@ -905,7 +905,7 @@ static const char *skin_file_content(const char *zLabel, const char *zFile){
   }else{
     int i;
     for(i=0; i<2; i++){
-      char *zKey = mprintf("skins/%s/%s.txt", zLabel, zFile);
+      char *zKey = mprintf("pub/skins/%s/%s.txt", zLabel, zFile);
       zResult = builtin_text(zKey);
       fossil_free(zKey);
       if( zResult!=0 ) break;

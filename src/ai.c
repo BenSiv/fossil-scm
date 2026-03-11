@@ -33,7 +33,70 @@ void ai_record_commit(int rid, const char *zComment);
 
 /* CLI entry point */
 void ai_cmd(void);
+
+/* Register AI-related SQL functions */
+void ai_add_sql_func(sqlite3 *db);
 #endif
+
+#include <math.h>
+
+/*
+** Implementation of vec_distance(A, B).
+** A and B are BLOBs containing arrays of float32.
+** Returns 1.0 - cosine_similarity(A, B).
+*/
+static void ai_vec_distance_sqlfunc(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  const float *a, *b;
+  int nA, nB;
+  double dot = 0.0, magA = 0.0, magB = 0.0;
+  int i, n;
+
+  if( sqlite3_value_type(argv[0])!=SQLITE_BLOB
+   || sqlite3_value_type(argv[1])!=SQLITE_BLOB
+  ){
+    sqlite3_result_null(context);
+    return;
+  }
+
+  a = (const float*)sqlite3_value_blob(argv[0]);
+  nA = sqlite3_value_bytes(argv[0]) / sizeof(float);
+  b = (const float*)sqlite3_value_blob(argv[1]);
+  nB = sqlite3_value_bytes(argv[1]) / sizeof(float);
+
+  n = nA < nB ? nA : nB;
+  if( n==0 ){
+    sqlite3_result_null(context);
+    return;
+  }
+
+  for(i=0; i<n; i++){
+    dot += a[i] * b[i];
+    magA += a[i] * a[i];
+    magB += b[i] * b[i];
+  }
+
+  if( magA<=0.0 || magB<=0.0 ){
+    sqlite3_result_double(context, 1.0);
+  }else{
+    double sim = dot / (sqrt(magA) * sqrt(magB));
+    if( sim>1.0 ) sim = 1.0;
+    if( sim<-1.0 ) sim = -1.0;
+    sqlite3_result_double(context, 1.0 - sim);
+  }
+}
+
+/*
+** Register AI-related SQL functions with the database connection.
+*/
+void ai_add_sql_func(sqlite3 *db){
+  sqlite3_create_function(db, "vec_distance", 2,
+                          SQLITE_UTF8|SQLITE_INNOCUOUS|SQLITE_DETERMINISTIC,
+                          0, ai_vec_distance_sqlfunc, 0, 0);
+}
 
 int ai_is_enabled(void){
   return db_get_boolean("ai-enable", 0);
