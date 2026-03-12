@@ -6,6 +6,11 @@ The ./configure script builds Makefile from bld/Makefile.in based on
 your system and any options you select (run "./configure --help"
 for a listing of the available options.)
 
+By default, `./configure` now bootstraps vendored zlib automatically when
+system zlib headers are unavailable. If OpenSSL is not detected and no
+`--with-openssl=...` option is provided, configure falls back to
+`--with-openssl=none` so the build can continue without HTTPS support.
+
 If you wish to use the original Makefile with no configuration, you can
 instead use:
 
