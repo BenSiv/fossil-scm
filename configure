@@ -1,9 +1,52 @@
 #!/bin/sh
-root="`dirname "$0"`"
+root=`cd "\`dirname "$0"\`" && pwd`
 dir="$root/dep/vendor/autosetup"
 autodef="$root/bld/auto.def"
 #@@INITCHECK@@#
 WRAPPER="$0"; export WRAPPER
+
+zlib_mode=""
+openssl_mode=""
+for arg in "$@"; do
+  case "$arg" in
+    --with-zlib=*)
+      zlib_mode="${arg#--with-zlib=}"
+      ;;
+    --with-openssl=*)
+      openssl_mode="${arg#--with-openssl=}"
+      ;;
+  esac
+done
+
+if [ -z "$zlib_mode" ]; then
+  if ! printf '%s\n' '#include <zlib.h>' \
+      | ${CC:-cc} -E - >/dev/null 2>&1; then
+    set -- "$@" "--with-zlib=tree"
+    zlib_mode="tree"
+    echo "No system zlib headers detected; using in-tree zlib."
+  fi
+fi
+
+if [ "$zlib_mode" = "tree" ]; then
+  echo "Preparing in-tree zlib dependency..."
+  ${MAKE:-make} -C "$root/dep/vendor/compat/zlib"
+fi
+
+if [ -z "$openssl_mode" ]; then
+  have_openssl=0
+  if command -v pkg-config >/dev/null 2>&1 \
+      && pkg-config --exists openssl >/dev/null 2>&1; then
+    have_openssl=1
+  elif printf '%s\n' '#include <openssl/ssl.h>' \
+      | ${CC:-cc} -E - >/dev/null 2>&1; then
+    have_openssl=1
+  fi
+  if [ "$have_openssl" -eq 0 ]; then
+    set -- "$@" "--with-openssl=none"
+    echo "No OpenSSL detected; configuring with --with-openssl=none."
+  fi
+fi
+
 "`"$dir/autosetup-find-tclsh"`" "$dir/autosetup" "--conf=$autodef" "$@"
 rc=$?
 mkdir -p "$root/log"
