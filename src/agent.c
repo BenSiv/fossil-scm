@@ -28,16 +28,276 @@ static int agent_generate_embedding(
 );
 
 /*
-** SETTING: agent-ollama-command width=40 default=ollama
+** SETTING: agent-command width=60
 **
-** Command used by /agent-chat to invoke the local Ollama CLI.
+** Shell command template used by /agent-chat to invoke an AI backend.
+** The selected model name is substituted for "%m" (shell-escaped). If
+** "%m" does not appear, the command is used as-is and the model remains
+** available to wrappers via the FOSSIL_AGENT_MODEL environment variable.
 */
 /*
-** SETTING: agent-ollama-model width=20 default=llama3.2
+** SETTING: agent-model width=30 default=llama3.2
 **
 ** Default model name used by /agent-chat when the request does not
 ** specify a model explicitly.
 */
+/*
+** SETTING: agent-embedding-command width=80
+**
+** Optional shell command template used to generate embeddings. The text to
+** embed is sent to stdin and "%m" is substituted with the selected model. If
+** this setting is empty, embedding-based semantic search is disabled unless
+** legacy Ollama settings are present.
+*/
+/*
+** SETTING: agent-ollama-command width=40 default=ollama
+**
+** Legacy compatibility setting. Used only when agent-command is unset.
+*/
+/*
+** SETTING: agent-ollama-model width=20 default=llama3.2
+**
+** Legacy compatibility setting. Used only when agent-model is unset.
+*/
+/*
+** SETTING: agent-history-count width=10 default=50
+**
+** Number of recent agent chat messages to render in /agentui.
+*/
+
+/*
+** Expand zTemplate into pOut. Replaces %m with the shell-escaped model name
+** and %% with a literal percent sign.
+*/
+static void agent_expand_command(
+  Blob *pOut,
+  const char *zTemplate,
+  const char *zModel
+){
+  const char *z = zTemplate;
+  blob_zero(pOut);
+  while( z && z[0] ){
+    if( z[0]=='%' && z[1]=='m' ){
+      blob_append_escaped_arg(pOut, zModel ? zModel : "", 0);
+      z += 2;
+    }else if( z[0]=='%' && z[1]=='%' ){
+      blob_append(pOut, "%", 1);
+      z += 2;
+    }else{
+      blob_append(pOut, z, 1);
+      z++;
+    }
+  }
+}
+
+/*
+** Return the configured chat model, with legacy fallback.
+*/
+static const char *agent_default_model(void){
+  return db_get("agent-model", db_get("agent-ollama-model", "llama3.2"));
+}
+
+/*
+** Return the configured chat command template, with legacy fallback.
+*/
+static const char *agent_command_template(void){
+  return db_get("agent-command", "ollama run %m");
+}
+
+/*
+** Repository storage for agent chat messages.
+*/
+static const char zAgentChatSchema[] =
+@ CREATE TABLE repository.agentchat_session(
+@   sid INTEGER PRIMARY KEY AUTOINCREMENT,
+@   ctime JULIANDAY DEFAULT (julianday('now')),
+@   mtime JULIANDAY DEFAULT (julianday('now')),
+@   xfrom TEXT,
+@   title TEXT
+@ );
+@ CREATE TABLE repository.agentchat(
+@   acid INTEGER PRIMARY KEY AUTOINCREMENT,
+@   sid INTEGER REFERENCES agentchat_session,
+@   mtime JULIANDAY DEFAULT (julianday('now')),
+@   xfrom TEXT,
+@   role TEXT NOT NULL,
+@   model TEXT,
+@   msg TEXT NOT NULL
+@ );
+;
+
+/*
+** Ensure the repository table used by /agentui exists.
+*/
+static void agent_chat_create_tables(void){
+  if( !db_table_exists("repository","agentchat") ){
+    db_multi_exec(zAgentChatSchema/*works-like:""*/);
+  }else{
+    if( !db_table_exists("repository","agentchat_session") ){
+      db_multi_exec(
+        "CREATE TABLE repository.agentchat_session("
+        "  sid INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  ctime JULIANDAY DEFAULT (julianday('now')),"
+        "  mtime JULIANDAY DEFAULT (julianday('now')),"
+        "  xfrom TEXT,"
+        "  title TEXT"
+        ");"
+      );
+    }
+    if( !db_table_has_column("repository","agentchat","sid") ){
+      db_multi_exec("ALTER TABLE agentchat ADD COLUMN sid INTEGER");
+    }
+  }
+}
+
+/*
+** Create and return a new chat session id.
+*/
+static int agent_chat_session_create(const char *zUser){
+  agent_chat_create_tables();
+  db_multi_exec(
+    "INSERT INTO agentchat_session(ctime,mtime,xfrom,title)"
+    " VALUES(julianday('now'),julianday('now'),%Q,'New Chat')",
+    zUser ? zUser : ""
+  );
+  return db_last_insert_rowid();
+}
+
+/*
+** Return non-zero if sid exists.
+*/
+static int agent_chat_session_exists(int sid){
+  return sid>0 && db_exists("SELECT 1 FROM agentchat_session WHERE sid=%d", sid);
+}
+
+/*
+** Resolve the current session id for zUser, creating one if needed.
+*/
+static int agent_chat_current_session(const char *zUser){
+  int sid;
+  agent_chat_create_tables();
+  sid = atoi(PD("sid","0"));
+  if( sid>0 && agent_chat_session_exists(sid) ){
+    return sid;
+  }
+  if( PB("new") ){
+    return agent_chat_session_create(zUser);
+  }
+  sid = db_int(0,
+    "SELECT sid FROM agentchat_session"
+    " WHERE xfrom=%Q OR (%Q='' AND xfrom='')"
+    " ORDER BY mtime DESC, sid DESC LIMIT 1",
+    zUser ? zUser : "", zUser ? zUser : ""
+  );
+  return sid>0 ? sid : agent_chat_session_create(zUser);
+}
+
+/*
+** Update session metadata after a new message.
+*/
+static void agent_chat_session_touch(
+  int sid,
+  const char *zMsg
+){
+  Blob title = BLOB_INITIALIZER;
+  int n;
+  if( sid<=0 ) return;
+  if( zMsg==0 ) zMsg = "";
+  while( fossil_isspace(zMsg[0]) ) zMsg++;
+  n = (int)strlen(zMsg);
+  if( n>60 ) n = 60;
+  blob_append(&title, zMsg, n);
+  blob_trim(&title);
+  db_multi_exec(
+    "UPDATE agentchat_session"
+    " SET mtime=julianday('now'),"
+    " title=CASE"
+    "   WHEN title IS NULL OR title='' OR title='New Chat'"
+    "   THEN %Q ELSE title END"
+    " WHERE sid=%d",
+    blob_size(&title)>0 ? blob_str(&title) : "New Chat",
+    sid
+  );
+  blob_reset(&title);
+}
+
+/*
+** Persist a single agent chat message.
+*/
+static void agent_chat_save(
+  int sid,
+  const char *zUser,
+  const char *zRole,
+  const char *zModel,
+  const char *zMsg
+){
+  if( zMsg==0 || zMsg[0]==0 ) return;
+  agent_chat_create_tables();
+  db_multi_exec(
+    "INSERT INTO agentchat(sid,mtime,xfrom,role,model,msg)"
+    " VALUES(%d,julianday('now'),%Q,%Q,%Q,%Q)",
+    sid,
+    zUser ? zUser : "",
+    zRole ? zRole : "agent",
+    zModel ? zModel : "",
+    zMsg
+  );
+  agent_chat_session_touch(sid, zMsg);
+}
+
+/*
+** Emit session list for the current user.
+*/
+static void agent_chat_render_sessions(const char *zUser, int sidCurrent){
+  Stmt q;
+  int nLimit = db_get_int("agent-history-count", 50);
+  if( nLimit<=0 ) return;
+  if( !db_table_exists("repository","agentchat_session") ) return;
+  db_prepare(&q,
+    "SELECT sid, coalesce(nullif(title,''),'New Chat')"
+    " FROM agentchat_session"
+    " WHERE xfrom=%Q OR (%Q='' AND xfrom='')"
+    " ORDER BY mtime DESC, sid DESC LIMIT %d",
+    zUser ? zUser : "", zUser ? zUser : "", nLimit
+  );
+  while( db_step(&q)==SQLITE_ROW ){
+    int sid = db_column_int(&q, 0);
+    const char *zTitle = db_column_text(&q, 1);
+    @ <div>
+    if( sid==sidCurrent ){
+      @ <b>%h(zTitle)</b>
+    }else{
+      @ <a href="%R/agentui?sid=%d(sid)">%h(zTitle)</a>
+    }
+    @ </div>
+  }
+  db_finalize(&q);
+}
+
+/*
+** Emit recent saved agent chat messages for a session into the page log.
+*/
+static void agent_chat_render_history(int sidCurrent){
+  Stmt q;
+  int nLimit = db_get_int("agent-history-count", 50);
+  if( nLimit<=0 || sidCurrent<=0 ) return;
+  if( !db_table_exists("repository","agentchat") ) return;
+  db_prepare(&q,
+    "SELECT role, msg FROM agentchat"
+    " WHERE sid=%d"
+    " ORDER BY acid ASC LIMIT %d",
+    sidCurrent, nLimit
+  );
+  while( db_step(&q)==SQLITE_ROW ){
+    const char *zRole = db_column_text(&q, 0);
+    const char *zMsg = db_column_text(&q, 1);
+    @ <div style="margin-bottom:0.8em;">
+    @ <b>%h(zRole && fossil_strcmp(zRole,"user")==0 ? "You" : "Agent"):</b>
+    @ <pre style="white-space:pre-wrap;display:inline;margin:0">%h(zMsg)</pre>
+    @ </div>
+  }
+  db_finalize(&q);
+}
 
 /*
 ** Return the RID of the latest version of wiki page zPageName, or 0 if
@@ -260,8 +520,12 @@ static void agent_wiki_sync_cmd(void){
 /*
 ** Perform a semantic search for zQuery and append relevant snippets to pOut.
 */
-static void agent_semantic_search(const char *zQuery, int nLimit, Blob *pOut){
-  const char *zModel = db_get("agent-ollama-model", "llama3.2");
+static void agent_semantic_search(
+  const char *zModel,
+  const char *zQuery,
+  int nLimit,
+  Blob *pOut
+){
   Blob vQuery = BLOB_INITIALIZER;
   Stmt q;
 
@@ -289,12 +553,17 @@ static void agent_semantic_search(const char *zQuery, int nLimit, Blob *pOut){
 
 /*
 ** Assemble a context summary of the current repository state into pOut.
+** Returns non-zero if any useful context was added.
 */
-static void agent_assemble_context(Blob *pOut, const char *zQuery){
+static int agent_assemble_context(
+  Blob *pOut,
+  const char *zModel,
+  const char *zQuery
+){
   int vid;
   Stmt q;
-  db_must_be_within_tree();
-  vid = db_lget_int("checkout", 0);
+  int nAdded = 0;
+  vid = db_table_exists("localdb", "vvar") ? db_lget_int("checkout", 0) : 0;
   if( vid ){
     int nFile = 0;
     blob_appendf(pOut, "--- REPOSITORY CONTEXT ---\n");
@@ -313,47 +582,60 @@ static void agent_assemble_context(Blob *pOut, const char *zQuery){
     if( agent_changes_text(pOut, vid, "  ")==0 ){
       blob_appendf(pOut, "  (none)\n");
     }
-
-    if( zQuery && zQuery[0] ){
-      agent_semantic_search(zQuery, 3, pOut);
-    }
-
-    blob_appendf(pOut, "--- END CONTEXT ---\n\n");
+    nAdded = 1;
   }
+
+  if( zQuery && zQuery[0] ){
+    int nBefore = blob_size(pOut);
+    if( !nAdded ){
+      blob_appendf(pOut, "--- REPOSITORY CONTEXT ---\n");
+    }
+    agent_semantic_search(zModel, zQuery, 3, pOut);
+    if( blob_size(pOut)>nBefore ) nAdded = 1;
+  }
+  if( nAdded ){
+    blob_appendf(pOut, "--- END CONTEXT ---\n\n");
+  }else{
+    blob_reset(pOut);
+  }
+  return nAdded;
 }
 
 /*
-** Invoke the local Ollama CLI and store its reply in pReply.
+** Invoke the configured agent backend and store its reply in pReply.
 **
 ** Returns 0 on success and non-zero on error.
 */
 static void agent_strip_ansi(Blob *pText);
 static void agent_strip_prefix_noise(Blob *pText);
 
-static int agent_run_ollama(
+static int agent_run_backend(
   const char *zModel,
   const char *zPrompt,
   Blob *pReply,
   Blob *pErr
 ){
   Blob cmd = BLOB_INITIALIZER;
+  Blob envCmd = BLOB_INITIALIZER;
   FILE *in;
   FILE *out = 0;
   int fdIn = -1;
   int childPid = 0;
   int rc;
-  const char *zOllamaCmd = db_get("agent-ollama-command", "ollama");
+  const char *zCmdTmpl = agent_command_template();
 
   blob_zero(pReply);
   blob_zero(pErr);
-  blob_append_escaped_arg(&cmd, zOllamaCmd, 1);
-  blob_append(&cmd, " run", 4);
-  blob_append_escaped_arg(&cmd, zModel, 0);
-  blob_append(&cmd, " 2>&1", 5);
-  rc = popen2(blob_str(&cmd), &fdIn, &out, &childPid, 0);
+  agent_expand_command(&cmd, zCmdTmpl, zModel);
+  blob_appendf(&envCmd,
+    "FOSSIL_AGENT_MODEL=%$ FOSSIL_AGENT_MODE=chat %s 2>&1",
+    zModel, blob_str(&cmd)
+  );
+  rc = popen2(blob_str(&envCmd), &fdIn, &out, &childPid, 0);
   if( rc!=0 || fdIn<0 || out==0 ){
-    blob_appendf(pErr, "unable to run %s", zOllamaCmd);
+    blob_appendf(pErr, "unable to run configured agent command");
     blob_reset(&cmd);
+    blob_reset(&envCmd);
     return 1;
   }
   /* Send the prompt via stdin and close it so the child doesn't wait. */
@@ -363,8 +645,9 @@ static int agent_run_ollama(
   in = fdopen(fdIn, "rb");
   if( in==0 ){
     pclose2(fdIn, out, childPid);
-    blob_appendf(pErr, "unable to read output from %s", zOllamaCmd);
+    blob_appendf(pErr, "unable to read output from configured agent command");
     blob_reset(&cmd);
+    blob_reset(&envCmd);
     return 1;
   }
   blob_read_from_channel(pReply, in, -1);
@@ -374,17 +657,20 @@ static int agent_run_ollama(
   blob_trim(pReply);
   if( blob_size(pReply)==0 ){
     blob_appendf(pErr,
-      "ollama command failed for model \"%s\"", zModel
+      "agent command failed for model \"%s\"", zModel
     );
     blob_reset(&cmd);
+    blob_reset(&envCmd);
     return 1;
   }
   if( fossil_strncmp(blob_str(pReply), "Error:", 6)==0 ){
     blob_append(pErr, blob_str(pReply), blob_size(pReply));
     blob_reset(&cmd);
+    blob_reset(&envCmd);
     return 1;
   }
   blob_reset(&cmd);
+  blob_reset(&envCmd);
   return 0;
 }
 
@@ -450,7 +736,7 @@ static void agent_strip_prefix_noise(Blob *pText){
 }
 
 /*
-** Generate an embedding for zText using the configured Ollama model.
+** Generate an embedding for zText using the configured embedding backend.
 ** Returns 0 on success, non-zero on error.
 ** The result is stored as an array of floats in pOut.
 */
@@ -460,35 +746,79 @@ static int agent_generate_embedding(
   Blob *pOut
 ){
   Blob cmd = BLOB_INITIALIZER;
+  Blob envCmd = BLOB_INITIALIZER;
   Blob reply = BLOB_INITIALIZER;
+  const char *zCmdTmpl = db_get("agent-embedding-command", "");
   char *z;
-  FILE *p;
+  FILE *p = 0;
+  FILE *pOutToChild = 0;
+  int fdFromChild = -1;
+  int childPid = 0;
+  int rc;
 
-  blob_appendf(&cmd, "curl -s -X POST http://localhost:11434/api/embeddings "
-                     "-H \"Content-Type: application/json\" -d ");
-  {
-    Blob json = BLOB_INITIALIZER;
-    blob_appendf(&json, "{\"model\":%!j, \"prompt\":%!j}", zModel, zText);
-    blob_append_sql(&cmd, "%$", blob_str(&json));
-    blob_reset(&json);
+  if( zCmdTmpl[0] ){
+    agent_expand_command(&cmd, zCmdTmpl, zModel);
+    blob_appendf(&envCmd,
+      "FOSSIL_AGENT_MODEL=%$ FOSSIL_AGENT_MODE=embed %s 2>&1",
+      zModel, blob_str(&cmd)
+    );
+    rc = popen2(blob_str(&envCmd), &fdFromChild, &pOutToChild, &childPid, 0);
+    if( rc!=0 || fdFromChild<0 || pOutToChild==0 ){
+      blob_reset(&cmd);
+      blob_reset(&envCmd);
+      return 1;
+    }
+    fprintf(pOutToChild, "%s", zText);
+    fclose(pOutToChild);
+    pOutToChild = 0;
+    p = fdopen(fdFromChild, "rb");
+  }else{
+    const char *zLegacyCmd = db_get("agent-ollama-command", "");
+    if( zLegacyCmd[0]==0 ) return 1;
+    blob_appendf(&cmd, "curl -s -X POST http://localhost:11434/api/embeddings "
+                       "-H \"Content-Type: application/json\" -d ");
+    {
+      Blob json = BLOB_INITIALIZER;
+      blob_appendf(&json, "{\"model\":%!j, \"prompt\":%!j}", zModel, zText);
+      blob_append_sql(&cmd, "%$", blob_str(&json));
+      blob_reset(&json);
+    }
+    p = popen(blob_str(&cmd), "r");
   }
-  /* fossil_print("DEBUG cmd: %s\n", blob_str(&cmd)); */
-  p = popen(blob_str(&cmd), "r");
   if( p==0 ){
     blob_reset(&cmd);
+    blob_reset(&envCmd);
     return 1;
   }
   blob_read_from_channel(&reply, p, -1);
-  /* fossil_print("DEBUG reply: %s\n", blob_str(&reply)); */
-  pclose(p);
+  if( zCmdTmpl[0] ){
+    pclose2(fdFromChild, pOutToChild, childPid);
+  }else{
+    pclose(p);
+  }
   blob_reset(&cmd);
+  blob_reset(&envCmd);
 
   /* Minimalist JSON parsing for "embedding":[...] */
   z = strstr(blob_str(&reply), "\"embedding\":[");
   if( z==0 ){
-    fossil_print("DEBUG: Embedding key not found in response: %s\n", blob_str(&reply));
+    z = blob_str(&reply);
+    while( z && *z ){
+      char *zEnd;
+      float f = (float)strtod(z, &zEnd);
+      if( zEnd==z ) break;
+      blob_append(pOut, (char*)&f, sizeof(f));
+      z = zEnd;
+      while( *z && (*z==',' || *z==' ' || *z=='\n' || *z=='\r' || *z=='\t') ){
+        z++;
+      }
+    }
+    if( blob_size(pOut)==0 ){
+      blob_reset(&reply);
+      return 1;
+    }
     blob_reset(&reply);
-    return 1;
+    return 0;
   }
   z += 13;
   while( *z && *z!=']' ){
@@ -504,7 +834,7 @@ static int agent_generate_embedding(
 ** Generate embeddings for all notes that don't have them yet.
 */
 static void agent_semantic_index_cmd(void){
-  const char *zModel = db_get("agent-ollama-model", "llama3.2");
+  const char *zModel = agent_default_model();
   Stmt q1, q2;
   int n = 0;
 
@@ -604,7 +934,7 @@ static void agent_note_cmd(void){
 */
 void agent_cmd(void){
   const char *zCmd;
-  const char *zModel = db_get("agent-ollama-model", "llama3.2");
+  const char *zModel = agent_default_model();
 
   db_find_and_open_repository(OPEN_ANY_SCHEMA, 0);
   if( g.argc<3 ){
@@ -645,18 +975,33 @@ void agent_cmd(void){
 ** Minimal manager-facing chat UI for local agent testing.
 */
 void agentui_page(void){
-  const char *zModel = db_get("agent-ollama-model", "llama3.2");
+  const char *zModel = agent_default_model();
+  const char *zUser;
+  int sidCurrent;
 
   login_check_credentials();
   if( !g.perm.Read ){
     login_needed(g.anon.Read);
     return;
   }
+  zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
+  sidCurrent = agent_chat_current_session(zUser);
   style_set_current_feature("agent");
   style_header("Agent Chat");
+  style_submenu_element("Chat", "%R/chat");
+  style_submenu_element("New Chat", "%R/agentui?new=1");
   @ <div class="fossil-doc" data-title="Agent Chat">
-  @ <p>This page sends prompts to a local Ollama CLI command configured by
-  @ the repository settings.</p>
+  @ <p>This page sends prompts to the AI backend configured by the repository
+  @ settings.</p>
+  @ <div style="display:grid;grid-template-columns:minmax(12em,16em) 1fr;gap:1em;">
+  @ <div>
+  @ <div style="margin-bottom:0.7em;"><a class="btn" href="%R/agentui?new=1">New Chat</a></div>
+  @ <div style="border:1px solid #888;padding:0.6em;background:rgba(127,127,127,0.05);">
+  @ <div style="font-weight:bold;margin-bottom:0.4em;">Sessions</div>
+  agent_chat_render_sessions(zUser, sidCurrent);
+  @ </div>
+  @ </div>
+  @ <div>
   @ <div class="forumEdit">
   @ <label for="agent-model"><b>Model:</b></label>
   @ <input type="text" id="agent-model" size="24" value="%h(zModel)">
@@ -666,6 +1011,7 @@ void agentui_page(void){
   @ <div id="agent-chat-log"
   @  style="min-height:320px;max-height:520px;overflow:auto;border:1px solid
   @  #888;padding:0.8em;margin:1em 0;background:rgba(127,127,127,0.05);">
+  agent_chat_render_history(sidCurrent);
   @ </div>
   @ <div class="forumEdit">
   @ <textarea id="agent-chat-input" rows="6" cols="80"
@@ -676,6 +1022,7 @@ void agentui_page(void){
   @ </div>
   @ <script nonce="%h(style_nonce())">
   @ (function(){
+  @   var sid = %d(sidCurrent);
   @   var input = document.getElementById('agent-chat-input');
   @   var send = document.getElementById('agent-chat-send');
   @   var model = document.getElementById('agent-model');
@@ -692,6 +1039,7 @@ void agentui_page(void){
   @     log.appendChild(div);
   @     log.scrollTop = log.scrollHeight;
   @   }
+  @   log.scrollTop = log.scrollHeight;
   @   send.addEventListener('click', function(){
   @     var msg = input.value.trim();
   @     if(!msg) return;
@@ -700,9 +1048,20 @@ void agentui_page(void){
   @     fetch('agent-chat', {
   @       method: 'POST',
   @       headers: {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'},
-  @       body: new URLSearchParams({msg: msg, model: model.value, context: context.checked ? 1 : 0})
+  @       body: new URLSearchParams({sid: sid, msg: msg, model: model.value, context: context.checked ? 1 : 0})
   @     }).then(function(r){
-  @       return r.json();
+  @       return r.text().then(function(text){
+  @         var data;
+  @         try{
+  @           data = JSON.parse(text);
+  @         }catch(e){
+  @           throw new Error(text ? text.slice(0, 240) : ('HTTP ' + r.status));
+  @         }
+  @         if(!r.ok){
+  @           throw new Error(data.error || data.reply || ('HTTP ' + r.status));
+  @         }
+  @         return data;
+  @       });
   @     }).then(function(data){
   @       addMsg('Agent', data.reply || data.error || '(no reply)');
   @     }).catch(function(err){
@@ -714,25 +1073,39 @@ void agentui_page(void){
   @   });
   @ })();
   @ </script>
+  @ </div>
+  @ </div>
   style_finish_page();
 }
 
 /*
 ** WEBPAGE: agent-chat
 **
-** JSON endpoint for the local Ollama-backed agent chat UI.
+** JSON endpoint for the configured agent chat UI.
 */
 void agent_chat_page(void){
   Blob reply = BLOB_INITIALIZER;
   Blob err = BLOB_INITIALIZER;
   const char *zMsg;
   const char *zModel;
+  const char *zUser;
+  int sid;
   int rc;
   char *zContextMsg = 0;
 
   login_check_credentials();
+  if( !g.perm.Read ){
+    cgi_set_content_type("application/json");
+    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
+    return;
+  }
   zMsg = PD("msg", "");
-  zModel = PD("model", db_get("agent-ollama-model", "llama3.2"));
+  zModel = PD("model", agent_default_model());
+  zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
+  sid = atoi(PD("sid","0"));
+  if( sid<=0 || !agent_chat_session_exists(sid) ){
+    sid = agent_chat_session_create(zUser);
+  }
   cgi_set_content_type("application/json");
   if( zMsg[0]==0 ){
     CX("{\"error\":%!j}\n", "missing msg parameter");
@@ -740,23 +1113,31 @@ void agent_chat_page(void){
   }
   if( PB("context") ){
     Blob ctx = BLOB_INITIALIZER;
-    agent_assemble_context(&ctx, zMsg);
-    blob_appendf(&ctx, "%s", zMsg);
-    zContextMsg = fossil_strdup(blob_str(&ctx));
-    zMsg = zContextMsg;
+    if( agent_assemble_context(&ctx, zModel, zMsg) ){
+      blob_appendf(&ctx, "User request:\n%s\n", zMsg);
+      zContextMsg = fossil_strdup(blob_str(&ctx));
+      zMsg = zContextMsg;
+    }
     blob_reset(&ctx);
   }
   if( zModel[0]==0 ){
     CX("{\"error\":%!j}\n", "missing model parameter");
     return;
   }
-  rc = agent_run_ollama(zModel, zMsg, &reply, &err);
+  db_begin_write();
+  db_unprotect(PROTECT_READONLY);
+  agent_chat_save(sid, zUser, "user", zModel, PD("msg",""));
+  rc = agent_run_backend(zModel, zMsg, &reply, &err);
   if( rc==0 ){
-    CX("{\"model\":%!j,\"reply\":%!j}\n", zModel, blob_str(&reply));
+    agent_chat_save(sid, zUser, "agent", zModel, blob_str(&reply));
+    db_end_transaction(0);
+    CX("{\"sid\":%d,\"model\":%!j,\"reply\":%!j}\n", sid, zModel, blob_str(&reply));
   }else{
     const char *zErr = blob_size(&err)>0 ? blob_str(&err)
-                                         : "ollama invocation failed";
-    CX("{\"model\":%!j,\"error\":%!j}\n", zModel, zErr);
+                                         : "agent invocation failed";
+    agent_chat_save(sid, zUser, "agent", zModel, zErr);
+    db_end_transaction(0);
+    CX("{\"sid\":%d,\"model\":%!j,\"error\":%!j}\n", sid, zModel, zErr);
   }
   if( PB("context") ) fossil_free((char*)zMsg);
   blob_reset(&reply);
