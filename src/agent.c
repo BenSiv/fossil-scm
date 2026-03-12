@@ -104,10 +104,12 @@ static void agent_expand_command(
 ** current process has an open checkout root. The caller must fossil_free()
 ** the result.
 */
+#ifdef FOSSIL_ENABLE_JSON
 static char *agent_config_path(void){
   if( g.zLocalRoot==0 || g.zLocalRoot[0]==0 ) return 0;
   return mprintf("%s%s", g.zLocalRoot, zAgentConfigFile);
 }
+#endif
 
 /*
 ** Look up a string value in cfg/ai-agent.json. Returns a newly allocated
@@ -154,7 +156,7 @@ static char *agent_config_get(const char *zKey){
   fossil_free(zPath);
   return zOut;
 #else
-  UNUSED_PARAMETER(zKey);
+  (void)zKey;
   return 0;
 #endif
 }
