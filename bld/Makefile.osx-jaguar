@@ -27,7 +27,7 @@ SRCDIR = ./src
 #    by the shell.
 #
 #
-OBJDIR = bld
+OBJDIR = out
 
 #### C Compiler and options for use in building executables that
 #    will run on the platform that is doing the build.  This is used
@@ -64,8 +64,9 @@ USE_SYSTEM_SQLITE =
 USE_LINENOISE = 1
 # FOSSIL_ENABLE_TCL = @FOSSIL_ENABLE_TCL@
 FOSSIL_ENABLE_TCL = 0
+APPNAME = bin/fossil$(E)
 
 include $(SRCDIR)/main.mk
 
 distclean: clean
-	rm -f autoconfig.h config.log Makefile
+	rm -f out/autoconfig.h log/config.log Makefile

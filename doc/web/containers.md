@@ -12,10 +12,10 @@ show some of these options later on.
 
 ## 1. Quick Start
 
-Fossil ships a `Dockerfile` at the top of its source tree,
+Fossil ships a `Dockerfile` under `pub/pkg/docker`,
 [here][DF], which you can build like so:
 
-    $ docker build -t fossil .
+    $ docker build -f pub/pkg/docker/Dockerfile -t fossil .
 
 If the image built successfully, you can create a container from it and
 test that it runs:
@@ -52,7 +52,7 @@ applications since they avoid a conflict with past versions; it lets you
 keep old containers around for quick roll-backs while replacing them
 with fresh ones.
 
-[DF]: /file/Dockerfile
+[DF]: /file/pub/pkg/docker/Dockerfile
 
 
 ## 2. <a id="storage"></a>Repository Storage Options

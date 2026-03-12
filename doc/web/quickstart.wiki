@@ -167,8 +167,8 @@ the root of your tree, <tt>cd</tt> into that directory, and then:
 For example:
 
 <pre><b>fossil open ../myclone.fossil
-    BUILD.txt
-    COPYRIGHT-BSD2.txt
+    doc/BUILD.txt
+    LICENCE.md
     README.md
       ︙
 </tt></b></pre>

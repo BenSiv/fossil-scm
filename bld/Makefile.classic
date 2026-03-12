@@ -19,7 +19,7 @@ SRCDIR_tools = ./dev/tools
 #### The directory into which object code files should be written.
 #
 #
-OBJDIR = ./bld
+OBJDIR = ./out
 
 #### C Compiler and options for use in building executables that
 #    will run on the platform that is doing the build.  This is used
@@ -106,6 +106,6 @@ TCC.NetBSD += -DUSE_PREAD
 TCC.OpenBSD += -DUSE_PREAD
 TCC += $(TCC.$(HOST_OS))
 
-APPNAME = fossil$(E)
+APPNAME = bin/fossil$(E)
 .PHONY: all tags
 include $(SRCDIR)/main.mk

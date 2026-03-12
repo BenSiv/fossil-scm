@@ -13,3 +13,12 @@ test and exercise Fossil's ability to export a Git mirror.  Nobody much
 uses the GitHub mirror, except to verify that the mirror logic works.  If
 you want to know more about Fossil, visit the official self-hosting site
 linked above.
+
+## Documentation
+
+Canonical documents for this fork live under `doc/`:
+
+- Build Guide: `doc/BUILD.txt`
+- Licence: `doc/LICENCE.md`
+- Repository Map: `doc/specs/repo-map.md`
+- AI docs: `doc/ai/`

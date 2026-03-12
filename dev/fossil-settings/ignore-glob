@@ -2,9 +2,11 @@ compat/openssl*
 compat/tcl*
 compat/zlib/contrib/ada/*
 compat/zlib/doc/*
-fossil
+bin/fossil
 fossil.exe
 win/fossil.exe
 *shell-see.*
 *sqlite3-see.*
-bld
+out
+bin
+log

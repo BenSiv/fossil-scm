@@ -203,7 +203,7 @@ features with the DVCS might be useful for a given project:
       Markdown from the post into a ticket comment, again without
       needing to fiddle with dialect incompatibilities.
 
-  9.  Fossil is [free, open-source software](../COPYRIGHT-BSD2.txt),
+  9.  Fossil is [free, open-source software](../LICENCE.md),
       through and through. Git-backed lash-ups tend to incorporate
       either proprietary add-ons or proprietary hosting systems that
       produce vendor lock-in. Fossil gives you the freedom to take your

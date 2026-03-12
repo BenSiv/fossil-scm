@@ -1052,8 +1052,8 @@ $(CODECHECK1):	$(SRCDIR_tools)/codecheck1.c
 test:	$(OBJDIR) $(APPNAME)
 	$(TCLSH) $(SRCDIR)/../tst/tester.tcl $(APPNAME)
 
-$(OBJDIR)/VERSION.h:	$(SRCDIR)/../manifest.uuid $(SRCDIR)/../manifest $(MKVERSION) $(OBJDIR)/phony.h
-	$(MKVERSION) $(SRCDIR)/../manifest.uuid $(SRCDIR)/../manifest $(SRCDIR)/../VERSION >$@
+$(OBJDIR)/VERSION.h:	$(SRCDIR)/../scm/manifest.uuid $(SRCDIR)/../scm/manifest $(MKVERSION) $(OBJDIR)/phony.h
+	$(MKVERSION) $(SRCDIR)/../scm/manifest.uuid $(SRCDIR)/../scm/manifest $(SRCDIR)/../scm/VERSION >$@
 
 $(OBJDIR)/phony.h:
 	# Force rebuild of VERSION.h every time "make" is run
@@ -1154,7 +1154,7 @@ setup: $(OBJDIR) $(APPNAME)
 	$(MAKENSIS) ./pub/pkg/windows/setup/fossil.nsi
 
 innosetup: $(OBJDIR) $(APPNAME)
-	$(INNOSETUP) ./pub/pkg/windows/setup/fossil.iss -DAppVersion=$(shell $(CAT) ./VERSION)
+	$(INNOSETUP) ./pub/pkg/windows/setup/fossil.iss -DAppVersion=$(shell $(CAT) ./scm/VERSION)
 
 $(OBJDIR)/page_index.h: $(TRANS_SRC) $(MKINDEX)
 	$(MKINDEX) $(TRANS_SRC) >$@

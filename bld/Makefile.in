@@ -24,7 +24,7 @@ SRCDIR_tools = @srcdir@/dev/tools
 #    by the shell.
 #
 #
-OBJDIR = bld
+OBJDIR = out
 
 #### C Compiler and options for use in building executables that
 #    will run on the platform that is doing the build.  This is used
@@ -71,7 +71,7 @@ SQLITE3_ORIGIN = @SQLITE3_ORIGIN@
 USE_LINENOISE = @USE_LINENOISE@
 USE_MMAN_H = @USE_MMAN_H@
 USE_SEE = @USE_SEE@
-APPNAME = fossil
+APPNAME = bin/fossil
 #
 # APPNAME = fossil-fuzz
 # may be more appropriate for fuzzing.
@@ -99,7 +99,7 @@ SHELL_OPTIONS += @SQLITE_OPTIONS_EXT@
 # ^^^ must come after main.mk is included
 
 distclean: clean
-	-rm -f autoconfig.h config.log Makefile
+	-rm -f out/autoconfig.h log/config.log Makefile
 	-rm -f cscope.out tags
 
 reconfig:
@@ -123,7 +123,7 @@ tags:
 # This is also why we repeat the reconfig target's command here instead
 # of delegating to it with "$(MAKE) reconfig": having children running
 # around interfering makes this failure mode even worse.
-Makefile: @srcdir@/Makefile.in $(SRCDIR)/main.mk @AUTODEPS@
+Makefile: @srcdir@/bld/Makefile.in $(SRCDIR)/main.mk @AUTODEPS@
 	@AUTOREMAKE@
 	touch @builddir@/Makefile
 
@@ -161,6 +161,7 @@ container-image:
 		--load \
 		--tag $(IMGVER) \
 		--build-arg FSLURL=$(SRCTB) \
+		-f @srcdir@/pub/pkg/docker/Dockerfile \
 		$(DBFLAGS) @srcdir@
 	rm -f $(SRCTB)
 

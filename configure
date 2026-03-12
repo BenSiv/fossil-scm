@@ -1,4 +1,13 @@
 #!/bin/sh
-dir="`dirname "$0"`/dep/vendor/autosetup"
+root="`dirname "$0"`"
+dir="$root/dep/vendor/autosetup"
+autodef="$root/bld/auto.def"
 #@@INITCHECK@@#
-WRAPPER="$0"; export WRAPPER; exec "`"$dir/autosetup-find-tclsh"`" "$dir/autosetup" "$@"
+WRAPPER="$0"; export WRAPPER
+"`"$dir/autosetup-find-tclsh"`" "$dir/autosetup" "--conf=$autodef" "$@"
+rc=$?
+mkdir -p "$root/log"
+if [ -f "config.log" ]; then
+  mv -f "config.log" "$root/log/config.log"
+fi
+exit $rc

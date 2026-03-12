@@ -642,10 +642,10 @@ $(OBJDIR)/codecheck1:	$(SRCDIR_tools)/codecheck1.c
 test:	$(APPNAME)
 	$(TCLSH) $(SRCDIR)/../tst/tester.tcl $(APPNAME) $(TESTFLAGS)
 
-$(OBJDIR)/VERSION.h:	$(SRCDIR)/../manifest.uuid $(SRCDIR)/../manifest $(SRCDIR)/../VERSION $(OBJDIR)/mkversion $(OBJDIR)/phony.h
-	$(OBJDIR)/mkversion $(SRCDIR)/../manifest.uuid \
-		$(SRCDIR)/../manifest \
-		$(SRCDIR)/../VERSION >$(OBJDIR)/VERSION.h
+$(OBJDIR)/VERSION.h:	$(SRCDIR)/../scm/manifest.uuid $(SRCDIR)/../scm/manifest $(SRCDIR)/../scm/VERSION $(OBJDIR)/mkversion $(OBJDIR)/phony.h
+	$(OBJDIR)/mkversion $(SRCDIR)/../scm/manifest.uuid \
+		$(SRCDIR)/../scm/manifest \
+		$(SRCDIR)/../scm/VERSION >$(OBJDIR)/VERSION.h
 
 $(OBJDIR)/phony.h:
 	# Force rebuild of VERSION.h every time we run "make"
@@ -771,12 +771,13 @@ EXTRAOBJ = \
 
 $(APPNAME):	$(OBJDIR)/headers $(OBJDIR)/codecheck1 $(EXTRAOBJ) $(OBJ)
 	$(OBJDIR)/codecheck1 $(TRANS_SRC)
+	mkdir -p $(dir $(APPNAME))
 	$(TCC) $(TCCFLAGS) -o $(APPNAME) $(EXTRAOBJ) $(OBJ) $(LIB)
 
 # This rule prevents make from using its default rules to try build
 # an executable named "manifest" out of the file named "manifest.c"
 #
-$(SRCDIR)/../manifest:
+$(SRCDIR)/../scm/manifest:
 	# noop
 
 clean:
@@ -2258,4 +2259,3 @@ compile-commands-clean:
 
 .PHONY: all install test clean
 .PHONY: compile-commands-clean compile-commands-dir
-

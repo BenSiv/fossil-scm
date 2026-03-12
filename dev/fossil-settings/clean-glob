@@ -8,7 +8,7 @@
 Makefile
 autosetup/jimsh0
 autosetup/jimsh0.exe
-bld/*
+out/*
 msvcbld/*
 wbld/*
 win/*.c
@@ -16,5 +16,6 @@ win/*.h
 win/*.exe
 win/headers
 win/linkopts
-autoconfig.h
-config.log
+out/autoconfig.h
+log/*
+bin/*

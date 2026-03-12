@@ -259,7 +259,7 @@ ones we’ve heard before and give our stock answers to them here:
     outlier remaining is MSIE 11, and [even Microsoft is moving their
     own products off of it][ie11x].
 
-[2cbsd]:  https://fossil-scm.org/home/doc/trunk/COPYRIGHT-BSD2.txt
+[2cbsd]:  https://fossil-scm.org/home/doc/trunk/LICENCE.md
 [ciu]:    https://caniuse.com/
 [cskin]:  ./customskin.md
 [dcsp]:   ./defcsp.md
@@ -267,7 +267,7 @@ ones we’ve heard before and give our stock answers to them here:
 [es6dep]: https://caniuse.com/#feat=es6
 [fcgi]:   /help/cgi
 [ffor]:   https://fossil-scm.org/forum/
-[flic]:   /doc/trunk/COPYRIGHT-BSD2.txt
+[flic]:   /doc/trunk/LICENCE.md
 [fshome]: /doc/trunk/www/server/
 [fslpl]:  /doc/trunk/www/fossil-v-git.wiki#portable
 [fsrc]:   https://fossil-scm.org/home/file/src

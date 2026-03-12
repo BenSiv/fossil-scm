@@ -166,7 +166,7 @@ puts $out {
 <li> <a href='$ROOT/help'>Built-in help for commands and webpages</a>
 <li> <a href='history.md'>Purpose and History of Fossil</a>
 <li> <a href='build.wiki'>Compiling and installing Fossil</a>
-<li> <a href='../COPYRIGHT-BSD2.txt'>License</a>
+<li> <a href='../LICENCE.md'>License</a>
 <li> <a href='userlinks.wiki'>Miscellaneous Docs for Fossil Users</a>
 <li> <a href='hacker-howto.wiki'>Fossil Developer's Guide</a>
 <li><a href='$ROOT/wiki?name=Release Build How-To'>Release Build How-To</a>,
