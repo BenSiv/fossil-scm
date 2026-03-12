@@ -1,0 +1,5 @@
+{
+  "model": "llama3.2",
+  "command": "ollama run %m",
+  "embedding_command": ""
+}

@@ -20,12 +20,21 @@
 #include "config.h"
 #include "agent.h"
 #include <assert.h>
+#ifdef FOSSIL_ENABLE_JSON
+#include "json_detail.h"
+#endif
 
 static int agent_generate_embedding(
   const char *zModel,
   const char *zText,
   Blob *pOut
 );
+
+/*
+** Repo-local config file for agent integration. When present, this file
+** overrides the corresponding Fossil settings for the agent runtime.
+*/
+static const char zAgentConfigFile[] = "cfg/ai-agent.json";
 
 /*
 ** SETTING: agent-command width=60
@@ -91,17 +100,95 @@ static void agent_expand_command(
 }
 
 /*
+** Return a freshly-allocated absolute path to cfg/ai-agent.json if the
+** current process has an open checkout root. The caller must fossil_free()
+** the result.
+*/
+static char *agent_config_path(void){
+  if( g.zLocalRoot==0 || g.zLocalRoot[0]==0 ) return 0;
+  return mprintf("%s%s", g.zLocalRoot, zAgentConfigFile);
+}
+
+/*
+** Look up a string value in cfg/ai-agent.json. Returns a newly allocated
+** string on success or NULL if the config file/key is missing or invalid.
+** The caller must fossil_free() the result.
+*/
+static char *agent_config_get(const char *zKey){
+#ifdef FOSSIL_ENABLE_JSON
+  char *zPath = 0;
+  Blob json = BLOB_INITIALIZER;
+  cson_parse_info pinfo = cson_parse_info_empty;
+  cson_value *pRoot = 0;
+  cson_object *pObj = 0;
+  cson_value *pVal = 0;
+  const char *zVal = 0;
+  char *zOut = 0;
+
+  zPath = agent_config_path();
+  if( zPath==0 ) return 0;
+  if( file_size(zPath, ExtFILE)<0 ){
+    fossil_free(zPath);
+    return 0;
+  }
+  if( blob_read_from_file(&json, zPath, ExtFILE)<0 ){
+    blob_reset(&json);
+    fossil_free(zPath);
+    return 0;
+  }
+  pRoot = cson_parse_Blob(&json, &pinfo);
+  if( pRoot==0 || !cson_value_is_object(pRoot) ){
+    cson_value_free(pRoot);
+    blob_reset(&json);
+    fossil_free(zPath);
+    return 0;
+  }
+  pObj = cson_value_get_object(pRoot);
+  pVal = cson_object_get(pObj, zKey);
+  zVal = pVal ? cson_value_get_cstr(pVal) : 0;
+  if( zVal && zVal[0] ){
+    zOut = mprintf("%s", zVal);
+  }
+  cson_value_free(pRoot);
+  blob_reset(&json);
+  fossil_free(zPath);
+  return zOut;
+#else
+  UNUSED_PARAMETER(zKey);
+  return 0;
+#endif
+}
+
+/*
 ** Return the configured chat model, with legacy fallback.
 */
 static const char *agent_default_model(void){
-  return db_get("agent-model", db_get("agent-ollama-model", "llama3.2"));
+  static char *zCached = 0;
+  fossil_free(zCached);
+  zCached = agent_config_get("model");
+  return zCached
+    ? zCached
+    : db_get("agent-model", db_get("agent-ollama-model", "llama3.2"));
 }
 
 /*
 ** Return the configured chat command template, with legacy fallback.
 */
 static const char *agent_command_template(void){
-  return db_get("agent-command", "ollama run %m");
+  static char *zCached = 0;
+  fossil_free(zCached);
+  zCached = agent_config_get("command");
+  return zCached ? zCached : db_get("agent-command", "ollama run %m");
+}
+
+/*
+** Return the configured embedding command template, if any.
+*/
+static const char *agent_embedding_template(void){
+  static char *zCached = 0;
+  fossil_free(zCached);
+  zCached = agent_config_get("embedding_command");
+  return zCached ? zCached : db_get("agent-embedding-command", "");
 }
 
 /*
@@ -748,7 +835,7 @@ static int agent_generate_embedding(
   Blob cmd = BLOB_INITIALIZER;
   Blob envCmd = BLOB_INITIALIZER;
   Blob reply = BLOB_INITIALIZER;
-  const char *zCmdTmpl = db_get("agent-embedding-command", "");
+  const char *zCmdTmpl = agent_embedding_template();
   char *z;
   FILE *p = 0;
   FILE *pOutToChild = 0;
