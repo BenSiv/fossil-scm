@@ -8,7 +8,10 @@ This document defines non‑negotiable constraints and goals for the AI system.
 - Minimize dependencies; prefer C/Tcl/SQLite.
 
 ## Safety
-- Do not persist raw chain‑of‑thought.
+- Persist reasoning in structured, policy-controlled forms that remain
+  useful for retrieval, audit, and synthesis.
+- Do not rely on unrestricted raw chain-of-thought dumps as the default
+  persistence format.
 - Never delete provenance records without explicit user request.
 
 ## Quality

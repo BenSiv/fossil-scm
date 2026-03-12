@@ -17,6 +17,8 @@ This document specifies an AI-optimized software management system built on Foss
 - Replacing Fossil SCM core behavior or storage formats.
 - Requiring external services for basic operation.
 - Exposing raw backend internals to end users by default.
+- Treating unrestricted raw chain-of-thought dumps as the primary long-term
+  knowledge representation.
 
 ## Architecture Overview
 - Fossil repository is the primary data store.
@@ -63,6 +65,7 @@ This document specifies an AI-optimized software management system built on Foss
 - Rationale summary.
 - Model and provider identifiers.
 - Token usage and timestamp.
+- Optional structured reasoning or decision-trail references when policy allows.
 
 ## Bubbling and Sinking
 
@@ -137,6 +140,7 @@ This document specifies an AI-optimized software management system built on Foss
 - Coding and documentation standards.
 - Security and privacy requirements.
 - Forbidden behaviors.
+- Rules for how reasoning artifacts are summarized, stored, and retrieved.
 
 ### Steering Workflow
 - User steering updates a steering document.
@@ -249,4 +253,3 @@ This document specifies an AI-optimized software management system built on Foss
 - What is the default embedding provider and vector dimension?
 - What are the initial token caps for context bands?
 - Which UI controls are mandatory for v1?
-

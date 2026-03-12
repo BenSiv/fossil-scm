@@ -18,5 +18,8 @@ Goal: every agent action is attributable to a prompt, a rationale, and the repos
 
 ## Privacy policy
 
-- No raw chain-of-thought is persisted.
-- Rationale is concise, declarative, and user‑safe.
+- Reasoning artifacts may be persisted when they are useful to the
+  repository knowledge pool and conform to project policy.
+- Favor structured rationale, summaries, decision trails, and linked
+  context over unbounded raw dumps.
+- Stored reasoning should remain concise, declarative, and user-safe.
