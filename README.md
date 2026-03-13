@@ -53,3 +53,6 @@ Notes:
   or export `FOSSIL_AGENT_CONFIG=/absolute/path/to/fossil-agent.json`.
 - For Codex-backed chat, use `fossil-codex-agent.sh` and set `"model": "auto"`
   unless your Codex account supports an explicit model name.
+- `make install` also creates `${XDG_CONFIG_HOME:-$HOME/.config}/fossil/agents`
+  and populates it with `ai-agent.json`, `ai-agent-codex.json`, and the agent
+  wrapper scripts when `DESTDIR` is empty.

@@ -598,6 +598,18 @@ all:	$(APPNAME)
 install:	all
 	mkdir -p $(INSTALLDIR)
 	cp $(APPNAME) $(INSTALLDIR)
+	if test -z "$(DESTDIR)"; then \
+		fsl_cfg_root="$${XDG_CONFIG_HOME:-$$HOME/.config}/fossil"; \
+		fsl_agent_dir="$$fsl_cfg_root/agents"; \
+		mkdir -p "$$fsl_agent_dir"; \
+		cp $(TOPDIR)/dev/agents/fossil-codex-agent.sh "$$fsl_agent_dir/"; \
+		cp $(TOPDIR)/dev/agents/fossil-ollama-agent.sh "$$fsl_agent_dir/"; \
+		chmod 755 "$$fsl_agent_dir"/fossil-codex-agent.sh "$$fsl_agent_dir"/fossil-ollama-agent.sh; \
+		sed "s#\\.\\/dev\\/agents#$$fsl_agent_dir#g" $(TOPDIR)/cfg/ai-agent.json \
+		  > "$$fsl_agent_dir/ai-agent.json"; \
+		sed "s#\\.\\/dev\\/agents#$$fsl_agent_dir#g" $(TOPDIR)/cfg/ai-agent-codex.json \
+		  > "$$fsl_agent_dir/ai-agent-codex.json"; \
+	fi
 
 codecheck:	$(TRANS_SRC) $(OBJDIR)/codecheck1
 	$(OBJDIR)/codecheck1 $(TRANS_SRC)

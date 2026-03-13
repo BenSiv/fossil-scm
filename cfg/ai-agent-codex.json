@@ -1,0 +1,6 @@
+{
+  "model": "auto",
+  "command": "./dev/agents/fossil-codex-agent.sh",
+  "embedding_model": "mxbai-embed-large",
+  "embedding_command": ""
+}
