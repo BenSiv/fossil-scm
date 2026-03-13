@@ -52,6 +52,8 @@ static int agent_generate_embedding(
   const char *zText,
   Blob *pOut
 );
+static const char *agent_command_template(void);
+static const char *agent_embedding_template(void);
 
 /*
 ** Repo-local config file for agent integration. When present, this file
@@ -83,6 +85,13 @@ static const char *zAgentConfigPath = 0;
 ** specify a model explicitly.
 */
 /*
+** SETTING: agent-provider width=20
+**
+** Optional explicit provider name for chat requests. Examples include
+** "ollama", "codex", and "custom". If unset, the provider is inferred
+** from the configured command template for compatibility.
+*/
+/*
 ** SETTING: agent-embedding-command width=80
 **
 ** Optional shell command template used to generate embeddings. The text to
@@ -95,6 +104,13 @@ static const char *zAgentConfigPath = 0;
 **
 ** Default model name used for embedding generation and retrieval. If unset,
 ** the chat model is reused.
+*/
+/*
+** SETTING: agent-embedding-provider width=20
+**
+** Optional explicit provider name for embeddings. If unset, the provider is
+** inferred from embedding-command or falls back to Ollama's HTTP API when
+** embedding-command is empty.
 */
 /*
 ** SETTING: agent-ollama-command width=40 default=ollama
@@ -224,6 +240,23 @@ static const char *agent_infer_provider(const char *zCmd){
 }
 
 /*
+** Return non-zero if zModel looks like an Ollama-style local model name.
+*/
+static int agent_model_looks_ollama(const char *zModel){
+  static const char *const azPrefix[] = {
+    "llama", "qwen", "mxbai", "deepseek", "phi", "gemma", "nomic"
+  };
+  int i;
+  if( zModel==0 || zModel[0]==0 ) return 0;
+  if( strchr(zModel, ':')!=0 ) return 1;
+  for(i=0; i<(int)(sizeof(azPrefix)/sizeof(azPrefix[0])); i++){
+    size_t n = strlen(azPrefix[i]);
+    if( fossil_strnicmp(zModel, azPrefix[i], (int)n)==0 ) return 1;
+  }
+  return 0;
+}
+
+/*
 ** Look up a string value in cfg/ai-agent.json. Returns a newly allocated
 ** string on success or NULL if the config file/key is missing or invalid.
 ** The caller must fossil_free() the result.
@@ -286,6 +319,24 @@ static const char *agent_default_model(void){
 }
 
 /*
+** Return the configured chat provider, with legacy inference fallback.
+*/
+static const char *agent_chat_provider(void){
+  static char *zCached = 0;
+  char *zCmd = 0;
+  fossil_free(zCached);
+  zCached = agent_config_get("provider");
+  if( zCached ) return zCached;
+  zCached = db_get("agent-provider", 0);
+  if( zCached ) return zCached;
+  zCmd = agent_config_get("command");
+  if( zCmd==0 ) zCmd = db_get("agent-command", "ollama run %m");
+  zCached = mprintf("%s", agent_infer_provider(zCmd));
+  fossil_free(zCmd);
+  return zCached;
+}
+
+/*
 ** Return the configured embedding model, with fallback to the chat model.
 */
 static const char *agent_embedding_model(void){
@@ -295,6 +346,28 @@ static const char *agent_embedding_model(void){
   return zCached
     ? zCached
     : db_get("agent-embedding-model", agent_default_model());
+}
+
+/*
+** Return the configured embedding provider, with legacy inference fallback.
+*/
+static const char *agent_embedding_provider(void){
+  static char *zCached = 0;
+  char *zCmd = 0;
+  fossil_free(zCached);
+  zCached = agent_config_get("embedding_provider");
+  if( zCached ) return zCached;
+  zCached = db_get("agent-embedding-provider", 0);
+  if( zCached ) return zCached;
+  zCmd = agent_config_get("embedding_command");
+  if( zCmd==0 ) zCmd = db_get("agent-embedding-command", "");
+  if( zCmd[0] ){
+    zCached = mprintf("%s", agent_infer_provider(zCmd));
+  }else{
+    zCached = mprintf("ollama");
+  }
+  fossil_free(zCmd);
+  return zCached;
 }
 
 /*
@@ -323,24 +396,62 @@ static const char *agent_embedding_template(void){
 static void agent_prepare_command(
   Blob *pOut,
   const char *zMode,
+  const char *zProvider,
   const char *zModel,
   Blob *pCmd
 ){
   Blob model = BLOB_INITIALIZER;
   Blob mode = BLOB_INITIALIZER;
+  Blob provider = BLOB_INITIALIZER;
   Blob cmd = BLOB_INITIALIZER;
   blob_append_escaped_arg(&model, zModel ? zModel : "", 0);
   blob_append_escaped_arg(&mode, zMode ? zMode : "", 0);
+  blob_append_escaped_arg(&provider, zProvider ? zProvider : "", 0);
   blob_append_escaped_arg(&cmd, blob_str(pCmd), 0);
   blob_zero(pOut);
   blob_appendf(
     pOut,
-    "env FOSSIL_AGENT_MODEL=%s FOSSIL_AGENT_MODE=%s sh -lc %s 2>&1",
-    blob_str(&model), blob_str(&mode), blob_str(&cmd)
+    "env FOSSIL_AGENT_MODEL=%s FOSSIL_AGENT_MODE=%s FOSSIL_AGENT_PROVIDER=%s"
+    " sh -lc %s 2>&1",
+    blob_str(&model), blob_str(&mode), blob_str(&provider), blob_str(&cmd)
   );
   blob_reset(&model);
   blob_reset(&mode);
+  blob_reset(&provider);
   blob_reset(&cmd);
+}
+
+/*
+** Validate a provider/model pair before invoking the backend.
+*/
+static int agent_validate_provider_model(
+  const char *zProvider,
+  const char *zModel,
+  Blob *pErr
+){
+  if( zModel==0 || zModel[0]==0 ){
+    blob_appendf(pErr, "missing model parameter");
+    return 1;
+  }
+  if( zProvider==0 || zProvider[0]==0 ) return 0;
+  if( fossil_stricmp(zProvider, "codex")==0 ){
+    if( fossil_stricmp(zModel, "auto")==0 ) return 0;
+    if( agent_model_looks_ollama(zModel) ){
+      blob_appendf(pErr,
+        "model \"%s\" looks like an Ollama model but provider is codex", zModel
+      );
+      return 1;
+    }
+  }else if( fossil_stricmp(zProvider, "ollama")==0
+         || fossil_stricmp(zProvider, "ollama-http")==0 ){
+    if( fossil_stricmp(zModel, "auto")==0 ){
+      blob_appendf(pErr,
+        "model \"auto\" is not valid for provider %s", zProvider
+      );
+      return 1;
+    }
+  }
+  return 0;
 }
 
 /*
@@ -943,11 +1054,15 @@ static int agent_run_backend(
   int childPid = 0;
   int rc;
   const char *zCmdTmpl = agent_command_template();
+  const char *zProvider = agent_chat_provider();
 
   blob_zero(pReply);
   blob_zero(pErr);
+  if( agent_validate_provider_model(zProvider, zModel, pErr) ){
+    return 1;
+  }
   agent_expand_command(&cmd, zCmdTmpl, zModel);
-  agent_prepare_command(&envCmd, "chat", zModel, &cmd);
+  agent_prepare_command(&envCmd, "chat", zProvider, zModel, &cmd);
   rc = popen2(blob_str(&envCmd), &fdIn, &out, &childPid, 0);
   if( rc!=0 || fdIn<0 || out==0 ){
     blob_appendf(pErr, "unable to run configured agent command");
@@ -1072,10 +1187,18 @@ static int agent_generate_embedding(
   int fdFromChild = -1;
   int childPid = 0;
   int rc;
+  Blob err = BLOB_INITIALIZER;
+  const char *zProvider = agent_embedding_provider();
+
+  if( agent_validate_provider_model(zProvider, zModel, &err) ){
+    blob_reset(&err);
+    return 1;
+  }
+  blob_reset(&err);
 
   if( zCmdTmpl[0] ){
     agent_expand_command(&cmd, zCmdTmpl, zModel);
-    agent_prepare_command(&envCmd, "embed", zModel, &cmd);
+    agent_prepare_command(&envCmd, "embed", zProvider, zModel, &cmd);
     rc = popen2(blob_str(&envCmd), &fdFromChild, &pOutToChild, &childPid, 0);
     if( rc!=0 || fdFromChild<0 || pOutToChild==0 ){
       blob_reset(&cmd);
@@ -1376,9 +1499,8 @@ void agentui_page(void){
   zCmd = agent_command_template();
   zEmbedModel = agent_embedding_model();
   zEmbedCmd = agent_embedding_template();
-  zProvider = agent_infer_provider(zCmd);
-  zEmbedProvider = zEmbedCmd[0] ? agent_infer_provider(zEmbedCmd)
-                                : (fossil_strcmp(zProvider, "ollama")==0 ? "ollama-http" : "inherit");
+  zProvider = agent_chat_provider();
+  zEmbedProvider = agent_embedding_provider();
   zConfigSource = agent_config_source();
   style_set_current_feature("agent");
   style_header("Agent Chat");
@@ -1492,6 +1614,7 @@ void agent_chat_page(void){
   Blob err = BLOB_INITIALIZER;
   const char *zMsg;
   const char *zModel;
+  const char *zProvider;
   const char *zUser;
   int sid;
   int rc;
@@ -1505,6 +1628,7 @@ void agent_chat_page(void){
   }
   zMsg = PD("msg", "");
   zModel = PD("model", agent_default_model());
+  zProvider = agent_chat_provider();
   zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
   sid = atoi(PD("sid","0"));
   cgi_set_content_type("application/json");
@@ -1514,6 +1638,11 @@ void agent_chat_page(void){
   }
   if( zModel[0]==0 ){
     CX("{\"error\":%!j}\n", "missing model parameter");
+    return;
+  }
+  if( agent_validate_provider_model(zProvider, zModel, &err) ){
+    CX("{\"error\":%!j}\n", blob_str(&err));
+    blob_reset(&err);
     return;
   }
   db_begin_write();

@@ -83,8 +83,10 @@ file mkdir $userCfgDir
 
 write_file [file join $cfgDir agent.json] [subst -nocommands {
 {
+  "provider": "codex",
   "model": "test-chat-model",
   "command": "$backend",
+  "embedding_provider": "ollama",
   "embedding_model": "test-embed-model",
   "embedding_command": "$backend"
 }
@@ -142,8 +144,10 @@ set RESULT $response
 set CODE 0
 test agent-ui-1 {[agent_http_status $RESULT] eq {200}}
 test agent-ui-2 {[string first [subst {source: repo agent-config-path: [file join $cfgDir agent.json]}] $RESULT]>=0}
-test agent-ui-3 {[string first {chat model: test-chat-model} $RESULT]>=0}
-test agent-ui-4 {[string first {embedding model: test-embed-model} $RESULT]>=0}
+test agent-ui-3 {[string first {chat provider: codex} $RESULT]>=0}
+test agent-ui-4 {[string first {chat model: test-chat-model} $RESULT]>=0}
+test agent-ui-5 {[string first {embedding provider: ollama} $RESULT]>=0}
+test agent-ui-6 {[string first {embedding model: test-embed-model} $RESULT]>=0}
 
 ###############################################################################
 
@@ -164,6 +168,16 @@ test agent-chat-6 {[normalize_result] eq {say only hi}}
 
 fossil sql "SELECT msg FROM agentchat WHERE role='agent' ORDER BY acid DESC LIMIT 1"
 test agent-chat-7 {[string first {reply:} [normalize_result]]>=0}
+
+###############################################################################
+
+set body [subst {sid=0&msg=say+only+hi&model=qwen3.5%3A0.8b&context=0&proof=$proof}]
+set response [agent_http_request $repository POST /agent-chat $body]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-chat-mismatch-1 {[string first {looks like an Ollama model but provider is codex} $RESULT]>=0}
+fossil sql "SELECT count(*) FROM agentchat"
+test agent-chat-mismatch-2 {[normalize_result] eq {2}}
 
 ###############################################################################
 

@@ -41,8 +41,10 @@ Checkout-local config lives in [`cfg/ai-agent.json`](cfg/ai-agent.json):
 
 ```json
 {
+  "provider": "ollama",
   "model": "qwen3.5:0.8b",
   "command": "/home/you/.config/fossil/agents/fossil-ollama-agent.sh",
+  "embedding_provider": "ollama",
   "embedding_model": "mxbai-embed-large",
   "embedding_command": ""
 }
@@ -50,17 +52,26 @@ Checkout-local config lives in [`cfg/ai-agent.json`](cfg/ai-agent.json):
 
 Notes:
 
+- `provider` selects the chat backend. Current built-in compatibility values are
+  `ollama`, `codex`, and `custom`.
 - `model` is the chat model used by `/agentui` and `/agent-chat`.
+- `embedding_provider` selects the embedding backend independently from chat.
 - `embedding_model` is used by `fossil agent embed`, `semantic-index`, and `retrieve`.
 - Maintained helper scripts live in [`dev/agents/fossil-ollama-agent.sh`](dev/agents/fossil-ollama-agent.sh)
   and [`dev/agents/fossil-codex-agent.sh`](dev/agents/fossil-codex-agent.sh).
 - `embedding_command` may be left empty to use Ollama's HTTP `/api/embed` fallback.
 - `qwen3.5:0.8b` does not provide embeddings in Ollama, so a separate embedding model is required.
+- When `provider` or `embedding_provider` is omitted, Fossil infers it from the
+  configured command for compatibility with older configs.
+- Fossil rejects obvious provider/model mismatches before launching the backend,
+  such as `provider=codex` with an Ollama-style model name or `provider=ollama`
+  with `model=auto`.
 - Runtime config lookup order is: `--agent-config`, `FOSSIL_AGENT_CONFIG`,
   repo setting `agent-config-path`, user config
   `${XDG_CONFIG_HOME:-$HOME/.config}/fossil/ai-agent.json`, then checkout-local
   `cfg/ai-agent.json`, then repo settings such as `agent-command`,
-  `agent-model`, and `agent-embedding-model`.
+  `agent-model`, `agent-provider`, `agent-embedding-model`, and
+  `agent-embedding-provider`.
 - To point Fossil at a shared config file, set `agent-config-path` in the
   repository, pass `fossil agent --agent-config /absolute/path/to/fossil-agent.json ...`,
   or export `FOSSIL_AGENT_CONFIG=/absolute/path/to/fossil-agent.json`.
