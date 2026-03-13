@@ -29,6 +29,8 @@ Canonical documents for this fork live under [`doc/`](doc/):
   suite recovery is tracked in
   [`doc/ai/TCL_TEST_REVIVAL_PLAN.md`](doc/ai/TCL_TEST_REVIVAL_PLAN.md).
 - Clean local reinstall helper: [`dev/tools/install-fossil-clean.sh`](dev/tools/install-fossil-clean.sh)
+- Tcl test prerequisite helper:
+  [`dev/tools/install-tcl-test-prereqs.sh`](dev/tools/install-tcl-test-prereqs.sh)
 
 ## AI Agent Configuration
 
@@ -107,3 +109,10 @@ Common skip prerequisites:
 
 The Tcl runner prints skip reasons in the final summary so a developer can
 distinguish optional-environment skips from real regressions.
+
+To check or install the optional Tcllib packages used by the skipped tests:
+
+```bash
+dev/tools/install-tcl-test-prereqs.sh --check
+dev/tools/install-tcl-test-prereqs.sh --print
+```
