@@ -33,7 +33,7 @@ Checkout-local config lives in [`cfg/ai-agent.json`](cfg/ai-agent.json):
 ```json
 {
   "model": "qwen3.5:0.8b",
-  "command": "/absolute/path/to/fossil-scm/dev/agents/fossil-ollama-agent.sh",
+  "command": "/home/you/.config/fossil/agents/fossil-ollama-agent.sh",
   "embedding_model": "mxbai-embed-large",
   "embedding_command": ""
 }
