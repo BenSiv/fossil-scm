@@ -515,6 +515,33 @@ proc test_cleanup_then_return {} {
   return -code return
 }
 
+proc skipped_test_reason {testname} {
+  switch -- $testname {
+    json {
+      return "requires JSON-enabled Fossil and Tcllib's json package"
+    }
+    merge5 {
+      return "intentionally disabled: legacy merge5 fixture is incompatible with current sqlite3 --no-repository behavior"
+    }
+    set-manifest -
+    unversioned {
+      return "requires Tcllib's sha1 package"
+    }
+    th1-docs {
+      return "requires a Fossil build with TH1 docs support and Tcl support"
+    }
+    th1-hooks {
+      return "requires a Fossil build with TH1 hooks support"
+    }
+    th1-tcl {
+      return "requires a Fossil build with Tcl support"
+    }
+    default {
+      return ""
+    }
+  }
+}
+
 proc test_cleanup {} {
   if {$::KEEP} {
       # To avoid errors with require_no_open_checkout, cd out of here.
@@ -1176,6 +1203,12 @@ if {$nErr>0} {
 set nSkipped [llength $skipped_tests]
 if {$nSkipped>0} {
   protOut "***** Skipped tests: $skipped_tests" 1
+  foreach testname [lsort -unique $skipped_tests] {
+    set reason [skipped_test_reason $testname]
+    if {[string length $reason]>0} {
+      protOut "***** Skip reason: $testname: $reason" 1
+    }
+  }
 }
 exit [expr {[llength $bad_test]>0 ? 1 : 0}]
 if {$bad_test>0} {

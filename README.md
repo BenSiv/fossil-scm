@@ -89,3 +89,21 @@ Codex, or network access. They cover:
 - first-use `/agentui` rendering
 - first-use `/agent-chat` session creation and message persistence
 - effective chat and embedding model display in `/agentui`
+
+Some Tcl tests are intentionally feature-gated and will report as skipped
+instead of failed when their prerequisites are unavailable.
+
+Common skip prerequisites:
+
+- `json`: Fossil must be built with JSON support and Tcl must have the
+  `json` package from Tcllib installed.
+- `set-manifest` and `unversioned`: Tcl must have the `sha1` package from
+  Tcllib installed.
+- `th1-docs`: Fossil must be built with TH1 docs support and Tcl support.
+- `th1-hooks`: Fossil must be built with TH1 hooks support.
+- `th1-tcl`: Fossil must be built with Tcl support.
+- `merge5`: intentionally disabled until its legacy fixture is repaired for
+  current `fossil sqlite3 --no-repository` behavior.
+
+The Tcl runner prints skip reasons in the final summary so a developer can
+distinguish optional-environment skips from real regressions.
