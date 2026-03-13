@@ -169,6 +169,18 @@ test agent-chat-6 {[normalize_result] eq {say only hi}}
 fossil sql "SELECT msg FROM agentchat WHERE role='agent' ORDER BY acid DESC LIMIT 1"
 test agent-chat-7 {[string first {reply:} [normalize_result]]>=0}
 
+fossil sql "SELECT provider || '|' || model FROM agentchat_session ORDER BY sid DESC LIMIT 1"
+test agent-chat-8 {[normalize_result] eq {codex|test-chat-model}}
+
+fossil sql "SELECT sid FROM agentchat_session ORDER BY sid DESC LIMIT 1"
+set lastSid [normalize_result]
+set response [agent_http_request $repository GET [subst {/agentui?sid=$lastSid}] {}]
+set RESULT $response
+set CODE 0
+test agent-chat-9 {[agent_http_status $RESULT] eq {200}}
+test agent-chat-10 {[string first {value="codex"} $RESULT]>=0}
+test agent-chat-11 {[string first {value="test-chat-model"} $RESULT]>=0}
+
 ###############################################################################
 
 set body [subst {sid=0&msg=say+only+hi&model=qwen3.5%3A0.8b&context=0&proof=$proof}]

@@ -66,6 +66,8 @@ Notes:
 - Fossil rejects obvious provider/model mismatches before launching the backend,
   such as `provider=codex` with an Ollama-style model name or `provider=ollama`
   with `model=auto`.
+- `/agentui` stores the effective provider/model with each chat session and
+  restores that pair when an existing session is reopened.
 - Runtime config lookup order is: `--agent-config`, `FOSSIL_AGENT_CONFIG`,
   repo setting `agent-config-path`, user config
   `${XDG_CONFIG_HOME:-$HOME/.config}/fossil/ai-agent.json`, then checkout-local
@@ -103,6 +105,7 @@ Codex, or network access. They cover:
 - first-use `/agentui` rendering
 - first-use `/agent-chat` session creation and message persistence
 - effective chat and embedding model display in `/agentui`
+- provider/model persistence across reopened chat sessions
 
 Some Tcl tests are intentionally feature-gated and will report as skipped
 instead of failed when their prerequisites are unavailable.

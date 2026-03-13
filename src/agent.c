@@ -463,6 +463,8 @@ static const char zAgentChatSchema[] =
 @   ctime JULIANDAY DEFAULT (julianday('now')),
 @   mtime JULIANDAY DEFAULT (julianday('now')),
 @   xfrom TEXT,
+@   provider TEXT,
+@   model TEXT,
 @   title TEXT
 @ );
 @ CREATE TABLE repository.agentchat(
@@ -471,6 +473,7 @@ static const char zAgentChatSchema[] =
 @   mtime JULIANDAY DEFAULT (julianday('now')),
 @   xfrom TEXT,
 @   role TEXT NOT NULL,
+@   provider TEXT,
 @   model TEXT,
 @   msg TEXT NOT NULL
 @ );
@@ -490,6 +493,8 @@ static void agent_chat_create_tables(void){
         "  ctime JULIANDAY DEFAULT (julianday('now')),"
         "  mtime JULIANDAY DEFAULT (julianday('now')),"
         "  xfrom TEXT,"
+        "  provider TEXT,"
+        "  model TEXT,"
         "  title TEXT"
         ");"
       );
@@ -497,18 +502,33 @@ static void agent_chat_create_tables(void){
     if( !db_table_has_column("repository","agentchat","sid") ){
       db_multi_exec("ALTER TABLE agentchat ADD COLUMN sid INTEGER");
     }
+    if( !db_table_has_column("repository","agentchat_session","provider") ){
+      db_multi_exec("ALTER TABLE agentchat_session ADD COLUMN provider TEXT");
+    }
+    if( !db_table_has_column("repository","agentchat_session","model") ){
+      db_multi_exec("ALTER TABLE agentchat_session ADD COLUMN model TEXT");
+    }
+    if( !db_table_has_column("repository","agentchat","provider") ){
+      db_multi_exec("ALTER TABLE agentchat ADD COLUMN provider TEXT");
+    }
   }
 }
 
 /*
 ** Create and return a new chat session id.
 */
-static int agent_chat_session_create(const char *zUser){
+static int agent_chat_session_create(
+  const char *zUser,
+  const char *zProvider,
+  const char *zModel
+){
   agent_chat_create_tables();
   db_multi_exec(
-    "INSERT INTO agentchat_session(ctime,mtime,xfrom,title)"
-    " VALUES(julianday('now'),julianday('now'),%Q,'New Chat')",
-    zUser ? zUser : ""
+    "INSERT INTO agentchat_session(ctime,mtime,xfrom,provider,model,title)"
+    " VALUES(julianday('now'),julianday('now'),%Q,%Q,%Q,'New Chat')",
+    zUser ? zUser : "",
+    zProvider ? zProvider : "",
+    zModel ? zModel : ""
   );
   return db_last_insert_rowid();
 }
@@ -531,7 +551,7 @@ static int agent_chat_current_session(const char *zUser){
     return sid;
   }
   if( PB("new") ){
-    return agent_chat_session_create(zUser);
+    return agent_chat_session_create(zUser, agent_chat_provider(), agent_default_model());
   }
   sid = db_int(0,
     "SELECT sid FROM agentchat_session"
@@ -539,7 +559,7 @@ static int agent_chat_current_session(const char *zUser){
     " ORDER BY mtime DESC, sid DESC LIMIT 1",
     zUser ? zUser : "", zUser ? zUser : ""
   );
-  return sid>0 ? sid : agent_chat_session_create(zUser);
+  return sid>0 ? sid : agent_chat_session_create(zUser, agent_chat_provider(), agent_default_model());
 }
 
 /*
@@ -560,7 +580,9 @@ static int agent_chat_latest_session(const char *zUser){
 */
 static void agent_chat_session_touch(
   int sid,
-  const char *zMsg
+  const char *zMsg,
+  const char *zProvider,
+  const char *zModel
 ){
   Blob title = BLOB_INITIALIZER;
   int n;
@@ -574,10 +596,14 @@ static void agent_chat_session_touch(
   db_multi_exec(
     "UPDATE agentchat_session"
     " SET mtime=julianday('now'),"
+    " provider=coalesce(nullif(%Q,''),provider),"
+    " model=coalesce(nullif(%Q,''),model),"
     " title=CASE"
     "   WHEN title IS NULL OR title='' OR title='New Chat'"
     "   THEN %Q ELSE title END"
     " WHERE sid=%d",
+    zProvider ? zProvider : "",
+    zModel ? zModel : "",
     blob_size(&title)>0 ? blob_str(&title) : "New Chat",
     sid
   );
@@ -591,21 +617,23 @@ static void agent_chat_save(
   int sid,
   const char *zUser,
   const char *zRole,
+  const char *zProvider,
   const char *zModel,
   const char *zMsg
 ){
   if( zMsg==0 || zMsg[0]==0 ) return;
   agent_chat_create_tables();
   db_multi_exec(
-    "INSERT INTO agentchat(sid,mtime,xfrom,role,model,msg)"
-    " VALUES(%d,julianday('now'),%Q,%Q,%Q,%Q)",
+    "INSERT INTO agentchat(sid,mtime,xfrom,role,provider,model,msg)"
+    " VALUES(%d,julianday('now'),%Q,%Q,%Q,%Q,%Q)",
     sid,
     zUser ? zUser : "",
     zRole ? zRole : "agent",
+    zProvider ? zProvider : "",
     zModel ? zModel : "",
     zMsg
   );
-  agent_chat_session_touch(sid, zMsg);
+  agent_chat_session_touch(sid, zMsg, zProvider, zModel);
 }
 
 /*
@@ -617,7 +645,9 @@ static void agent_chat_render_sessions(const char *zUser, int sidCurrent){
   if( nLimit<=0 ) return;
   if( !db_table_exists("repository","agentchat_session") ) return;
   db_prepare(&q,
-    "SELECT sid, coalesce(nullif(title,''),'New Chat')"
+    "SELECT sid, coalesce(nullif(title,''),'New Chat'),"
+    "       coalesce(nullif(provider,''),'?'),"
+    "       coalesce(nullif(model,''),'')"
     " FROM agentchat_session"
     " WHERE xfrom=%Q OR (%Q='' AND xfrom='')"
     " ORDER BY mtime DESC, sid DESC LIMIT %d",
@@ -626,11 +656,13 @@ static void agent_chat_render_sessions(const char *zUser, int sidCurrent){
   while( db_step(&q)==SQLITE_ROW ){
     int sid = db_column_int(&q, 0);
     const char *zTitle = db_column_text(&q, 1);
+    const char *zProvider = db_column_text(&q, 2);
+    const char *zModel = db_column_text(&q, 3);
     @ <div>
     if( sid==sidCurrent ){
-      @ <b>%h(zTitle)</b>
+      @ <b>%h(zTitle)</b> <span class="dimmed">[%h(zProvider)%s(zModel&&zModel[0]?" / ":"")%h(zModel)]</span>
     }else{
-      @ <a href="%R/agentui?sid=%d(sid)">%h(zTitle)</a>
+      @ <a href="%R/agentui?sid=%d(sid)">%h(zTitle)</a> <span class="dimmed">[%h(zProvider)%s(zModel&&zModel[0]?" / ":"")%h(zModel)]</span>
     }
     @ </div>
   }
@@ -646,16 +678,21 @@ static void agent_chat_render_history(int sidCurrent){
   if( nLimit<=0 || sidCurrent<=0 ) return;
   if( !db_table_exists("repository","agentchat") ) return;
   db_prepare(&q,
-    "SELECT role, msg FROM agentchat"
+    "SELECT role, provider, model, msg FROM agentchat"
     " WHERE sid=%d"
     " ORDER BY acid ASC LIMIT %d",
     sidCurrent, nLimit
   );
   while( db_step(&q)==SQLITE_ROW ){
     const char *zRole = db_column_text(&q, 0);
-    const char *zMsg = db_column_text(&q, 1);
+    const char *zProvider = db_column_text(&q, 1);
+    const char *zModel = db_column_text(&q, 2);
+    const char *zMsg = db_column_text(&q, 3);
     @ <div style="margin-bottom:0.8em;">
     @ <b>%h(zRole && fossil_strcmp(zRole,"user")==0 ? "You" : "Agent"):</b>
+    if( zProvider && zProvider[0] ){
+      @ <span class="dimmed">[%h(zProvider)%s(zModel&&zModel[0]?" / ":"")%h(zModel)]</span>
+    }
     @ <pre style="white-space:pre-wrap;display:inline;margin:0">%h(zMsg)</pre>
     @ </div>
   }
@@ -666,10 +703,43 @@ static void agent_chat_render_history(int sidCurrent){
 ** Return the most recent non-empty model recorded for sid, or zDefault.
 */
 static const char *agent_chat_session_model(int sid, const char *zDefault){
+  const char *zFromSession;
+  if( sid<=0 ) return zDefault;
+  if( db_table_exists("repository","agentchat_session") ){
+    zFromSession = db_text(0,
+      "SELECT model FROM agentchat_session"
+      " WHERE sid=%d AND model IS NOT NULL AND model<>''",
+      sid
+    );
+    if( zFromSession && zFromSession[0] ) return zFromSession;
+  }
   if( sid<=0 || !db_table_exists("repository","agentchat") ) return zDefault;
   return db_text(zDefault,
     "SELECT model FROM agentchat"
     " WHERE sid=%d AND model IS NOT NULL AND model<>''"
+    " ORDER BY acid DESC LIMIT 1",
+    sid
+  );
+}
+
+/*
+** Return the most recent non-empty provider recorded for sid, or zDefault.
+*/
+static const char *agent_chat_session_provider(int sid, const char *zDefault){
+  const char *zFromSession;
+  if( sid<=0 ) return zDefault;
+  if( db_table_exists("repository","agentchat_session") ){
+    zFromSession = db_text(0,
+      "SELECT provider FROM agentchat_session"
+      " WHERE sid=%d AND provider IS NOT NULL AND provider<>''",
+      sid
+    );
+    if( zFromSession && zFromSession[0] ) return zFromSession;
+  }
+  if( !db_table_exists("repository","agentchat") ) return zDefault;
+  return db_text(zDefault,
+    "SELECT provider FROM agentchat"
+    " WHERE sid=%d AND provider IS NOT NULL AND provider<>''"
     " ORDER BY acid DESC LIMIT 1",
     sid
   );
@@ -1041,6 +1111,7 @@ static void agent_strip_ansi(Blob *pText);
 static void agent_strip_prefix_noise(Blob *pText);
 
 static int agent_run_backend(
+  const char *zProvider,
   const char *zModel,
   const char *zPrompt,
   Blob *pReply,
@@ -1054,7 +1125,6 @@ static int agent_run_backend(
   int childPid = 0;
   int rc;
   const char *zCmdTmpl = agent_command_template();
-  const char *zProvider = agent_chat_provider();
 
   blob_zero(pReply);
   blob_zero(pErr);
@@ -1477,6 +1547,7 @@ void agent_cmd(void){
 */
 void agentui_page(void){
   const char *zModel;
+  const char *zSessionProvider;
   const char *zCmd;
   const char *zEmbedModel;
   const char *zEmbedCmd;
@@ -1495,11 +1566,12 @@ void agentui_page(void){
   zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
   sidRequested = atoi(PD("sid","0"));
   sidCurrent = agent_chat_session_exists(sidRequested) ? sidRequested : 0;
+  zSessionProvider = agent_chat_session_provider(sidCurrent, agent_chat_provider());
   zModel = agent_chat_session_model(sidCurrent, agent_default_model());
   zCmd = agent_command_template();
   zEmbedModel = agent_embedding_model();
   zEmbedCmd = agent_embedding_template();
-  zProvider = agent_chat_provider();
+  zProvider = zSessionProvider;
   zEmbedProvider = agent_embedding_provider();
   zConfigSource = agent_config_source();
   style_set_current_feature("agent");
@@ -1527,6 +1599,11 @@ void agentui_page(void){
   @ </div>
   @ <div>
   @ <div class="forumEdit">
+  @ <label for="agent-provider"><b>Provider:</b></label>
+  @ <select id="agent-provider" disabled>
+  @ <option value="%h(zProvider)" selected>%h(zProvider)</option>
+  @ </select>
+  @ &nbsp;&nbsp;
   @ <label for="agent-model"><b>Model:</b></label>
   @ <input type="text" id="agent-model" size="24" value="%h(zModel)">
   @ &nbsp;&nbsp;
@@ -1549,6 +1626,7 @@ void agentui_page(void){
   @   var sid = %d(sidCurrent);
   @   var input = document.getElementById('agent-chat-input');
   @   var send = document.getElementById('agent-chat-send');
+  @   var provider = document.getElementById('agent-provider');
   @   var model = document.getElementById('agent-model');
   @   var context = document.getElementById('agent-context');
   @   var log = document.getElementById('agent-chat-log');
@@ -1572,7 +1650,7 @@ void agentui_page(void){
   @     fetch('agent-chat', {
   @       method: 'POST',
   @       headers: {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'},
-  @       body: new URLSearchParams({sid: sid, msg: msg, model: model.value, context: context.checked ? 1 : 0})
+  @       body: new URLSearchParams({sid: sid, msg: msg, provider: provider.value, model: model.value, context: context.checked ? 1 : 0})
   @     }).then(function(r){
   @       return r.text().then(function(text){
   @         var data;
@@ -1588,6 +1666,8 @@ void agentui_page(void){
   @       });
   @     }).then(function(data){
   @       sid = data.sid || sid;
+  @       if(data.provider){ provider.value = data.provider; }
+  @       if(data.model){ model.value = data.model; }
   @       addMsg('Agent', data.reply || data.error || '(no reply)');
   @     }).catch(function(err){
   @       addMsg('Agent', 'Request failed: ' + err);
@@ -1627,8 +1707,8 @@ void agent_chat_page(void){
     return;
   }
   zMsg = PD("msg", "");
+  zProvider = PD("provider", agent_chat_provider());
   zModel = PD("model", agent_default_model());
-  zProvider = agent_chat_provider();
   zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
   sid = atoi(PD("sid","0"));
   cgi_set_content_type("application/json");
@@ -1657,20 +1737,22 @@ void agent_chat_page(void){
     blob_reset(&ctx);
   }
   if( sid<=0 || !agent_chat_session_exists(sid) ){
-    sid = agent_chat_session_create(zUser);
+    sid = agent_chat_session_create(zUser, zProvider, zModel);
   }
-  agent_chat_save(sid, zUser, "user", zModel, PD("msg",""));
-  rc = agent_run_backend(zModel, zMsg, &reply, &err);
+  agent_chat_save(sid, zUser, "user", zProvider, zModel, PD("msg",""));
+  rc = agent_run_backend(zProvider, zModel, zMsg, &reply, &err);
   if( rc==0 ){
-    agent_chat_save(sid, zUser, "agent", zModel, blob_str(&reply));
+    agent_chat_save(sid, zUser, "agent", zProvider, zModel, blob_str(&reply));
     db_end_transaction(0);
-    CX("{\"sid\":%d,\"model\":%!j,\"reply\":%!j}\n", sid, zModel, blob_str(&reply));
+    CX("{\"sid\":%d,\"provider\":%!j,\"model\":%!j,\"reply\":%!j}\n",
+      sid, zProvider, zModel, blob_str(&reply));
   }else{
     const char *zErr = blob_size(&err)>0 ? blob_str(&err)
                                          : "agent invocation failed";
-    agent_chat_save(sid, zUser, "agent", zModel, zErr);
+    agent_chat_save(sid, zUser, "agent", zProvider, zModel, zErr);
     db_end_transaction(0);
-    CX("{\"sid\":%d,\"model\":%!j,\"error\":%!j}\n", sid, zModel, zErr);
+    CX("{\"sid\":%d,\"provider\":%!j,\"model\":%!j,\"error\":%!j}\n",
+      sid, zProvider, zModel, zErr);
   }
   if( PB("context") ) fossil_free((char*)zMsg);
   blob_reset(&reply);
