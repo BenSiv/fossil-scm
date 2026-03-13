@@ -1,0 +1,46 @@
+#
+# Copyright (c) 2026
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the Simplified BSD License (also
+# known as the "2-Clause License" or "FreeBSD License".)
+#
+# This program is distributed in the hope that it will be useful,
+# but without even the implied warranty of merchantability or fitness
+# for a particular purpose.
+#
+############################################################################
+#
+# Self-checks for the Tcl regression harness helpers in tester.tcl.
+#
+
+require_no_open_checkout
+
+set repoPath [test_setup]
+set rootDir [file normalize [pwd]]
+
+fossil test-th-eval --open-config {repository}
+set repository [normalize_result]
+
+test tester-selfcheck-1 {[string length $repository] > 0}
+test tester-selfcheck-2 {[file exists $repository]}
+test tester-selfcheck-3 {[string first $::tempPath $repoPath] == 0}
+test tester-selfcheck-4 {[info exists ::env(FOSSIL_HOME)] && $::env(FOSSIL_HOME) eq $::tempHomePath}
+
+write_file tester-selfcheck-http.txt "GET \${url} HTTP/1.0\r\nHost: localhost\r\nUser-Agent: Fossil-Tester-Selfcheck\r\n\r\n"
+
+set httpResponse [test_fossil_http $repository tester-selfcheck-http.txt /home]
+set RESULT $httpResponse
+set CODE 0
+test tester-selfcheck-5 {[regexp {^HTTP/1\.[01] 200 } $RESULT]}
+test tester-selfcheck-6 {[string first {Unnamed Fossil Project} [string map [list \r\n \n] $RESULT]] >= 0}
+
+foreach {pid port outTmpFile} [test_start_server $repository stopArg] {}
+test tester-selfcheck-7 {$pid > 0}
+test tester-selfcheck-8 {$port > 0}
+
+set stopped [test_stop_server $stopArg $pid $outTmpFile]
+set processGone [expr {[catch {exec ps -p $pid}]==1}]
+test tester-selfcheck-9 {$stopped || $processGone}
+
+test_cleanup
