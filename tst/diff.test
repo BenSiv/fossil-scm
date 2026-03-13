@@ -22,6 +22,12 @@ require_no_open_checkout
 
 test_setup; set rootDir [file normalize [pwd]]
 
+proc normalize_diff_result {} {
+  set result [normalize_result_no_trim]
+  regsub -all {\t+\n} $result "\n" result
+  return [string trim $result]
+}
+
 ###################################
 # Tests of binary file detection. #
 ###################################
@@ -50,7 +56,7 @@ test diff-ls-1 {[normalize_result] eq \
 write_file file0.dat "\0"
 fossil diff file0.dat
 
-test diff-file0-1 {[normalize_result] eq {Index: file0.dat
+test diff-file0-1 {[normalize_diff_result] eq {Index: file0.dat
 ==================================================================
 --- file0.dat
 +++ file0.dat
@@ -61,7 +67,7 @@ cannot compute difference between binary files}}
 write_file file1.dat [string repeat z 32768]
 fossil diff file1.dat
 
-test diff-file1-1 {[normalize_result] eq {Index: file1.dat
+test diff-file1-1 {[normalize_diff_result] eq {Index: file1.dat
 ==================================================================
 --- file1.dat
 +++ file1.dat
@@ -72,7 +78,7 @@ cannot compute difference between binary files}}
 write_file file2.dat "test file 2 (no NUL character)."
 fossil diff file2.dat
 
-test diff-file2-1 {[normalize_result] eq {Index: file2.dat
+test diff-file2-1 {[normalize_diff_result] eq {Index: file2.dat
 ==================================================================
 --- file2.dat
 +++ file2.dat
@@ -83,7 +89,7 @@ cannot compute difference between binary files}}
 write_file file3.dat "test file 3 (not a long line)."
 fossil diff file3.dat
 
-test diff-file3-1 {[normalize_result] eq {Index: file3.dat
+test diff-file3-1 {[normalize_diff_result] eq {Index: file3.dat
 ==================================================================
 --- file3.dat
 +++ file3.dat
@@ -94,7 +100,7 @@ cannot compute difference between binary files}}
 write_file file4.dat "test file 4 (not a long line).\ntwo"
 fossil diff file4.dat
 
-test diff-file4-1 {[normalize_result] eq {Index: file4.dat
+test diff-file4-1 {[normalize_diff_result] eq {Index: file4.dat
 ==================================================================
 --- file4.dat
 +++ file4.dat
@@ -105,7 +111,7 @@ cannot compute difference between binary files}}
 write_file file5.dat "[string repeat 0 16]\ntest file 5 (not a long line)."
 fossil diff file5.dat
 
-test diff-file5-1 {[normalize_result] eq {Index: file5.dat
+test diff-file5-1 {[normalize_diff_result] eq {Index: file5.dat
 ==================================================================
 --- file5.dat
 +++ file5.dat
@@ -134,7 +140,7 @@ test diff-file-6-1 {[normalize_result] eq {========== file6a.dat ===== versus ==
 fossil rm file1.dat
 fossil diff -v file1.dat
 
-test diff-deleted-file-1 {[normalize_result] eq {DELETED  file1.dat
+test diff-deleted-file-1 {[normalize_diff_result] eq {DELETED  file1.dat
 Index: file1.dat
 ==================================================================
 --- file1.dat
@@ -149,7 +155,7 @@ fossil add file6.dat
 
 fossil diff -v file6.dat
 
-test diff-added-file-1 {[normalize_result] eq {ADDED    file6.dat
+test diff-added-file-1 {[normalize_diff_result] eq {ADDED    file6.dat
 Index: file6.dat
 ==================================================================
 --- /dev/null
