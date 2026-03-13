@@ -55,4 +55,7 @@ Notes:
   unless your Codex account supports an explicit model name.
 - `make install` also creates `${XDG_CONFIG_HOME:-$HOME/.config}/fossil/agents`
   and populates it with `ai-agent.json`, `ai-agent-codex.json`, and the agent
-  wrapper scripts when `DESTDIR` is empty.
+  wrapper scripts when `DESTDIR` is empty. It also installs the default
+  Ollama config at `${XDG_CONFIG_HOME:-$HOME/.config}/fossil/ai-agent.json`.
+- When `make install` runs under `sudo`, the config skeleton is written to the
+  invoking user's config directory rather than `/root/.config/fossil`.
