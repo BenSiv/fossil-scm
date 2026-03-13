@@ -46,3 +46,6 @@ Notes:
 - `embedding_command` may be left empty to use Ollama's HTTP `/api/embed` fallback.
 - `qwen3.5:0.8b` does not provide embeddings in Ollama, so a separate embedding model is required.
 - When Fossil serves a bare `.fossil` repository file, repo settings such as `agent-command`, `agent-model`, and `agent-embedding-model` apply. `cfg/ai-agent.json` is only visible from an open checkout.
+- To point Fossil at a shared config file, set `agent-config-path` in the
+  repository, pass `fossil agent --agent-config /absolute/path/to/fossil-agent.json ...`,
+  or export `FOSSIL_AGENT_CONFIG=/absolute/path/to/fossil-agent.json`.

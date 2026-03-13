@@ -58,6 +58,7 @@ static int agent_generate_embedding(
 ** overrides the corresponding Fossil settings for the agent runtime.
 */
 static const char zAgentConfigFile[] = "cfg/ai-agent.json";
+static const char *zAgentConfigPath = 0;
 
 /*
 ** SETTING: agent-command width=60
@@ -66,6 +67,14 @@ static const char zAgentConfigFile[] = "cfg/ai-agent.json";
 ** The selected model name is substituted for "%m" (shell-escaped). If
 ** "%m" does not appear, the command is used as-is and the model remains
 ** available to wrappers via the FOSSIL_AGENT_MODEL environment variable.
+*/
+/*
+** SETTING: agent-config-path width=80
+**
+** Optional path to a JSON config file used to override the default
+** checkout-local cfg/ai-agent.json lookup. This is especially useful when
+** serving a bare repository file or when multiple working trees share a
+** single agent config.
 */
 /*
 ** SETTING: agent-model width=30 default=llama3.2
@@ -135,6 +144,13 @@ static void agent_expand_command(
 */
 #ifdef FOSSIL_ENABLE_JSON
 static char *agent_config_path(void){
+  const char *zPath = fossil_getenv("FOSSIL_AGENT_CONFIG");
+  if( zAgentConfigPath && zAgentConfigPath[0] ) return mprintf("%s", zAgentConfigPath);
+  if( zPath && zPath[0] ) return mprintf("%s", zPath);
+  if( g.repositoryOpen ){
+    zPath = db_get("agent-config-path", 0);
+    if( zPath && zPath[0] ) return mprintf("%s", zPath);
+  }
   if( g.zLocalRoot==0 || g.zLocalRoot[0]==0 ) return 0;
   return mprintf("%s%s", g.zLocalRoot, zAgentConfigFile);
 }
@@ -1178,6 +1194,11 @@ static void agent_retrieve_cmd(void){
 ** Commands intended to help agent-style development workflows while keeping
 ** the integration within Fossil's existing command and wiki model.
 **
+** Common option:
+**
+**    --agent-config FILE
+**       Read agent settings from FILE instead of cfg/ai-agent.json.
+**
 **    fossil agent repomap
 **       Print the managed file list for the current checkout.
 **
@@ -1208,6 +1229,7 @@ void agent_cmd(void){
   const char *zCmd;
   const char *zEmbeddingModel;
 
+  zAgentConfigPath = find_option("agent-config", 0, 1);
   find_repository_option();
   db_find_and_open_repository(OPEN_ANY_SCHEMA, 0);
   if( g.argc<3 ){
