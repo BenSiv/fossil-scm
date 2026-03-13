@@ -1,5 +1,6 @@
 {
-  "model": "llama3.2",
-  "command": "ollama run %m",
+  "model": "qwen3.5:0.8b",
+  "command": "./dev/agents/fossil-ollama-agent.sh",
+  "embedding_model": "mxbai-embed-large",
   "embedding_command": ""
 }

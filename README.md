@@ -33,7 +33,7 @@ Checkout-local config lives in [`cfg/ai-agent.json`](cfg/ai-agent.json):
 ```json
 {
   "model": "qwen3.5:0.8b",
-  "command": "ollama run %m",
+  "command": "/absolute/path/to/fossil-scm/dev/agents/fossil-ollama-agent.sh",
   "embedding_model": "mxbai-embed-large",
   "embedding_command": ""
 }
@@ -43,9 +43,13 @@ Notes:
 
 - `model` is the chat model used by `/agentui` and `/agent-chat`.
 - `embedding_model` is used by `fossil agent embed`, `semantic-index`, and `retrieve`.
+- Maintained helper scripts live in [`dev/agents/fossil-ollama-agent.sh`](dev/agents/fossil-ollama-agent.sh)
+  and [`dev/agents/fossil-codex-agent.sh`](dev/agents/fossil-codex-agent.sh).
 - `embedding_command` may be left empty to use Ollama's HTTP `/api/embed` fallback.
 - `qwen3.5:0.8b` does not provide embeddings in Ollama, so a separate embedding model is required.
 - When Fossil serves a bare `.fossil` repository file, repo settings such as `agent-command`, `agent-model`, and `agent-embedding-model` apply. `cfg/ai-agent.json` is only visible from an open checkout.
 - To point Fossil at a shared config file, set `agent-config-path` in the
   repository, pass `fossil agent --agent-config /absolute/path/to/fossil-agent.json ...`,
   or export `FOSSIL_AGENT_CONFIG=/absolute/path/to/fossil-agent.json`.
+- For Codex-backed chat, use `fossil-codex-agent.sh` and set `"model": "auto"`
+  unless your Codex account supports an explicit model name.
