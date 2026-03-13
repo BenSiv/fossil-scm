@@ -31,3 +31,8 @@
 - First-use `/agentui` and `/agent-chat` requests succeed without precreated
   agent chat tables or sessions
 - Chat model and embedding model may be configured independently
+- `/agentui` starts on a new chat unless a specific prior session is requested
+- The displayed model reflects the effective resolved config or the explicitly
+  opened session, not stale history
+- Provider/model mismatches are detected before backend invocation once
+  provider-aware validation is added

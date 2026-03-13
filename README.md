@@ -23,6 +23,9 @@ Canonical documents for this fork live under [`doc/`](doc/):
 - Repository Map: [`doc/specs/repo-map.md`](doc/specs/repo-map.md)
 - AI docs: [`doc/ai/`](doc/ai/)
   Includes the data pool strategy in [`doc/ai/DATA_POOL.md`](doc/ai/DATA_POOL.md).
+  Provider/model design notes live in
+  [`doc/ai/PROVIDER_MODEL_SPLIT.md`](doc/ai/PROVIDER_MODEL_SPLIT.md) and
+  [`doc/ai/IMPLEMENTATION_PLAN.md`](doc/ai/IMPLEMENTATION_PLAN.md).
 - Clean local reinstall helper: [`dev/tools/install-fossil-clean.sh`](dev/tools/install-fossil-clean.sh)
 
 ## AI Agent Configuration
