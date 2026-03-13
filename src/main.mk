@@ -600,7 +600,9 @@ install:	all
 	cp $(APPNAME) $(INSTALLDIR)
 	if test -z "$(DESTDIR)"; then \
 		fsl_user_home="$$HOME"; \
+		fsl_user_name=""; \
 		if test -n "$$SUDO_USER"; then \
+			fsl_user_name="$$SUDO_USER"; \
 			fsl_user_home="$$(getent passwd "$$SUDO_USER" | cut -d: -f6)"; \
 		fi; \
 		fsl_cfg_root="$${XDG_CONFIG_HOME:-$$fsl_user_home/.config}/fossil"; \
@@ -615,6 +617,13 @@ install:	all
 		  > "$$fsl_agent_dir/ai-agent.json"; \
 		sed "s#\\.\\/dev\\/agents#$$fsl_agent_dir#g" $(TOPDIR)/cfg/ai-agent-codex.json \
 		  > "$$fsl_agent_dir/ai-agent-codex.json"; \
+		if test -n "$$fsl_user_name"; then \
+			chown "$$fsl_user_name" "$$fsl_cfg_root/ai-agent.json" \
+			  "$$fsl_agent_dir/fossil-codex-agent.sh" \
+			  "$$fsl_agent_dir/fossil-ollama-agent.sh" \
+			  "$$fsl_agent_dir/ai-agent.json" \
+			  "$$fsl_agent_dir/ai-agent-codex.json"; \
+		fi; \
 	fi
 
 codecheck:	$(TRANS_SRC) $(OBJDIR)/codecheck1

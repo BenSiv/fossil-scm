@@ -23,6 +23,7 @@ Canonical documents for this fork live under [`doc/`](doc/):
 - Repository Map: [`doc/specs/repo-map.md`](doc/specs/repo-map.md)
 - AI docs: [`doc/ai/`](doc/ai/)
   Includes the data pool strategy in [`doc/ai/DATA_POOL.md`](doc/ai/DATA_POOL.md).
+- Clean local reinstall helper: [`dev/tools/install-fossil-clean.sh`](dev/tools/install-fossil-clean.sh)
 
 ## AI Agent Configuration
 
@@ -47,7 +48,11 @@ Notes:
   and [`dev/agents/fossil-codex-agent.sh`](dev/agents/fossil-codex-agent.sh).
 - `embedding_command` may be left empty to use Ollama's HTTP `/api/embed` fallback.
 - `qwen3.5:0.8b` does not provide embeddings in Ollama, so a separate embedding model is required.
-- When Fossil serves a bare `.fossil` repository file, repo settings such as `agent-command`, `agent-model`, and `agent-embedding-model` apply. `cfg/ai-agent.json` is only visible from an open checkout.
+- Runtime config lookup order is: `--agent-config`, `FOSSIL_AGENT_CONFIG`,
+  repo setting `agent-config-path`, user config
+  `${XDG_CONFIG_HOME:-$HOME/.config}/fossil/ai-agent.json`, then checkout-local
+  `cfg/ai-agent.json`, then repo settings such as `agent-command`,
+  `agent-model`, and `agent-embedding-model`.
 - To point Fossil at a shared config file, set `agent-config-path` in the
   repository, pass `fossil agent --agent-config /absolute/path/to/fossil-agent.json ...`,
   or export `FOSSIL_AGENT_CONFIG=/absolute/path/to/fossil-agent.json`.
@@ -58,4 +63,5 @@ Notes:
   wrapper scripts when `DESTDIR` is empty. It also installs the default
   Ollama config at `${XDG_CONFIG_HOME:-$HOME/.config}/fossil/ai-agent.json`.
 - When `make install` runs under `sudo`, the config skeleton is written to the
-  invoking user's config directory rather than `/root/.config/fossil`.
+  invoking user's config directory rather than `/root/.config/fossil`, and the
+  installed config files are owned by that invoking user.

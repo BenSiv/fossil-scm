@@ -77,7 +77,7 @@ static const char *zAgentConfigPath = 0;
 ** single agent config.
 */
 /*
-** SETTING: agent-model width=30 default=llama3.2
+** SETTING: agent-model width=30
 **
 ** Default model name used by /agent-chat when the request does not
 ** specify a model explicitly.
@@ -102,7 +102,7 @@ static const char *zAgentConfigPath = 0;
 ** Legacy compatibility setting. Used only when agent-command is unset.
 */
 /*
-** SETTING: agent-ollama-model width=20 default=llama3.2
+** SETTING: agent-ollama-model width=20
 **
 ** Legacy compatibility setting. Used only when agent-model is unset.
 */
@@ -143,14 +143,34 @@ static void agent_expand_command(
 ** the result.
 */
 #ifdef FOSSIL_ENABLE_JSON
+static char *agent_user_config_path(void){
+#if defined(_WIN32)
+  return 0;
+#else
+  const char *zXdg = fossil_getenv("XDG_CONFIG_HOME");
+  const char *zHome = fossil_getenv("HOME");
+  if( zXdg && zXdg[0] ){
+    return mprintf("%s/fossil/ai-agent.json", zXdg);
+  }
+  if( zHome && zHome[0] ){
+    return mprintf("%s/.config/fossil/ai-agent.json", zHome);
+  }
+  return 0;
+#endif
+}
+
 static char *agent_config_path(void){
   const char *zPath = fossil_getenv("FOSSIL_AGENT_CONFIG");
+  char *zUserPath = 0;
   if( zAgentConfigPath && zAgentConfigPath[0] ) return mprintf("%s", zAgentConfigPath);
   if( zPath && zPath[0] ) return mprintf("%s", zPath);
   if( g.repositoryOpen ){
     zPath = db_get("agent-config-path", 0);
     if( zPath && zPath[0] ) return mprintf("%s", zPath);
   }
+  zUserPath = agent_user_config_path();
+  if( zUserPath && file_size(zUserPath, ExtFILE)>=0 ) return zUserPath;
+  fossil_free(zUserPath);
   if( g.zLocalRoot==0 || g.zLocalRoot[0]==0 ) return 0;
   return mprintf("%s%s", g.zLocalRoot, zAgentConfigFile);
 }
@@ -215,7 +235,7 @@ static const char *agent_default_model(void){
   zCached = agent_config_get("model");
   return zCached
     ? zCached
-    : db_get("agent-model", db_get("agent-ollama-model", "llama3.2"));
+    : db_get("agent-model", db_get("agent-ollama-model", ""));
 }
 
 /*
@@ -482,6 +502,19 @@ static void agent_chat_render_history(int sidCurrent){
     @ </div>
   }
   db_finalize(&q);
+}
+
+/*
+** Return the most recent non-empty model recorded for sid, or zDefault.
+*/
+static const char *agent_chat_session_model(int sid, const char *zDefault){
+  if( sid<=0 || !db_table_exists("repository","agentchat") ) return zDefault;
+  return db_text(zDefault,
+    "SELECT model FROM agentchat"
+    " WHERE sid=%d AND model IS NOT NULL AND model<>''"
+    " ORDER BY acid DESC LIMIT 1",
+    sid
+  );
 }
 
 /*
@@ -1273,9 +1306,10 @@ void agent_cmd(void){
 ** Minimal manager-facing chat UI for local agent testing.
 */
 void agentui_page(void){
-  const char *zModel = agent_default_model();
+  const char *zModel;
   const char *zUser;
   int sidCurrent;
+  int sidRequested;
 
   login_check_credentials();
   if( !g.perm.Read ){
@@ -1283,11 +1317,11 @@ void agentui_page(void){
     return;
   }
   zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
-  sidCurrent = agent_chat_latest_session(zUser);
+  sidRequested = atoi(PD("sid","0"));
+  sidCurrent = agent_chat_session_exists(sidRequested) ? sidRequested : 0;
+  zModel = agent_chat_session_model(sidCurrent, agent_default_model());
   style_set_current_feature("agent");
   style_header("Agent Chat");
-  style_submenu_element("Chat", "%R/chat");
-  style_submenu_element("New Chat", "%R/agentui?new=1");
   @ <div class="fossil-doc" data-title="Agent Chat">
   @ <p>This page sends prompts to the AI backend configured by the repository
   @ settings.</p>
@@ -1361,6 +1395,7 @@ void agentui_page(void){
   @         return data;
   @       });
   @     }).then(function(data){
+  @       sid = data.sid || sid;
   @       addMsg('Agent', data.reply || data.error || '(no reply)');
   @     }).catch(function(err){
   @       addMsg('Agent', 'Request failed: ' + err);
