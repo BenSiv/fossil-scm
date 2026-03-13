@@ -36,3 +36,11 @@
   opened session, not stale history
 - Provider/model mismatches are detected before backend invocation once
   provider-aware validation is added
+
+## Automation
+- `make test` runs the Tcl harness in `tst/tester.tcl`
+- AI and agent regressions live in Tcl tests such as `tst/ai.test` and
+  `tst/agent.test`
+- The automated lane is hermetic and uses `tst/fake-agent-backend.sh` instead
+  of live Ollama or Codex providers
+- Web coverage uses `fossil http` with local auth against a temporary repository

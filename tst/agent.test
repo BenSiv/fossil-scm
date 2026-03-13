@@ -1,0 +1,170 @@
+#
+# Copyright (c) 2026
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the Simplified BSD License (also
+# known as the "2-Clause License" or "FreeBSD License".)
+#
+# This program is distributed in the hope that it will be useful,
+# but without any warranty; without even the implied warranty of
+# merchantability or fitness for a particular purpose.
+#
+# Author contact information:
+#   drh@hwaci.com
+#   http://www.hwaci.com/drh/
+#
+############################################################################
+#
+# Hermetic agent regression tests.
+#
+
+require_no_open_checkout
+
+set path [file dirname [info script]]
+set backend [file normalize [file join $path fake-agent-backend.sh]]
+
+proc agent_http_request {repository method url body} {
+  set requestFile [file join [pwd] agent-http-[getSeqNo].txt]
+  set outFile [file join [pwd] agent-http-out-[getSeqNo].txt]
+  if {$method eq "POST"} {
+    set len [string length $body]
+    write_file $requestFile [subst {POST $url HTTP/1.0\r
+Host: localhost\r
+User-Agent: Fossil-Agent-Test\r
+Content-Type: application/x-www-form-urlencoded\r
+Content-Length: $len\r
+\r
+$body}]
+  } else {
+    write_file $requestFile [subst {GET $url HTTP/1.0\r
+Host: localhost\r
+User-Agent: Fossil-Agent-Test\r
+\r
+}]
+  }
+  fossil http --in $requestFile --out $outFile --ipaddr 127.0.0.1 \
+      $repository --localauth -expectError
+  set result [expr {[file exists $outFile] ? [read_file $outFile] : ""}]
+  catch {file delete $requestFile}
+  catch {file delete $outFile}
+  return $result
+}
+
+proc agent_http_status {response} {
+  set status ""
+  set response [string map [list \r\n \n] $response]
+  regexp {^HTTP/\S+\s+([0-9][0-9][0-9])} $response dummy status
+  return $status
+}
+
+proc agent_http_body {response} {
+  set response [string map [list \r\n \n] $response]
+  set sep [string first "\n\n" $response]
+  if {$sep<0} {
+    return ""
+  }
+  return [string range $response [expr {$sep+2}] end]
+}
+
+test_setup
+
+fossil test-th-eval --open-config {repository}
+set repository [normalize_result]
+if {[string length $repository] == 0} {
+  puts "Detection of the open repository file failed."
+  test_cleanup_then_return
+}
+
+set cfgDir [file normalize [file join [pwd] agent-config]]
+set userCfgRoot [file normalize [file join [pwd] xdg]]
+set userCfgDir [file join $userCfgRoot fossil]
+file mkdir $cfgDir
+file mkdir $userCfgDir
+
+write_file [file join $cfgDir agent.json] [subst -nocommands {
+{
+  "model": "test-chat-model",
+  "command": "$backend",
+  "embedding_model": "test-embed-model",
+  "embedding_command": "$backend"
+}
+}]
+
+write_file [file join $userCfgDir ai-agent.json] [subst -nocommands {
+{
+  "model": "user-config-model",
+  "command": "$backend",
+  "embedding_model": "user-embed-model",
+  "embedding_command": "$backend"
+}
+}]
+
+###############################################################################
+
+fossil ai init
+
+write_file agent-note.txt "Embeddings let retrieval find this note.\n"
+fossil agent --agent-config [file join $cfgDir agent.json] note agent-note.txt --title "Embeddings Note"
+test agent-note-1 {[normalize_result] eq {Added note: Embeddings Note}}
+
+fossil sql "SELECT count(*) FROM ai_note WHERE title='Embeddings Note'"
+test agent-note-2 {[normalize_result] eq {1}}
+
+###############################################################################
+
+fossil agent --agent-config [file join $cfgDir agent.json] embed {probe text}
+test agent-embed-1 {[normalize_result] eq {0.125000, 0.250000, 0.500000, 1.000000}}
+
+fossil agent --agent-config [file join $cfgDir agent.json] semantic-index
+test agent-index-1 {[normalize_result] eq {Indexed 1 notes.}}
+
+fossil sql "SELECT source_type || '|' || dim FROM ai_vector ORDER BY source_id DESC LIMIT 1"
+test agent-index-2 {[normalize_result] eq {note|4}}
+
+fossil agent --agent-config [file join $cfgDir agent.json] retrieve {Embeddings retrieval note} --limit 3
+test agent-retrieve-1 {[string first {Embeddings Note} [normalize_result]]>=0}
+test agent-retrieve-2 {[string first {reinforcement: +} [normalize_result]]>=0}
+
+###############################################################################
+
+set RESULT [exec env XDG_CONFIG_HOME=$userCfgRoot $::fossilexe agent embed {user config probe}]
+set CODE 0
+test agent-config-user-1 {[normalize_result] eq {0.125000, 0.250000, 0.500000, 1.000000}}
+
+fossil set agent-config-path [file join $cfgDir agent.json]
+fossil test-th-eval {set out [proc_verify_csrf]; set out}
+set proof [normalize_result]
+
+###############################################################################
+
+set response [agent_http_request $repository GET /agentui {}]
+set RESULT $response
+set CODE 0
+test agent-ui-1 {[agent_http_status $RESULT] eq {200}}
+test agent-ui-2 {[string first [subst {source: repo agent-config-path: [file join $cfgDir agent.json]}] $RESULT]>=0}
+test agent-ui-3 {[string first {chat model: test-chat-model} $RESULT]>=0}
+test agent-ui-4 {[string first {embedding model: test-embed-model} $RESULT]>=0}
+
+###############################################################################
+
+set body [subst {sid=0&msg=say+only+hi&model=test-chat-model&context=1&proof=$proof}]
+set response [agent_http_request $repository POST /agent-chat $body]
+set RESULT $response
+set CODE 0
+test agent-chat-1 {[agent_http_status $RESULT] eq {200}}
+test agent-chat-2 {[string first {"sid":} [agent_http_body $RESULT]]>=0}
+test agent-chat-3 {[string first {"model":"test-chat-model"} [agent_http_body $RESULT]]>=0}
+test agent-chat-4 {[string first {test-agent model=test-chat-model} [agent_http_body $RESULT]]>=0}
+
+fossil sql "SELECT count(*) FROM agentchat"
+test agent-chat-5 {[normalize_result] eq {2}}
+
+fossil sql "SELECT title FROM agentchat_session ORDER BY sid DESC LIMIT 1"
+test agent-chat-6 {[normalize_result] eq {say only hi}}
+
+fossil sql "SELECT msg FROM agentchat WHERE role='agent' ORDER BY acid DESC LIMIT 1"
+test agent-chat-7 {[string first {reply:} [normalize_result]]>=0}
+
+###############################################################################
+
+test_cleanup

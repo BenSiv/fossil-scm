@@ -28,15 +28,9 @@
 #     tclsh ../test/tester.tcl ../bld/fossil <script-basename>...
 #
 
-# This testing system is a mess.  It was poorly designed to begin with
-# and has not been maintained.  It is difficult to debug.  It is completely
-# disabled for the time being.
-#
-# If somebody wants to volunteer to fix it, then great.  But without a
-# volunteer to do so, it is disabled.
-#
-puts Ok
-exit
+# This test harness is legacy code and needs continued cleanup, but it is the
+# canonical regression runner for Fossil.  Do not replace it with a parallel
+# default framework: fix it and keep `make test` honest.
 
 # We use some things introduced in 8.6 such as lmap.  auto.def should
 # have found us a suitable Tcl installation.
@@ -46,6 +40,10 @@ set testfiledir [file normalize [file dirname [info script]]]
 set testrundir [pwd]
 set testdir [file normalize [file dirname $argv0]]
 set fossilexe [file normalize [lindex $argv 0]]
+if {[string length $fossilexe]==0 || ![file exists $fossilexe]} {
+  puts stderr "Usage: tclsh tester.tcl FOSSIL-EXE ?test-name ...?"
+  exit 64
+}
 set is_windows [expr {$::tcl_platform(platform) eq "windows"}]
 set is_cygwin [regexp {^CYGWIN} $::tcl_platform(os)]
 
@@ -1179,6 +1177,7 @@ set nSkipped [llength $skipped_tests]
 if {$nSkipped>0} {
   protOut "***** Skipped tests: $skipped_tests" 1
 }
+exit [expr {[llength $bad_test]>0 ? 1 : 0}]
 if {$bad_test>0} {
   exit 1
 }

@@ -25,7 +25,9 @@ Canonical documents for this fork live under [`doc/`](doc/):
   Includes the data pool strategy in [`doc/ai/DATA_POOL.md`](doc/ai/DATA_POOL.md).
   Provider/model design notes live in
   [`doc/ai/PROVIDER_MODEL_SPLIT.md`](doc/ai/PROVIDER_MODEL_SPLIT.md) and
-  [`doc/ai/IMPLEMENTATION_PLAN.md`](doc/ai/IMPLEMENTATION_PLAN.md).
+  [`doc/ai/IMPLEMENTATION_PLAN.md`](doc/ai/IMPLEMENTATION_PLAN.md). Tcl test
+  suite recovery is tracked in
+  [`doc/ai/TCL_TEST_REVIVAL_PLAN.md`](doc/ai/TCL_TEST_REVIVAL_PLAN.md).
 - Clean local reinstall helper: [`dev/tools/install-fossil-clean.sh`](dev/tools/install-fossil-clean.sh)
 
 ## AI Agent Configuration
@@ -68,3 +70,22 @@ Notes:
 - When `make install` runs under `sudo`, the config skeleton is written to the
   invoking user's config directory rather than `/root/.config/fossil`, and the
   installed config files are owned by that invoking user.
+
+## Testing
+
+`make test` runs the Tcl regression suite through
+[`tst/tester.tcl`](tst/tester.tcl).
+
+- Core AI data-pool tests: [`tst/ai.test`](tst/ai.test)
+- Hermetic agent regression tests: [`tst/agent.test`](tst/agent.test)
+- Fake backend fixture: [`tst/fake-agent-backend.sh`](tst/fake-agent-backend.sh)
+
+The agent regression tests are deterministic and do not require Ollama,
+Codex, or network access. They cover:
+
+- AI schema initialization and self-test review loop
+- `agent note`, `agent embed`, `semantic-index`, and `retrieve`
+- user-config and repo `agent-config-path` resolution
+- first-use `/agentui` rendering
+- first-use `/agent-chat` session creation and message persistence
+- effective chat and embedding model display in `/agentui`
