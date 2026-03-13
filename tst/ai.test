@@ -1,0 +1,98 @@
+#
+# Copyright (c) 2026
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the Simplified BSD License (also
+# known as the "2-Clause License" or "FreeBSD License".)
+#
+# This program is distributed in the hope that it will be useful,
+# but without any warranty; without even the implied warranty of
+# merchantability or fitness for a particular purpose.
+#
+# Author contact information:
+#   drh@hwaci.com
+#   http://www.hwaci.com/drh/
+#
+############################################################################
+#
+# Basic AI data-pool lifecycle tests.
+#
+
+require_no_open_checkout
+
+set repoPath [test_setup ""]
+set repoFile [file join $repoPath ai-test.fossil]
+
+exec $::fossilexe new $repoFile --admin-user tester
+exec $::fossilexe open $repoFile
+
+###############################################################################
+
+fossil ai init
+test ai-init-1 {[normalize_result] eq {ai: initialized}}
+
+fossil sql "SELECT count(*) FROM sqlite_master WHERE name IN ('ai_context','ai_note','ai_note_link','ai_retrieval','ai_retrieval_note','ai_review','ai_vector','ai_policy')"
+test ai-init-2 {[normalize_result] eq {8}}
+
+###############################################################################
+
+write_file ai-note-1.txt "Example Note Body\n\nSecond paragraph.\n"
+fossil agent note ai-note-1.txt --title "Example Note" --tier 2 --source-type doc --source-ref doc/test.md
+test ai-note-1 {[normalize_result] eq {Added note: Example Note}}
+
+fossil sql "SELECT tier || '|' || title || '|' || source_type || '|' || source_ref || '|' || process_level || '|' || retrieval_count FROM ai_note ORDER BY nid DESC LIMIT 1"
+test ai-note-2 {[normalize_result] eq {2|Example Note|doc|doc/test.md|curated|0}}
+
+###############################################################################
+
+write_file ai-note-2.txt "# Derived Heading\n\nAtomic note body.\n"
+fossil agent note ai-note-2.txt --tier 3 --source-type wiki --source-ref wiki/Derived
+test ai-note-3 {[normalize_result] eq {Added note}}
+
+fossil sql "SELECT title || '|' || process_level || '|' || source_type || '|' || source_ref FROM ai_note ORDER BY nid DESC LIMIT 1"
+test ai-note-4 {[normalize_result] eq {Derived Heading|atomic|wiki|wiki/Derived}}
+
+###############################################################################
+
+fossil ai selftest --keep
+test ai-selftest-1 {[regexp {^selftest: context=1 note=2 retrieval=1 review=2 duplicate=1 link=2 keep=1$} [normalize_result]]}
+
+fossil sql "SELECT retrieval_count || '|' || printf('%.2f', heat) FROM ai_note WHERE source_ref='selftest/a'"
+test ai-selftest-2 {[normalize_result] eq {1|1.25}}
+
+fossil sql "SELECT retrieval_count || '|' || printf('%.2f', heat) FROM ai_note WHERE source_ref='selftest/b'"
+test ai-selftest-3 {[normalize_result] eq {1|1.35}}
+
+fossil sql "SELECT (duplicate_of IS NOT NULL) || '|' || (merged_into IS NOT NULL) || '|' || title || '|' || process_level || '|' || metadata FROM ai_note WHERE source_ref='selftest/b'"
+test ai-selftest-4 {[normalize_result] eq {1|1|Selftest Topic|curated|{"process_level":"curated"}}}
+
+fossil sql "SELECT count(*) FROM ai_note_link WHERE link_type='co_retrieved' AND from_nid IN (SELECT nid FROM ai_note WHERE source_ref IN ('selftest/a','selftest/b')) AND to_nid IN (SELECT nid FROM ai_note WHERE source_ref IN ('selftest/a','selftest/b'))"
+test ai-selftest-5 {[normalize_result] eq {1}}
+
+fossil sql "SELECT count(*) FROM ai_note_link WHERE link_type='duplicate' AND from_nid IN (SELECT nid FROM ai_note WHERE source_ref IN ('selftest/a','selftest/b')) AND to_nid IN (SELECT nid FROM ai_note WHERE source_ref IN ('selftest/a','selftest/b'))"
+test ai-selftest-6 {[normalize_result] eq {1}}
+
+fossil sql "SELECT count(*) FROM ai_review WHERE qid=(SELECT max(qid) FROM ai_retrieval WHERE query_text='selftest')"
+test ai-selftest-7 {[normalize_result] eq {2}}
+
+fossil sql "DELETE FROM ai_review WHERE qid IN (SELECT qid FROM ai_retrieval WHERE query_text='selftest')"
+fossil sql "DELETE FROM ai_retrieval_note WHERE qid IN (SELECT qid FROM ai_retrieval WHERE query_text='selftest')"
+fossil sql "DELETE FROM ai_retrieval WHERE query_text='selftest'"
+fossil sql "DELETE FROM ai_note_link WHERE from_nid IN (SELECT nid FROM ai_note WHERE source_ref IN ('selftest/a','selftest/b')) OR to_nid IN (SELECT nid FROM ai_note WHERE source_ref IN ('selftest/a','selftest/b'))"
+fossil sql "DELETE FROM ai_note WHERE source_ref IN ('selftest/a','selftest/b')"
+fossil sql "DELETE FROM ai_context WHERE tags='selftest'"
+
+###############################################################################
+
+fossil ai selftest
+test ai-selftest-cleanup-1 {[regexp {^selftest: context=1 note=2 retrieval=1 review=2 duplicate=1 link=2$} [normalize_result]]}
+
+fossil sql "SELECT count(*) FROM ai_context WHERE tags='selftest'"
+test ai-selftest-cleanup-2 {[normalize_result] eq {0}}
+
+fossil sql "SELECT count(*) FROM ai_note WHERE source_ref IN ('selftest/a','selftest/b')"
+test ai-selftest-cleanup-3 {[normalize_result] eq {0}}
+
+###############################################################################
+
+test_cleanup

@@ -22,3 +22,4 @@ Canonical documents for this fork live under `doc/`:
 - Licence: `doc/LICENCE.md`
 - Repository Map: `doc/specs/repo-map.md`
 - AI docs: `doc/ai/`
+  Includes the data pool strategy in `doc/ai/DATA_POOL.md`.

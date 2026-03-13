@@ -21,6 +21,29 @@
 #include "agent.h"
 #include <assert.h>
 
+int ai_is_enabled(void);
+void ai_schema_ensure(void);
+void ai_require_enabled(void);
+int ai_note_create(
+  int tier,
+  const char *zTitle,
+  Blob *pBody,
+  const char *zSourceType,
+  int sourceId,
+  const char *zSourceRef,
+  const char *zProcessLevel,
+  const char *zMetadata
+);
+int ai_retrieval_begin(int contextId, const char *zQuery);
+double ai_note_record_retrieval(
+  int qid,
+  int nid,
+  int rank,
+  double score,
+  double tierWeight
+);
+void ai_retrieval_review(int qid);
+
 static int agent_generate_embedding(
   const char *zModel,
   const char *zText,
@@ -258,33 +281,92 @@ static void agent_wiki_sync_cmd(void){
 }
 
 /*
-** Perform a semantic search for zQuery and append relevant snippets to pOut.
+** Perform a weighted semantic search for zQuery and append relevant notes to
+** pOut. Results reinforce future retrievals and trigger the review loop.
 */
-static void agent_semantic_search(const char *zQuery, int nLimit, Blob *pOut){
+static int agent_semantic_search(
+  const char *zQuery,
+  int nLimit,
+  Blob *pOut,
+  int bVerbose
+){
   const char *zModel = db_get("agent-ollama-model", "llama3.2");
   Blob vQuery = BLOB_INITIALIZER;
   Stmt q;
+  int qid = 0;
+  int nHit = 0;
 
+  if( !ai_is_enabled() ) return 0;
   if( agent_generate_embedding(zModel, zQuery, &vQuery)!=0 ){
     blob_reset(&vQuery);
-    return;
+    return 0;
   }
+  ai_schema_ensure();
+  qid = ai_retrieval_begin(0, zQuery);
 
   db_prepare(&q,
-    "SELECT n.title, n.body, vec_distance(v.vector, :vec) AS dist"
-    "  FROM ai_vector v, ai_note n"
-    " WHERE v.source_type='note' AND v.source_id=n.nid"
-    " ORDER BY dist ASC LIMIT %d",
+    "SELECT s.nid, s.title, s.body, s.tier, s.weighted_score, s.tier_weight"
+    "  FROM ("
+    "    SELECT n.nid AS nid,"
+    "           n.title AS title,"
+    "           n.body AS body,"
+    "           coalesce(n.tier,0) AS tier,"
+    "           CASE coalesce(n.tier,0)"
+    "             WHEN 3 THEN 0.35"
+    "             WHEN 2 THEN 0.20"
+    "             WHEN 1 THEN 0.10"
+    "             ELSE 0.0"
+    "           END AS tier_weight,"
+    "           (vec_distance(v.vector, :vec)"
+    "             - CASE coalesce(n.tier,0)"
+    "                 WHEN 3 THEN 0.35"
+    "                 WHEN 2 THEN 0.20"
+    "                 WHEN 1 THEN 0.10"
+    "                 ELSE 0.0"
+    "               END"
+    "             - (MIN(coalesce(n.heat,1.0),25.0)*0.02)"
+    "             - (MIN(coalesce(n.retrieval_count,0),50)*0.01)"
+    "           ) AS weighted_score"
+    "      FROM ai_vector v, ai_note n"
+    "     WHERE v.source_type='note'"
+    "       AND v.source_id=n.nid"
+    "       AND coalesce(n.merged_into,0)=0"
+    "  ) AS s"
+    " ORDER BY s.weighted_score ASC, s.tier DESC, s.nid DESC"
+    " LIMIT %d",
     nLimit
   );
   db_bind_blob(&q, ":vec", &vQuery);
   while( db_step(&q)==SQLITE_ROW ){
-    const char *zTitle = db_column_text(&q, 0);
-    const char *zBody = db_column_text(&q, 1);
-    blob_appendf(pOut, "\n--- Relevant Note: %s ---\n%s\n", zTitle, zBody);
+    int nid = db_column_int(&q, 0);
+    const char *zTitle = db_column_text(&q, 1);
+    const char *zBody = db_column_text(&q, 2);
+    int tier = db_column_int(&q, 3);
+    double rScore = db_column_double(&q, 4);
+    double rTierWeight = db_column_double(&q, 5);
+    double rDelta = ai_note_record_retrieval(
+      qid, nid, ++nHit, rScore, rTierWeight
+    );
+    if( bVerbose ){
+      blob_appendf(
+        pOut,
+        "--- Note %d: %s ---\n"
+        "tier: %d\n"
+        "score: %.4f\n"
+        "reinforcement: +%.2f\n\n"
+        "%s\n\n",
+        nid, zTitle ? zTitle : "(untitled)", tier, rScore, rDelta,
+        zBody ? zBody : ""
+      );
+    }else{
+      blob_appendf(pOut, "\n--- Relevant Note (T%d): %s ---\n%s\n",
+                   tier, zTitle ? zTitle : "(untitled)", zBody ? zBody : "");
+    }
   }
   db_finalize(&q);
+  if( nHit>0 ) ai_retrieval_review(qid);
   blob_reset(&vQuery);
+  return nHit;
 }
 
 /*
@@ -315,7 +397,7 @@ static void agent_assemble_context(Blob *pOut, const char *zQuery){
     }
 
     if( zQuery && zQuery[0] ){
-      agent_semantic_search(zQuery, 3, pOut);
+      agent_semantic_search(zQuery, 3, pOut, 0);
     }
 
     blob_appendf(pOut, "--- END CONTEXT ---\n\n");
@@ -508,9 +590,14 @@ static void agent_semantic_index_cmd(void){
   Stmt q1, q2;
   int n = 0;
 
+  ai_require_enabled();
   db_prepare(&q1,
-    "SELECT nid, title, body FROM ai_note"
-    " WHERE nid NOT IN (SELECT source_id FROM ai_vector WHERE source_type='note')"
+    "SELECT n.nid, n.title, n.body"
+    "  FROM ai_note AS n"
+    "  LEFT JOIN ai_vector AS v"
+    "    ON v.source_type='note' AND v.source_id=n.nid"
+    " WHERE v.source_id IS NULL"
+    "   AND coalesce(n.merged_into,0)=0"
   );
   while( db_step(&q1)==SQLITE_ROW ){
     int nid = db_column_int(&q1, 0);
@@ -543,12 +630,29 @@ static void agent_semantic_index_cmd(void){
 */
 static void agent_note_cmd(void){
   const char *zTitle;
+  const char *zTier;
+  const char *zSourceType;
+  const char *zSourceRef;
+  const char *zProcessLevel;
+  const char *zMetadata;
   Blob body = BLOB_INITIALIZER;
   int tier = 1;
 
   zTitle = find_option("title", 0, 1);
-  if( find_option("tier-2", 0, 0) ) tier = 2;
+  zTier = find_option("tier", 0, 1);
+  zSourceType = find_option("source-type", 0, 1);
+  zSourceRef = find_option("source-ref", 0, 1);
+  zProcessLevel = find_option("process-level", 0, 1);
+  zMetadata = find_option("metadata", 0, 1);
+  if( zTier ){
+    tier = atoi(zTier);
+  }else if( find_option("tier-2", 0, 0) ){
+    tier = 2;
+  }
   verify_all_options();
+  if( tier<0 || tier>3 ){
+    fossil_fatal("tier must be between 0 and 3");
+  }
   if( g.argc==4 ){
     const char *zFile = g.argv[3];
     if( file_size(zFile, ExtFILE)>=0 ){
@@ -559,18 +663,40 @@ static void agent_note_cmd(void){
   }else if( g.argc==3 ){
     agent_read_body(&body, 0, 0);
   }else{
-    usage("note ?TEXT|FILE? [--title TEXT] [--tier-2]");
+    usage("note ?TEXT|FILE? [--title TEXT] [--tier N] [--tier-2]"
+          " [--source-type TYPE] [--source-ref REF]"
+          " [--process-level LEVEL] [--metadata JSON]");
   }
-  if( zTitle==0 ) zTitle = "Note";
-
-  ai_schema_ensure();
-  db_multi_exec(
-    "INSERT INTO ai_note(tier, title, body, source_type, created_at)"
-    " VALUES(%d, %Q, %B, 'manual', julianday('now'))",
-    tier, zTitle, &body
+  ai_require_enabled();
+  ai_note_create(
+    tier, zTitle, &body, zSourceType, 0, zSourceRef, zProcessLevel, zMetadata
   );
-  fossil_print("Added note: %s\n", zTitle);
+  fossil_print("Added note%s%s\n",
+               zTitle ? ": " : "",
+               zTitle ? zTitle : "");
   blob_reset(&body);
+}
+
+/*
+** Retrieve weighted note matches for QUERY and print them.
+*/
+static void agent_retrieve_cmd(void){
+  const char *zLimit = find_option("limit", "n", 1);
+  int nLimit = zLimit ? atoi(zLimit) : 5;
+  Blob out = BLOB_INITIALIZER;
+
+  verify_all_options();
+  if( g.argc!=4 ){
+    usage("retrieve QUERY [--limit N]");
+  }
+  if( nLimit<=0 ) nLimit = 5;
+  ai_require_enabled();
+  if( agent_semantic_search(g.argv[3], nLimit, &out, 1)==0 ){
+    fossil_print("No notes matched.\n");
+  }else{
+    fossil_print("%s", blob_str(&out));
+  }
+  blob_reset(&out);
 }
 
 /*
@@ -593,8 +719,13 @@ static void agent_note_cmd(void){
 **    fossil agent semantic-index
 **       Generate embeddings for all notes and store them in ai_vector.
 **
-**    fossil agent note ?FILE? [--title TEXT] [--tier-2]
-**       Add a new note to the AI knowledge base.
+**    fossil agent note ?FILE? [--title TEXT] [--tier N]
+**                             [--source-type TYPE] [--source-ref REF]
+**                             [--process-level LEVEL] [--metadata JSON]
+**       Add a new note to the AI data pool.
+**
+**    fossil agent retrieve QUERY [--limit N]
+**       Retrieve weighted note matches and reinforce them.
 **
 **    fossil agent wiki-sync PAGENAME ?FILE? [--append] [--dry-run]
 **                             [--title TEXT] [--status TEXT]
@@ -606,6 +737,7 @@ void agent_cmd(void){
   const char *zCmd;
   const char *zModel = db_get("agent-ollama-model", "llama3.2");
 
+  find_repository_option();
   db_find_and_open_repository(OPEN_ANY_SCHEMA, 0);
   if( g.argc<3 ){
     usage("SUBCOMMAND ...");
@@ -617,6 +749,8 @@ void agent_cmd(void){
     agent_changes_cmd();
   }else if( fossil_strcmp(zCmd, "note")==0 ){
     agent_note_cmd();
+  }else if( fossil_strcmp(zCmd, "retrieve")==0 ){
+    agent_retrieve_cmd();
   }else if( fossil_strcmp(zCmd, "embed")==0 ){
     Blob v = BLOB_INITIALIZER;
     if( g.argc<4 ) usage("agent embed TEXT");
