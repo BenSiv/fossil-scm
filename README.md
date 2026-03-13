@@ -23,3 +23,26 @@ Canonical documents for this fork live under [`doc/`](doc/):
 - Repository Map: [`doc/specs/repo-map.md`](doc/specs/repo-map.md)
 - AI docs: [`doc/ai/`](doc/ai/)
   Includes the data pool strategy in [`doc/ai/DATA_POOL.md`](doc/ai/DATA_POOL.md).
+
+## AI Agent Configuration
+
+The local agent integration supports separate models for chat and embeddings.
+
+Checkout-local config lives in [`cfg/ai-agent.json`](cfg/ai-agent.json):
+
+```json
+{
+  "model": "qwen3.5:0.8b",
+  "command": "ollama run %m",
+  "embedding_model": "mxbai-embed-large",
+  "embedding_command": ""
+}
+```
+
+Notes:
+
+- `model` is the chat model used by `/agentui` and `/agent-chat`.
+- `embedding_model` is used by `fossil agent embed`, `semantic-index`, and `retrieve`.
+- `embedding_command` may be left empty to use Ollama's HTTP `/api/embed` fallback.
+- `qwen3.5:0.8b` does not provide embeddings in Ollama, so a separate embedding model is required.
+- When Fossil serves a bare `.fossil` repository file, repo settings such as `agent-command`, `agent-model`, and `agent-embedding-model` apply. `cfg/ai-agent.json` is only visible from an open checkout.

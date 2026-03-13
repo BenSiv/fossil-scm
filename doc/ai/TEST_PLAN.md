@@ -9,6 +9,8 @@
 - Insert context rows
 - Link to artifacts
 - Persist prompts and reasoning traces as attributable data pool records
+- Verify `/agent-chat` stores raw user prompts and raw model replies in `agentchat`
+- Verify visible reasoning text is stored as part of the reply payload when emitted
 
 ## Tiers
 - Promote and sink notes
@@ -26,3 +28,6 @@
 ## UI
 - Pages render
 - Queries return expected results
+- First-use `/agentui` and `/agent-chat` requests succeed without precreated
+  agent chat tables or sessions
+- Chat model and embedding model may be configured independently

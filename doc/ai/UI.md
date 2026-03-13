@@ -4,11 +4,15 @@ Primary interfaces exposed to the user.
 
 ## Chat
 - Prompt input
-- Agent response with provenance summary
+- Agent response stored in `agentchat` with model and session metadata
+- First-use web requests may create `agentchat_session` and `agentchat` lazily
+- When the model emits visible reasoning text, it is currently stored as part of
+  the normal agent reply payload
 
 ## Data Pool
 - Note browser with tier, processing level, and source filters
 - Retrieval count and related-note graph
+- Semantic retrieval can use a separate embedding model from the chat model
 
 ## Wiki
 - Atomic concepts with tier badges

@@ -18,6 +18,9 @@ Goal: every agent action is attributable to a prompt, a rationale, and the repos
 - `ai_note` may reference `ai_context` for tiered notes.
 - Data pool captures may include prompts, reasoning traces, documentation, wiki
   pages, and derived notes.
+- `/agent-chat` persists raw user prompts and raw model replies in `agentchat`.
+- Visible model reasoning emitted in the normal reply channel is currently
+  stored as reply text; there is no separate hidden chain-of-thought field.
 
 ## Privacy policy
 
