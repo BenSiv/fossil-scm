@@ -82,6 +82,12 @@ static const char zAgentConfigFile[] = "cfg/ai-agent.json";
 ** legacy Ollama settings are present.
 */
 /*
+** SETTING: agent-embedding-model width=30
+**
+** Default model name used for embedding generation and retrieval. If unset,
+** the chat model is reused.
+*/
+/*
 ** SETTING: agent-ollama-command width=40 default=ollama
 **
 ** Legacy compatibility setting. Used only when agent-command is unset.
@@ -197,6 +203,18 @@ static const char *agent_default_model(void){
 }
 
 /*
+** Return the configured embedding model, with fallback to the chat model.
+*/
+static const char *agent_embedding_model(void){
+  static char *zCached = 0;
+  fossil_free(zCached);
+  zCached = agent_config_get("embedding_model");
+  return zCached
+    ? zCached
+    : db_get("agent-embedding-model", agent_default_model());
+}
+
+/*
 ** Return the configured chat command template, with legacy fallback.
 */
 static const char *agent_command_template(void){
@@ -214,6 +232,32 @@ static const char *agent_embedding_template(void){
   fossil_free(zCached);
   zCached = agent_config_get("embedding_command");
   return zCached ? zCached : db_get("agent-embedding-command", "");
+}
+
+/*
+** Wrap zCmd in a stable shell invocation with exported agent env vars.
+*/
+static void agent_prepare_command(
+  Blob *pOut,
+  const char *zMode,
+  const char *zModel,
+  Blob *pCmd
+){
+  Blob model = BLOB_INITIALIZER;
+  Blob mode = BLOB_INITIALIZER;
+  Blob cmd = BLOB_INITIALIZER;
+  blob_append_escaped_arg(&model, zModel ? zModel : "", 0);
+  blob_append_escaped_arg(&mode, zMode ? zMode : "", 0);
+  blob_append_escaped_arg(&cmd, blob_str(pCmd), 0);
+  blob_zero(pOut);
+  blob_appendf(
+    pOut,
+    "env FOSSIL_AGENT_MODEL=%s FOSSIL_AGENT_MODE=%s sh -lc %s 2>&1",
+    blob_str(&model), blob_str(&mode), blob_str(&cmd)
+  );
+  blob_reset(&model);
+  blob_reset(&mode);
+  blob_reset(&cmd);
 }
 
 /*
@@ -302,6 +346,19 @@ static int agent_chat_current_session(const char *zUser){
     zUser ? zUser : "", zUser ? zUser : ""
   );
   return sid>0 ? sid : agent_chat_session_create(zUser);
+}
+
+/*
+** Return the most recent session id for zUser without creating a new one.
+*/
+static int agent_chat_latest_session(const char *zUser){
+  if( !db_table_exists("repository","agentchat_session") ) return 0;
+  return db_int(0,
+    "SELECT sid FROM agentchat_session"
+    " WHERE xfrom=%Q OR (%Q='' AND xfrom='')"
+    " ORDER BY mtime DESC, sid DESC LIMIT 1",
+    zUser ? zUser : "", zUser ? zUser : ""
+  );
 }
 
 /*
@@ -794,10 +851,7 @@ static int agent_run_backend(
   blob_zero(pReply);
   blob_zero(pErr);
   agent_expand_command(&cmd, zCmdTmpl, zModel);
-  blob_appendf(&envCmd,
-    "FOSSIL_AGENT_MODEL=%$ FOSSIL_AGENT_MODE=chat %s 2>&1",
-    zModel, blob_str(&cmd)
-  );
+  agent_prepare_command(&envCmd, "chat", zModel, &cmd);
   rc = popen2(blob_str(&envCmd), &fdIn, &out, &childPid, 0);
   if( rc!=0 || fdIn<0 || out==0 ){
     blob_appendf(pErr, "unable to run configured agent command");
@@ -925,10 +979,7 @@ static int agent_generate_embedding(
 
   if( zCmdTmpl[0] ){
     agent_expand_command(&cmd, zCmdTmpl, zModel);
-    blob_appendf(&envCmd,
-      "FOSSIL_AGENT_MODEL=%$ FOSSIL_AGENT_MODE=embed %s 2>&1",
-      zModel, blob_str(&cmd)
-    );
+    agent_prepare_command(&envCmd, "embed", zModel, &cmd);
     rc = popen2(blob_str(&envCmd), &fdFromChild, &pOutToChild, &childPid, 0);
     if( rc!=0 || fdFromChild<0 || pOutToChild==0 ){
       blob_reset(&cmd);
@@ -940,13 +991,11 @@ static int agent_generate_embedding(
     pOutToChild = 0;
     p = fdopen(fdFromChild, "rb");
   }else{
-    const char *zLegacyCmd = db_get("agent-ollama-command", "");
-    if( zLegacyCmd[0]==0 ) return 1;
-    blob_appendf(&cmd, "curl -s -X POST http://localhost:11434/api/embeddings "
+    blob_appendf(&cmd, "curl -s -X POST http://localhost:11434/api/embed "
                        "-H \"Content-Type: application/json\" -d ");
     {
       Blob json = BLOB_INITIALIZER;
-      blob_appendf(&json, "{\"model\":%!j, \"prompt\":%!j}", zModel, zText);
+      blob_appendf(&json, "{\"model\":%!j, \"input\":%!j}", zModel, zText);
       blob_append_sql(&cmd, "%$", blob_str(&json));
       blob_reset(&json);
     }
@@ -966,8 +1015,12 @@ static int agent_generate_embedding(
   blob_reset(&cmd);
   blob_reset(&envCmd);
 
-  /* Minimalist JSON parsing for "embedding":[...] */
+  /* Minimalist JSON parsing for Ollama responses. */
   z = strstr(blob_str(&reply), "\"embedding\":[");
+  if( z==0 ){
+    z = strstr(blob_str(&reply), "\"embeddings\":[[");
+    if( z ) z += 15;
+  }
   if( z==0 ){
     z = blob_str(&reply);
     while( z && *z ){
@@ -987,7 +1040,9 @@ static int agent_generate_embedding(
     blob_reset(&reply);
     return 0;
   }
-  z += 13;
+  if( fossil_strncmp(z, "\"embedding\":[", 13)==0 ){
+    z += 13;
+  }
   while( *z && *z!=']' ){
     float f = (float)strtod(z, &z);
     blob_append(pOut, (char*)&f, sizeof(f));
@@ -1001,7 +1056,7 @@ static int agent_generate_embedding(
 ** Generate embeddings for all notes that don't have them yet.
 */
 static void agent_semantic_index_cmd(void){
-  const char *zModel = agent_default_model();
+  const char *zModel = agent_embedding_model();
   Stmt q1, q2;
   int n = 0;
 
@@ -1096,7 +1151,7 @@ static void agent_note_cmd(void){
 ** Retrieve weighted note matches for QUERY and print them.
 */
 static void agent_retrieve_cmd(void){
-  const char *zModel = db_get("agent-ollama-model", "llama3.2");
+  const char *zModel = agent_embedding_model();
   const char *zLimit = find_option("limit", "n", 1);
   int nLimit = zLimit ? atoi(zLimit) : 5;
   Blob out = BLOB_INITIALIZER;
@@ -1151,13 +1206,14 @@ static void agent_retrieve_cmd(void){
 */
 void agent_cmd(void){
   const char *zCmd;
-  const char *zModel = agent_default_model();
+  const char *zEmbeddingModel;
 
   find_repository_option();
   db_find_and_open_repository(OPEN_ANY_SCHEMA, 0);
   if( g.argc<3 ){
     usage("SUBCOMMAND ...");
   }
+  zEmbeddingModel = agent_embedding_model();
   zCmd = g.argv[2];
   if( fossil_strcmp(zCmd, "repomap")==0 ){
     agent_repomap_cmd();
@@ -1170,7 +1226,7 @@ void agent_cmd(void){
   }else if( fossil_strcmp(zCmd, "embed")==0 ){
     Blob v = BLOB_INITIALIZER;
     if( g.argc<4 ) usage("agent embed TEXT");
-    if( agent_generate_embedding(zModel, g.argv[3], &v)==0 ){
+    if( agent_generate_embedding(zEmbeddingModel, g.argv[3], &v)==0 ){
       int i;
       float *af = (float*)blob_buffer(&v);
       int n = blob_size(&v) / sizeof(float);
@@ -1205,7 +1261,7 @@ void agentui_page(void){
     return;
   }
   zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
-  sidCurrent = agent_chat_current_session(zUser);
+  sidCurrent = agent_chat_latest_session(zUser);
   style_set_current_feature("agent");
   style_header("Agent Chat");
   style_submenu_element("Chat", "%R/chat");
@@ -1323,9 +1379,6 @@ void agent_chat_page(void){
   zModel = PD("model", agent_default_model());
   zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
   sid = atoi(PD("sid","0"));
-  if( sid<=0 || !agent_chat_session_exists(sid) ){
-    sid = agent_chat_session_create(zUser);
-  }
   cgi_set_content_type("application/json");
   if( zMsg[0]==0 ){
     CX("{\"error\":%!j}\n", "missing msg parameter");
@@ -1346,6 +1399,9 @@ void agent_chat_page(void){
   }
   db_begin_write();
   db_unprotect(PROTECT_READONLY);
+  if( sid<=0 || !agent_chat_session_exists(sid) ){
+    sid = agent_chat_session_create(zUser);
+  }
   agent_chat_save(sid, zUser, "user", zModel, PD("msg",""));
   rc = agent_run_backend(zModel, zMsg, &reply, &err);
   if( rc==0 ){
