@@ -159,6 +159,32 @@ static char *agent_user_config_path(void){
 #endif
 }
 
+static char *agent_config_source(void){
+  const char *zPath = fossil_getenv("FOSSIL_AGENT_CONFIG");
+  char *zUserPath = 0;
+  if( zAgentConfigPath && zAgentConfigPath[0] ){
+    return mprintf("cli --agent-config: %s", zAgentConfigPath);
+  }
+  if( zPath && zPath[0] ){
+    return mprintf("env FOSSIL_AGENT_CONFIG: %s", zPath);
+  }
+  if( g.repositoryOpen ){
+    zPath = db_get("agent-config-path", 0);
+    if( zPath && zPath[0] ){
+      return mprintf("repo agent-config-path: %s", zPath);
+    }
+  }
+  zUserPath = agent_user_config_path();
+  if( zUserPath && file_size(zUserPath, ExtFILE)>=0 ){
+    return mprintf("user config: %s", zUserPath);
+  }
+  fossil_free(zUserPath);
+  if( g.zLocalRoot && g.zLocalRoot[0] ){
+    return mprintf("checkout config: %s%s", g.zLocalRoot, zAgentConfigFile);
+  }
+  return mprintf("repo settings fallback");
+}
+
 static char *agent_config_path(void){
   const char *zPath = fossil_getenv("FOSSIL_AGENT_CONFIG");
   char *zUserPath = 0;
@@ -174,7 +200,28 @@ static char *agent_config_path(void){
   if( g.zLocalRoot==0 || g.zLocalRoot[0]==0 ) return 0;
   return mprintf("%s%s", g.zLocalRoot, zAgentConfigFile);
 }
+#else
+static char *agent_config_source(void){
+  return mprintf("repo settings fallback (JSON disabled)");
+}
 #endif
+
+static const char *agent_infer_provider(const char *zCmd){
+  if( zCmd==0 || zCmd[0]==0 ) return "unset";
+  if( strstr(zCmd, "fossil-codex-agent.sh")!=0
+   || strstr(zCmd, " codex")!=0
+   || fossil_strncmp(zCmd, "codex", 5)==0
+  ){
+    return "codex";
+  }
+  if( strstr(zCmd, "fossil-ollama-agent.sh")!=0
+   || strstr(zCmd, " ollama")!=0
+   || fossil_strncmp(zCmd, "ollama", 6)==0
+  ){
+    return "ollama";
+  }
+  return "custom";
+}
 
 /*
 ** Look up a string value in cfg/ai-agent.json. Returns a newly allocated
@@ -1307,7 +1354,13 @@ void agent_cmd(void){
 */
 void agentui_page(void){
   const char *zModel;
+  const char *zCmd;
+  const char *zEmbedModel;
+  const char *zEmbedCmd;
+  const char *zProvider;
+  const char *zEmbedProvider;
   const char *zUser;
+  char *zConfigSource;
   int sidCurrent;
   int sidRequested;
 
@@ -1320,11 +1373,28 @@ void agentui_page(void){
   sidRequested = atoi(PD("sid","0"));
   sidCurrent = agent_chat_session_exists(sidRequested) ? sidRequested : 0;
   zModel = agent_chat_session_model(sidCurrent, agent_default_model());
+  zCmd = agent_command_template();
+  zEmbedModel = agent_embedding_model();
+  zEmbedCmd = agent_embedding_template();
+  zProvider = agent_infer_provider(zCmd);
+  zEmbedProvider = zEmbedCmd[0] ? agent_infer_provider(zEmbedCmd)
+                                : (fossil_strcmp(zProvider, "ollama")==0 ? "ollama-http" : "inherit");
+  zConfigSource = agent_config_source();
   style_set_current_feature("agent");
   style_header("Agent Chat");
   @ <div class="fossil-doc" data-title="Agent Chat">
   @ <p>This page sends prompts to the AI backend configured by the repository
   @ settings.</p>
+  @ <div style="border:1px solid #888;padding:0.6em;margin:0 0 1em 0;background:rgba(127,127,127,0.05);">
+  @ <b>Effective config</b><br>
+  @ source: %h(zConfigSource)<br>
+  @ chat provider: %h(zProvider)<br>
+  @ chat command: %h(zCmd)<br>
+  @ chat model: %h(zModel && zModel[0] ? zModel : "(unset)")<br>
+  @ embedding provider: %h(zEmbedProvider)<br>
+  @ embedding command: %h(zEmbedCmd && zEmbedCmd[0] ? zEmbedCmd : "(builtin/default)")<br>
+  @ embedding model: %h(zEmbedModel && zEmbedModel[0] ? zEmbedModel : "(unset)")
+  @ </div>
   @ <div style="display:grid;grid-template-columns:minmax(12em,16em) 1fr;gap:1em;">
   @ <div>
   @ <div style="margin-bottom:0.7em;"><a class="btn" href="%R/agentui?new=1">New Chat</a></div>
@@ -1408,6 +1478,7 @@ void agentui_page(void){
   @ </script>
   @ </div>
   @ </div>
+  fossil_free(zConfigSource);
   style_finish_page();
 }
 
@@ -1441,6 +1512,12 @@ void agent_chat_page(void){
     CX("{\"error\":%!j}\n", "missing msg parameter");
     return;
   }
+  if( zModel[0]==0 ){
+    CX("{\"error\":%!j}\n", "missing model parameter");
+    return;
+  }
+  db_begin_write();
+  db_unprotect(PROTECT_READONLY);
   if( PB("context") ){
     Blob ctx = BLOB_INITIALIZER;
     if( agent_assemble_context(&ctx, zModel, zMsg) ){
@@ -1450,12 +1527,6 @@ void agent_chat_page(void){
     }
     blob_reset(&ctx);
   }
-  if( zModel[0]==0 ){
-    CX("{\"error\":%!j}\n", "missing model parameter");
-    return;
-  }
-  db_begin_write();
-  db_unprotect(PROTECT_READONLY);
   if( sid<=0 || !agent_chat_session_exists(sid) ){
     sid = agent_chat_session_create(zUser);
   }
