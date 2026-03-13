@@ -25,8 +25,9 @@ Canonical documents for this fork live under [`doc/`](doc/):
   Includes the data pool strategy in [`doc/ai/DATA_POOL.md`](doc/ai/DATA_POOL.md).
   Provider/model design notes live in
   [`doc/ai/PROVIDER_MODEL_SPLIT.md`](doc/ai/PROVIDER_MODEL_SPLIT.md) and
-  [`doc/ai/IMPLEMENTATION_PLAN.md`](doc/ai/IMPLEMENTATION_PLAN.md). Tcl test
-  suite recovery is tracked in
+  [`doc/ai/IMPLEMENTATION_PLAN.md`](doc/ai/IMPLEMENTATION_PLAN.md), which now
+  includes the phased roadmap from config visibility through streaming and
+  conversation evaluation. Tcl test suite recovery is tracked in
   [`doc/ai/TCL_TEST_REVIVAL_PLAN.md`](doc/ai/TCL_TEST_REVIVAL_PLAN.md).
 - Clean local reinstall helper: [`dev/tools/install-fossil-clean.sh`](dev/tools/install-fossil-clean.sh)
 - Tcl test prerequisite helper:

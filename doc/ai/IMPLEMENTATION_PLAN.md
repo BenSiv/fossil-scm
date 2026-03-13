@@ -1,127 +1,158 @@
 # AI Integration Implementation Plan
 
-This plan turns the current agent integration into a clearer provider-aware
-system without abandoning the existing local-wrapper approach.
+This plan moves Fossil from a wrapper-driven agent integration to a
+provider-aware system without discarding the simplicity of local commands and
+single-binary deployment.
 
-## Goals
+## Current Status
 
-- make runtime config resolution inspectable
+Fossil has working foundations but is still short of the intended design.
+
+Implemented now:
+
+- split chat model and embedding model
+- runtime config precedence with regression coverage
+- `/agentui` diagnostics for effective config source, command, provider
+  inference, and model values
+- wrapper-based backends for Ollama and Codex
+- Tcl regression coverage for agent CLI and first-use web flows
+
+Still missing:
+
+- first-class provider fields
+- provider-aware validation
+- provider/model discovery for the UI
+- streaming chat transport
+- structured message/event persistence
+- conversation-level evaluation of chat quality
+
+The practical state is:
+
+- operationally usable for local testing
+- not yet architecturally provider-aware
+
+## Design Goals
+
+- make runtime config and backend choice explicit
 - remove backend/model ambiguity
 - preserve simple local integrations
-- prepare for streaming and richer event handling
+- make `/agentui` truthful about what backend will run
+- prepare for streaming and structured message handling
+- keep the current retrieval loop while extending evaluation to chat
 
-## Phase 1: Visibility
+## Phase A: Visibility And Safety
 
-### 1. Effective config diagnostics
+Objective:
 
-Add UI and server visibility for:
+- make backend resolution inspectable
+- eliminate silent ambiguity before deeper refactors
 
-- effective config source
-- effective chat command/provider
-- effective chat model
-- effective embedding command/provider
-- effective embedding model
+Delivered already:
 
-Deliverables:
+- effective config diagnostics in `/agentui`
+- config source reporting
+- provider inference for diagnostics
+- user config fallback and precedence tests
 
-- `/agentui` debug panel or status line
-- helper functions that report resolved config values and where they came from
+Remaining work in this phase:
 
-### 2. Runtime precedence audit
+- surface the effective config summary through a machine-readable endpoint, not
+  only HTML
+- expose whether the effective values came from explicit config or fallback
+- add tests for empty-model and missing-command paths across CLI and web
 
-Make precedence explicit and testable:
+Exit criteria:
 
-- CLI override
-- environment override
-- repo setting
-- user config
-- checkout config
-- repo fallback
+- a developer can tell, from the UI or one command, exactly which config file,
+  provider, command, and model are active
+- obvious misconfiguration fails early and predictably
 
-Deliverables:
+## Phase B: Provider Fields And Validation
 
-- doc updates
-- regression tests for precedence
+Objective:
 
-## Phase 2: Provider Identity
+- make provider identity first-class instead of inferred from command strings
 
-### 3. Introduce explicit provider fields
+Implementation:
 
-Add support for:
+- add support for:
+  - `provider`
+  - `embedding_provider`
+- keep these legacy fields working:
+  - `command`
+  - `embedding_command`
+  - `model`
+  - `embedding_model`
+- if provider fields are absent, infer them for compatibility
 
-- `provider`
-- `embedding_provider`
+Validation rules:
 
-Keep current fields working for compatibility:
-
-- `command`
-- `embedding_command`
-
-Deliverables:
-
-- schema-less JSON compatibility in `ai-agent.json`
-- runtime resolution that infers provider from legacy config when missing
-
-### 4. Provider-aware validation
-
-Before invoking a backend, validate:
-
-- provider/model pairing
-- provider/embedding_model pairing
-- minimum required command or binary presence
+- reject `provider=ollama, model=auto`
+- reject `provider=codex, model=qwen3.5:0.8b`
+- reject embedding requests against providers/models known not to support
+  embeddings when that can be determined early
+- reject missing command/binary when a provider requires an external wrapper
 
 Deliverables:
 
-- early user-facing errors
-- no more accidental `auto` sent to Ollama
-- no more Ollama model names sent to Codex
+- updated config schema docs
+- compatibility logic for old configs
+- early provider/model mismatch errors
+- Tcl tests for accepted and rejected combinations
 
-## Phase 3: UI Behavior
+Exit criteria:
 
-### 5. Provider-aware UI controls
+- no backend choice depends on guessing from a free-form model string
+- user-visible errors occur before launching the backend process
 
-Replace or supplement the free-form model field with:
+## Phase C: Provider-Aware UI And Session State
 
-- provider selection
-- model selection or provider-scoped model text field
+Objective:
 
-At minimum, display the active provider beside the model field.
+- make `/agentui` operate on explicit backend identity, not implicit text entry
+
+Implementation:
+
+- replace the plain free-text chat model control with:
+  - provider selector plus provider-scoped model field, or
+  - provider selector plus model dropdown when discovery is available
+- display the active provider and model for both chat and embeddings
+- store provider identity alongside each chat session and message
+
+Optional server additions:
+
+- endpoint for effective provider/model/config data
+- endpoint for provider capabilities and known models
 
 Deliverables:
 
-- no stale backend ambiguity in `/agentui`
-- explicit link between displayed model and runtime backend
+- no stale model field on new chat
+- existing sessions reopen with the original provider/model pair
+- no confusion between UI text and actual backend
 
-### 6. Session metadata improvements
+Exit criteria:
 
-Store per-session backend identity in addition to model text.
+- session metadata remains meaningful even after config changes
+- the UI cannot silently display one backend while invoking another
 
-Deliverables:
+## Phase D: Streaming And Structured Events
 
-- session reopen shows correct backend + model
-- past sessions remain attributable even if config changes later
+Objective:
 
-## Phase 4: Streaming
+- move from buffered one-shot replies to streamed, typed output
 
-### 7. Streaming chat transport
+Transport options:
 
-Move `/agent-chat` from buffered JSON replies to streamed output.
-
-Candidate approaches:
-
-- chunked HTTP
 - server-sent events
+- chunked HTTP
 
-Deliverables:
+Required backend behavior:
 
-- progressive agent output in `/agentui`
-- preserved final persisted reply after stream completion
+- incremental read of child process output
+- progressive delivery to the UI
+- final persistence after completion or failure
 
-### 8. Structured message parts
-
-Stop treating all output as one text blob.
-
-Introduce message part types such as:
+Introduce structured event/message types:
 
 - `progress`
 - `reasoning_visible`
@@ -129,16 +160,30 @@ Introduce message part types such as:
 - `final_text`
 - `error`
 
+Storage options:
+
+- extend `agentchat` with typed rows, or
+- add a separate event table keyed to a chat message/session
+
 Deliverables:
 
-- cleaner UI rendering
-- future filtering or evaluation hooks
+- live output in `/agentui`
+- separation between visible reasoning and final answer
+- future hooks for filtering, review, or summarization
 
-## Phase 5: Evaluation Loop Expansion
+Exit criteria:
 
-### 9. Keep the current retrieval loop
+- long-running chats show progress in real time
+- Fossil no longer has to treat every backend response as one undifferentiated
+  text blob
 
-The existing retrieval evaluation loop should remain:
+## Phase E: Conversation Evaluation Loop
+
+Objective:
+
+- extend evaluation from retrieval maintenance to answer-quality review
+
+Keep the existing retrieval loop:
 
 - retrieval reinforcement
 - co-retrieval links
@@ -146,27 +191,44 @@ The existing retrieval evaluation loop should remain:
 - title correction
 - metadata normalization
 
-### 10. Add conversation-level evaluation later
+Add later, after provider/model clarity and structured events exist:
 
-Only after provider/model/config clarity is in place should Fossil add:
-
-- reply quality review
+- reply quality review records
 - output classification
-- visible reasoning filtering or handling
-- provider-specific post-processing
+- explicit handling of visible reasoning text
+- provider-specific post-processing or scrubbing
+- policy hooks that may later influence provider/model choice
 
-This avoids building evaluation logic on top of ambiguous backend state.
+Do not build this on top of ambiguous backend state.
 
-## Testing Plan
+Deliverables:
 
-Add tests for:
+- chat-level eval schema
+- review pipeline for final answers
+- tests covering visible-reasoning and plain-answer providers
+
+Exit criteria:
+
+- Fossil can evaluate agent replies without conflating backend progress,
+  visible reasoning, and final response text
+
+## Testing Strategy
+
+Default `make test` should remain hermetic and Tcl-based.
+
+Coverage to add or maintain:
 
 - config precedence
 - provider/model mismatch rejection
 - user-config runtime fallback
-- first-load `/agentui` starts new chat
-- explicit session reopen restores correct backend/model
-- streaming success and partial failure handling
+- `/agentui` new-chat defaults
+- explicit session reopen restores provider/model
+- streaming success and partial-failure handling
+- chat event persistence
+- conversation evaluation records
+
+Live-provider tests should remain opt-in and not be required for default
+developer verification.
 
 ## Principles
 
@@ -174,3 +236,5 @@ Add tests for:
 - runtime diagnostics beat guesswork
 - compatibility matters, but silent fallback should be minimized
 - wrappers are implementation details, not product-level semantics
+- streaming should be designed as transport, not bolted onto final text blobs
+- evaluation should operate on structured outcomes, not raw ambiguous output
