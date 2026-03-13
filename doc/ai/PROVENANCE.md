@@ -23,3 +23,8 @@ Goal: every agent action is attributable to a prompt, a rationale, and the repos
 
 - Sensitive records should be explicitly tagged in metadata.
 - Stored reasoning should remain attributable to its source context.
+- Reasoning artifacts may be persisted when they are useful to the
+  repository knowledge pool and conform to project policy.
+- Favor structured rationale, summaries, decision trails, and linked
+  context over unbounded raw dumps.
+- Stored reasoning should remain concise, declarative, and user-safe.

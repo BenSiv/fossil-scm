@@ -667,6 +667,7 @@ static const char zDfltMainMenu[] =
 @ Tags      /taglist     o              wideonly
 @ Forum     /forum       {@2 3 4 5 6}   wideonly
 @ Chat      /chat        C              wideonly
+@ Agent     /agentui     r              wideonly
 @ Tickets   /ticket      r              wideonly
 @ Wiki      /wiki        j              wideonly
 @ Admin     /setup       {a s}          desktoponly

@@ -16,10 +16,10 @@ linked above.
 
 ## Documentation
 
-Canonical documents for this fork live under `doc/`:
+Canonical documents for this fork live under [`doc/`](doc/):
 
-- Build Guide: `doc/BUILD.txt`
-- Licence: `doc/LICENCE.md`
-- Repository Map: `doc/specs/repo-map.md`
-- AI docs: `doc/ai/`
-  Includes the data pool strategy in `doc/ai/DATA_POOL.md`.
+- Build Guide: [`doc/BUILD.txt`](doc/BUILD.txt)
+- Licence: [`doc/LICENCE.md`](doc/LICENCE.md)
+- Repository Map: [`doc/specs/repo-map.md`](doc/specs/repo-map.md)
+- AI docs: [`doc/ai/`](doc/ai/)
+  Includes the data pool strategy in [`doc/ai/DATA_POOL.md`](doc/ai/DATA_POOL.md).

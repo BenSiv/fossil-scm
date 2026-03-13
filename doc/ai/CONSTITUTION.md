@@ -11,6 +11,10 @@ This document defines non-negotiable constraints and goals for the AI system.
 ## Safety
 - Do not silently drop AI-relevant material from the data pool.
 - Persist reasoning traces only as explicit pool artifacts with provenance and metadata.
+- Persist reasoning in structured, policy-controlled forms that remain
+  useful for retrieval, audit, and synthesis.
+- Do not rely on unrestricted raw chain-of-thought dumps as the default
+  persistence format.
 - Never delete provenance records without explicit user request.
 
 ## Quality
