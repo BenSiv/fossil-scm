@@ -207,6 +207,19 @@ Deliverables:
 - review pipeline for final answers
 - tests covering visible-reasoning and plain-answer providers
 
+Current first slice:
+
+- `ai_chat_eval` records one lightweight evaluation row per final `reply` or
+  `error`
+- initial heuristics classify:
+  - `reply_kind`
+  - `quality_status`
+  - `reasoning_status`
+- a minimal user-feedback path now records `useful` or `not-useful` against
+  the terminal reply evaluation row
+- this is intentionally rule-based and deterministic until provider behavior
+  and event semantics are more mature
+
 Exit criteria:
 
 - Fossil can evaluate agent replies without conflating backend progress,

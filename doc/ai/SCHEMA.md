@@ -80,6 +80,23 @@ Scope: define additional SQLite tables in the Fossil repository database using a
     - `action_summary` TEXT
     - `created_at` TEXT
 
+- `ai_chat_eval`
+  - Purpose: store lightweight answer-evaluation rows for persisted chat
+    outcomes.
+  - Fields:
+    - `eval_id` INTEGER PRIMARY KEY
+    - `sid` INTEGER REFERENCES agentchat_session
+    - `acid` INTEGER REFERENCES agentchat
+    - `provider` TEXT
+    - `model` TEXT
+    - `reply_kind` TEXT             -- final|error|reasoning-visible|empty
+    - `quality_status` TEXT         -- ok|error|review|empty
+    - `reasoning_status` TEXT       -- none|visible
+    - `user_feedback` TEXT          -- useful|not-useful
+    - `feedback_at` TEXT
+    - `action_summary` TEXT
+    - `created_at` TEXT
+
 - `ai_vector`
   - Purpose: embeddings storage (optional). Implemented via FTS5+aux table or a VSS virtual table if enabled.
   - Fields:

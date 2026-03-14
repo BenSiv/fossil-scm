@@ -61,6 +61,17 @@ double ai_note_record_retrieval(
 /* Run the post-retrieval evaluation loop for qid. */
 void ai_retrieval_review(int qid);
 
+/* Record a lightweight chat-answer evaluation row. */
+void ai_chat_eval_record(
+  int sid,
+  int acid,
+  const char *zProvider,
+  const char *zModel,
+  const char *zKind,
+  const char *zMsg
+);
+void ai_chat_eval_feedback(int sid, int acid, const char *zFeedback);
+
 /* CLI entry point */
 void ai_cmd(void);
 
@@ -278,6 +289,92 @@ static void ai_review_insert(
 }
 
 /*
+** Record user feedback for an existing chat-answer evaluation row.
+*/
+void ai_chat_eval_feedback(int sid, int acid, const char *zFeedback){
+  if( !ai_is_enabled() ) return;
+  if( sid<=0 || acid<=0 || zFeedback==0 || zFeedback[0]==0 ) return;
+  ai_schema_ensure();
+  db_multi_exec(
+    "UPDATE repository.ai_chat_eval"
+    " SET user_feedback=%Q,"
+    "     feedback_at=julianday('now')"
+    " WHERE sid=%d AND acid=%d",
+    zFeedback, sid, acid
+  );
+}
+
+/*
+** Return non-zero if zMsg appears to expose visible reasoning text rather
+** than only a final answer.
+*/
+static int ai_chat_eval_has_visible_reasoning(const char *zMsg){
+  if( zMsg==0 || zMsg[0]==0 ) return 0;
+  return strstr(zMsg, "Thinking...")!=0
+      || strstr(zMsg, "<think>")!=0
+      || strstr(zMsg, "</think>")!=0
+      || fossil_strnicmp(zMsg, "thinking:", 9)==0;
+}
+
+/*
+** Record one chat-answer evaluation row if AI features are enabled.
+*/
+void ai_chat_eval_record(
+  int sid,
+  int acid,
+  const char *zProvider,
+  const char *zModel,
+  const char *zKind,
+  const char *zMsg
+){
+  const char *zReplyKind;
+  const char *zQuality;
+  const char *zReasoning;
+  char *zSummary;
+  Stmt q;
+  if( !ai_is_enabled() ) return;
+  ai_schema_ensure();
+  if( zKind && fossil_strcmp(zKind, "error")==0 ){
+    zReplyKind = "error";
+    zQuality = "error";
+    zReasoning = "none";
+  }else if( ai_chat_eval_has_visible_reasoning(zMsg) ){
+    zReplyKind = "reasoning-visible";
+    zQuality = "review";
+    zReasoning = "visible";
+  }else if( zMsg && zMsg[0] ){
+    zReplyKind = "final";
+    zQuality = "ok";
+    zReasoning = "none";
+  }else{
+    zReplyKind = "empty";
+    zQuality = "empty";
+    zReasoning = "none";
+  }
+  zSummary = mprintf("reply_kind=%s; quality=%s; reasoning=%s",
+                     zReplyKind, zQuality, zReasoning);
+  db_prepare(&q,
+    "INSERT INTO repository.ai_chat_eval("
+    " sid,acid,provider,model,reply_kind,quality_status,reasoning_status,"
+    " action_summary,created_at"
+    ") VALUES("
+    " :sid,:acid,:provider,:model,:reply_kind,:quality,:reasoning,"
+    " :summary,julianday('now'))"
+  );
+  db_bind_int(&q, ":sid", sid);
+  db_bind_int(&q, ":acid", acid);
+  db_bind_text(&q, ":provider", zProvider ? zProvider : "");
+  db_bind_text(&q, ":model", zModel ? zModel : "");
+  db_bind_text(&q, ":reply_kind", zReplyKind);
+  db_bind_text(&q, ":quality", zQuality);
+  db_bind_text(&q, ":reasoning", zReasoning);
+  db_bind_text(&q, ":summary", zSummary);
+  db_step(&q);
+  db_finalize(&q);
+  fossil_free(zSummary);
+}
+
+/*
 ** Register AI-related SQL functions with the database connection.
 */
 void ai_add_sql_func(sqlite3 *db){
@@ -372,6 +469,20 @@ void ai_schema_ensure(void){
     "  action_summary TEXT,"
     "  created_at DATETIME DEFAULT (julianday('now'))"
     ");"
+    "CREATE TABLE IF NOT EXISTS repository.ai_chat_eval("
+    "  eval_id INTEGER PRIMARY KEY,"
+    "  sid INTEGER,"
+    "  acid INTEGER,"
+    "  provider TEXT,"
+    "  model TEXT,"
+    "  reply_kind TEXT,"
+    "  quality_status TEXT,"
+    "  reasoning_status TEXT,"
+    "  user_feedback TEXT,"
+    "  feedback_at DATETIME,"
+    "  action_summary TEXT,"
+    "  created_at DATETIME DEFAULT (julianday('now'))"
+    ");"
   );
 
   db_multi_exec(
@@ -425,6 +536,34 @@ void ai_schema_ensure(void){
   if( !db_table_has_column("repository","ai_note","merged_into") ){
     db_multi_exec("ALTER TABLE repository.ai_note ADD COLUMN merged_into INTEGER;");
   }
+  if( !db_table_exists("repository","ai_chat_eval") ){
+    db_multi_exec(
+      "CREATE TABLE repository.ai_chat_eval("
+      "  eval_id INTEGER PRIMARY KEY,"
+      "  sid INTEGER,"
+      "  acid INTEGER,"
+      "  provider TEXT,"
+      "  model TEXT,"
+      "  reply_kind TEXT,"
+      "  quality_status TEXT,"
+      "  reasoning_status TEXT,"
+      "  user_feedback TEXT,"
+      "  feedback_at DATETIME,"
+      "  action_summary TEXT,"
+      "  created_at DATETIME DEFAULT (julianday('now'))"
+      ");"
+    );
+  }
+  if( !db_table_has_column("repository","ai_chat_eval","user_feedback") ){
+    db_multi_exec(
+      "ALTER TABLE repository.ai_chat_eval ADD COLUMN user_feedback TEXT;"
+    );
+  }
+  if( !db_table_has_column("repository","ai_chat_eval","feedback_at") ){
+    db_multi_exec(
+      "ALTER TABLE repository.ai_chat_eval ADD COLUMN feedback_at DATETIME;"
+    );
+  }
 
   db_multi_exec(
     "CREATE INDEX IF NOT EXISTS repository.ai_note_i1"
@@ -447,6 +586,8 @@ void ai_schema_ensure(void){
     " ON ai_retrieval_note(nid, qid);"
     "CREATE INDEX IF NOT EXISTS repository.ai_review_i1"
     " ON ai_review(qid, nid);"
+    "CREATE INDEX IF NOT EXISTS repository.ai_chat_eval_i1"
+    " ON ai_chat_eval(sid, acid);"
     "CREATE INDEX IF NOT EXISTS repository.ai_vector_i1"
     " ON ai_vector(source_type, source_id);"
   );

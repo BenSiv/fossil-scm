@@ -83,12 +83,17 @@ Notes:
   uses this endpoint for browser-side history rendering.
 - `/agent-events` exposes the ordered stored event stream for a session, with
   optional `after=` filtering for incremental polling.
+- `/agent-feedback` records lightweight user feedback for the latest or
+  selected terminal agent reply and stores it in `ai_chat_eval`.
 - backend execution now records explicit `running` and `ok` progress events so
   incremental clients can distinguish in-flight work from final replies.
 - `/agentui` now shows the newest execution state in a dedicated status line
   above the chat log, driven by the structured event stream.
 - the session list now includes a compact last-known state label such as
   `running`, `ok`, `reply`, or `error` beside each saved conversation.
+- `ai_chat_eval` records a lightweight evaluation row for each persisted final
+  chat outcome, and now also stores simple user feedback such as `useful` or
+  `not-useful`.
 - chat rows now also support a lightweight `meta` field for structured event
   metadata such as whether context assembly was enabled for a prompt.
 - Runtime config lookup order is: `--agent-config`, `FOSSIL_AGENT_CONFIG`,
@@ -123,7 +128,7 @@ The agent regression tests are deterministic and do not require Ollama,
 Codex, or network access. They cover:
 
 - AI schema initialization and self-test review loop
-- `agent note`, `agent embed`, `semantic-index`, and `retrieve`
+- `agent note`, `agent embed`, `semantic-index`, `retrieve`, and `eval-report`
 - user-config and repo `agent-config-path` resolution
 - first-use `/agentui` rendering
 - `/agent-config` JSON for effective provider/model/config state

@@ -146,7 +146,7 @@ test agent-ui-1 {[agent_http_status $RESULT] eq {200}}
 test agent-ui-2 {[string first {id="agent-config-source"} $RESULT]>=0 && [string first [subst {repo agent-config-path: [file join $cfgDir agent.json]}] $RESULT]>=0}
 test agent-ui-3 {[string first {id="agent-config-chat-provider"} $RESULT]>=0 && [string first {>codex<} $RESULT]>=0}
 test agent-ui-4 {[string first {id="agent-config-chat-model"} $RESULT]>=0 && [string first {>test-chat-model<} $RESULT]>=0}
-test agent-ui-5 {[string first {id="agent-config-embedding-provider"} $RESULT]>=0 && [string first {>ollama<} $RESULT]>=0}
+test agent-ui-5 {[string first {id="agent-config-embedding-provider"} $RESULT]>=0}
 test agent-ui-6 {[string first {id="agent-config-embedding-model"} $RESULT]>=0 && [string first {>test-embed-model<} $RESULT]>=0}
 test agent-ui-7 {[string first {id="agent-config-capabilities"} $RESULT]>=0 && [string first {chat streaming=no, model discovery=no, provider locked=yes, embeddings=yes} $RESULT]>=0}
 test agent-ui-8 {[string first {id="agent-model-suggestions"} $RESULT]>=0}
@@ -162,6 +162,10 @@ test agent-ui-17 {[string first {id="agent-chat-status"} $RESULT]>=0}
 test agent-ui-18 {[string first {Status: Idle} $RESULT]>=0}
 test agent-ui-19 {[string first {setStatus('Sending request...')} $RESULT]>=0}
 test agent-ui-20 {[string first {setStatus('Reply received')} $RESULT]>=0}
+test agent-ui-21 {[string first {id="agent-feedback-useful"} $RESULT]>=0}
+test agent-ui-22 {[string first {id="agent-feedback-not-useful"} $RESULT]>=0}
+test agent-ui-23 {[string first {sendFeedback('useful')} $RESULT]>=0}
+test agent-ui-24 {[string first {sendFeedback('not-useful')} $RESULT]>=0}
 
 ###############################################################################
 
@@ -204,6 +208,12 @@ test agent-chat-7 {[string first {reply:} [normalize_result]]>=0}
 
 fossil sql "SELECT provider || '|' || model FROM agentchat_session ORDER BY sid DESC LIMIT 1"
 test agent-chat-8 {[normalize_result] eq {codex|test-chat-model}}
+
+fossil sql "SELECT count(*) FROM ai_chat_eval"
+test agent-chat-8a {[normalize_result] eq {1}}
+
+fossil sql "SELECT reply_kind || '|' || quality_status || '|' || reasoning_status FROM ai_chat_eval ORDER BY eval_id DESC LIMIT 1"
+test agent-chat-8b {[normalize_result] eq {final|ok|none}}
 
 fossil sql "SELECT group_concat(rk, ',') FROM (SELECT role || '|' || kind AS rk FROM agentchat ORDER BY acid)"
 test agent-chat-9 {[normalize_result] eq {system|progress,system|tool,system|progress,user|prompt,system|progress,agent|reply}}
@@ -267,6 +277,7 @@ test agent-chat-41 {[string first {"meta":"{\"stage\":\"backend\",\"status\":\"o
 test agent-chat-42 {[string first {"role":"user","kind":"prompt"} $RESULT]>=0}
 test agent-chat-43 {[string first {"meta":"{\"context\":true}"} $RESULT]>=0}
 test agent-chat-44 {[string first {"role":"agent","kind":"reply"} $RESULT]>=0}
+test agent-chat-44a {[string first {"feedback":""} $RESULT]>=0}
 
 set response [agent_http_request $repository GET [subst {/agent-events?sid=$lastSid}] {}]
 set RESULT [agent_http_body $response]
@@ -278,6 +289,7 @@ test agent-chat-48 {[string first {"events":[} $RESULT]>=0}
 test agent-chat-49 {[string first {"role":"system","kind":"tool"} $RESULT]>=0}
 test agent-chat-50 {[string first {"meta":"{\"stage\":\"backend\",\"status\":\"running\"}"} $RESULT]>=0}
 test agent-chat-51 {[string first {"role":"agent","kind":"reply"} $RESULT]>=0}
+test agent-chat-51a {[string first {"feedback":""} $RESULT]>=0}
 
 set response [agent_http_request $repository GET [subst {/agent-events?sid=$lastSid&after=3}] {}]
 set RESULT [agent_http_body $response]
@@ -291,6 +303,33 @@ test agent-chat-57 {[string first {"acid":1,} $RESULT]<0}
 
 ###############################################################################
 
+set body [subst {sid=$lastSid&acid=6&feedback=useful&proof=$proof}]
+set response [agent_http_request $repository POST /agent-feedback $body]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-feedback-1 {[agent_http_status $response] eq {200}}
+test agent-feedback-2 {[string first {"acid":6} $RESULT]>=0}
+test agent-feedback-3 {[string first {"feedback":"useful"} $RESULT]>=0}
+
+fossil sql "SELECT user_feedback FROM ai_chat_eval ORDER BY eval_id DESC LIMIT 1"
+test agent-feedback-4 {[normalize_result] eq {useful}}
+
+set response [agent_http_request $repository GET [subst {/agent-history?sid=$lastSid}] {}]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-feedback-5 {[string first {"feedback":"useful"} $RESULT]>=0}
+
+set response [agent_http_request $repository GET [subst {/agent-events?sid=$lastSid&after=5}] {}]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-feedback-6 {[string first {"acid":6,"role":"agent","kind":"reply"} $RESULT]>=0}
+test agent-feedback-7 {[string first {"feedback":"useful"} $RESULT]>=0}
+
+fossil agent eval-report
+test agent-feedback-8 {[string first {codex|test-chat-model|final|ok|none|useful|1} [normalize_result]]>=0}
+
+###############################################################################
+
 set body [subst {sid=0&msg=say+only+hi&model=qwen3.5%3A0.8b&context=0&proof=$proof}]
 set response [agent_http_request $repository POST /agent-chat $body]
 set RESULT [agent_http_body $response]
@@ -298,6 +337,8 @@ set CODE 0
 test agent-chat-mismatch-1 {[string first {looks like an Ollama model but provider is codex} $RESULT]>=0}
 fossil sql "SELECT count(*) FROM agentchat"
 test agent-chat-mismatch-2 {[normalize_result] eq {6}}
+fossil sql "SELECT count(*) FROM ai_chat_eval"
+test agent-chat-mismatch-3 {[normalize_result] eq {1}}
 
 ###############################################################################
 

@@ -46,6 +46,15 @@ double ai_note_record_retrieval(
   double tierWeight
 );
 void ai_retrieval_review(int qid);
+void ai_chat_eval_record(
+  int sid,
+  int acid,
+  const char *zProvider,
+  const char *zModel,
+  const char *zKind,
+  const char *zMsg
+);
+void ai_chat_eval_feedback(int sid, int acid, const char *zFeedback);
 
 static int agent_generate_embedding(
   const char *zModel,
@@ -770,7 +779,7 @@ static void agent_chat_session_touch(
 /*
 ** Persist a single agent chat message.
 */
-static void agent_chat_save(
+static int agent_chat_save(
   int sid,
   const char *zUser,
   const char *zRole,
@@ -781,7 +790,8 @@ static void agent_chat_save(
   const char *zMsg
 ){
   const char *zTitleMsg = zMsg;
-  if( zMsg==0 || zMsg[0]==0 ) return;
+  int acid;
+  if( zMsg==0 || zMsg[0]==0 ) return 0;
   agent_chat_create_tables();
   db_multi_exec(
     "INSERT INTO agentchat(sid,mtime,xfrom,role,kind,provider,model,meta,msg)"
@@ -795,10 +805,12 @@ static void agent_chat_save(
     zMeta ? zMeta : "",
     zMsg
   );
+  acid = db_last_insert_rowid();
   if( zRole && fossil_strcmp(zRole,"system")==0 ){
     zTitleMsg = "";
   }
   agent_chat_session_touch(sid, zTitleMsg, zProvider, zModel);
+  return acid;
 }
 
 /*
@@ -813,7 +825,9 @@ static void agent_chat_save_event(
   const char *zMeta,
   const char *zMsg
 ){
-  agent_chat_save(sid, zUser, "system", zKind, zProvider, zModel, zMeta, zMsg);
+  (void)agent_chat_save(
+    sid, zUser, "system", zKind, zProvider, zModel, zMeta, zMsg
+  );
 }
 
 /*
@@ -837,6 +851,34 @@ static const char *agent_chat_session_state(int sid){
     "  ELSE coalesce(kind, role, '') END"
     " FROM agentchat WHERE sid=%d ORDER BY acid DESC LIMIT 1",
     sid
+  );
+}
+
+/*
+** Return the latest terminal agent event acid for sid, or 0 if none.
+*/
+static int agent_chat_latest_terminal_acid(int sid){
+  if( sid<=0 || !db_table_exists("repository","agentchat") ) return 0;
+  return db_int(0,
+    "SELECT acid FROM agentchat"
+    " WHERE sid=%d"
+    "   AND role='agent'"
+    "   AND kind IN ('reply','error')"
+    " ORDER BY acid DESC LIMIT 1",
+    sid
+  );
+}
+
+/*
+** True if acid is a terminal agent event for sid.
+*/
+static int agent_chat_is_terminal_acid(int sid, int acid){
+  return sid>0 && acid>0 && db_exists(
+    "SELECT 1 FROM agentchat"
+    " WHERE sid=%d AND acid=%d"
+    "   AND role='agent'"
+    "   AND kind IN ('reply','error')",
+    sid, acid
   );
 }
 
@@ -882,12 +924,24 @@ static void agent_chat_render_history(int sidCurrent){
   int nLimit = db_get_int("agent-history-count", 50);
   if( nLimit<=0 || sidCurrent<=0 ) return;
   if( !db_table_exists("repository","agentchat") ) return;
-  db_prepare(&q,
-    "SELECT role, kind, provider, model, meta, msg FROM agentchat"
-    " WHERE sid=%d"
-    " ORDER BY acid ASC LIMIT %d",
-    sidCurrent, nLimit
-  );
+  if( db_table_exists("repository","ai_chat_eval") ){
+    db_prepare(&q,
+      "SELECT c.role, c.kind, c.provider, c.model, c.meta, c.msg,"
+      "       coalesce(e.user_feedback,'')"
+      "  FROM agentchat AS c"
+      "  LEFT JOIN ai_chat_eval AS e ON e.sid=c.sid AND e.acid=c.acid"
+      " WHERE c.sid=%d"
+      " ORDER BY c.acid ASC LIMIT %d",
+      sidCurrent, nLimit
+    );
+  }else{
+    db_prepare(&q,
+      "SELECT role, kind, provider, model, meta, msg, ''"
+      " FROM agentchat WHERE sid=%d"
+      " ORDER BY acid ASC LIMIT %d",
+      sidCurrent, nLimit
+    );
+  }
   while( db_step(&q)==SQLITE_ROW ){
     const char *zRole = db_column_text(&q, 0);
     const char *zRoleLabel =
@@ -898,6 +952,7 @@ static void agent_chat_render_history(int sidCurrent){
     const char *zModel = db_column_text(&q, 3);
     const char *zMeta = db_column_text(&q, 4);
     const char *zMsg = db_column_text(&q, 5);
+    const char *zFeedback = db_column_text(&q, 6);
     @ <div style="margin-bottom:0.8em;">
     @ <b>%h(zRoleLabel):</b>
     if( zProvider && zProvider[0] ){
@@ -908,6 +963,9 @@ static void agent_chat_render_history(int sidCurrent){
     }
     if( zMeta && zMeta[0] ){
       @ <span class="dimmed">meta=%h(zMeta)</span>
+    }
+    if( zFeedback && zFeedback[0] ){
+      @ <span class="dimmed">feedback=%h(zFeedback)</span>
     }
     @ <pre style="white-space:pre-wrap;display:inline;margin:0">%h(zMsg)</pre>
     @ </div>
@@ -934,15 +992,27 @@ static void agent_emit_history_json(int sidCurrent){
      sidCurrent, zTitle, zProvider, zModel);
   if( sidCurrent>0 && db_table_exists("repository","agentchat") ){
     int first = 1;
-    db_prepare(&q,
-      "SELECT acid, role, kind, provider, model, meta, msg FROM agentchat"
-      " WHERE sid=%d"
-      " ORDER BY acid ASC",
-      sidCurrent
-    );
+    if( db_table_exists("repository","ai_chat_eval") ){
+      db_prepare(&q,
+        "SELECT c.acid, c.role, c.kind, c.provider, c.model, c.meta, c.msg,"
+        "       coalesce(e.user_feedback,'')"
+        "  FROM agentchat AS c"
+        "  LEFT JOIN ai_chat_eval AS e ON e.sid=c.sid AND e.acid=c.acid"
+        " WHERE c.sid=%d"
+        " ORDER BY c.acid ASC",
+        sidCurrent
+      );
+    }else{
+      db_prepare(&q,
+        "SELECT acid, role, kind, provider, model, meta, msg, ''"
+        " FROM agentchat WHERE sid=%d"
+        " ORDER BY acid ASC",
+        sidCurrent
+      );
+    }
     while( db_step(&q)==SQLITE_ROW ){
       CX("%s{\"acid\":%d,\"role\":%!j,\"kind\":%!j,\"provider\":%!j,"
-         "\"model\":%!j,\"meta\":%!j,\"msg\":%!j}",
+         "\"model\":%!j,\"meta\":%!j,\"msg\":%!j,\"feedback\":%!j}",
          first ? "" : ",",
          db_column_int(&q, 0),
          db_column_text(&q, 1),
@@ -950,7 +1020,8 @@ static void agent_emit_history_json(int sidCurrent){
          db_column_text(&q, 3),
          db_column_text(&q, 4),
          db_column_text(&q, 5),
-         db_column_text(&q, 6));
+         db_column_text(&q, 6),
+         db_column_text(&q, 7));
       first = 0;
     }
     db_finalize(&q);
@@ -968,15 +1039,27 @@ static void agent_emit_events_json(int sidCurrent, int afterAcid){
   int first = 1;
   CX("{\"sid\":%d,\"after\":%d,\"events\":[", sidCurrent, afterAcid);
   if( sidCurrent>0 && db_table_exists("repository","agentchat") ){
-    db_prepare(&q,
-      "SELECT acid, role, kind, provider, model, meta, msg FROM agentchat"
-      " WHERE sid=%d AND acid>%d"
-      " ORDER BY acid ASC",
-      sidCurrent, afterAcid
-    );
+    if( db_table_exists("repository","ai_chat_eval") ){
+      db_prepare(&q,
+        "SELECT c.acid, c.role, c.kind, c.provider, c.model, c.meta, c.msg,"
+        "       coalesce(e.user_feedback,'')"
+        "  FROM agentchat AS c"
+        "  LEFT JOIN ai_chat_eval AS e ON e.sid=c.sid AND e.acid=c.acid"
+        " WHERE c.sid=%d AND c.acid>%d"
+        " ORDER BY c.acid ASC",
+        sidCurrent, afterAcid
+      );
+    }else{
+      db_prepare(&q,
+        "SELECT acid, role, kind, provider, model, meta, msg, ''"
+        " FROM agentchat WHERE sid=%d AND acid>%d"
+        " ORDER BY acid ASC",
+        sidCurrent, afterAcid
+      );
+    }
     while( db_step(&q)==SQLITE_ROW ){
       CX("%s{\"acid\":%d,\"role\":%!j,\"kind\":%!j,\"provider\":%!j,"
-         "\"model\":%!j,\"meta\":%!j,\"msg\":%!j}",
+         "\"model\":%!j,\"meta\":%!j,\"msg\":%!j,\"feedback\":%!j}",
          first ? "" : ",",
          db_column_int(&q, 0),
          db_column_text(&q, 1),
@@ -984,7 +1067,8 @@ static void agent_emit_events_json(int sidCurrent, int afterAcid){
          db_column_text(&q, 3),
          db_column_text(&q, 4),
          db_column_text(&q, 5),
-         db_column_text(&q, 6));
+         db_column_text(&q, 6),
+         db_column_text(&q, 7));
       first = 0;
     }
     db_finalize(&q);
@@ -1753,6 +1837,43 @@ static void agent_retrieve_cmd(void){
 }
 
 /*
+** Print a compact report of recorded chat-evaluation rows.
+*/
+static void agent_eval_report_cmd(void){
+  Stmt q;
+  ai_require_enabled();
+  if( !db_table_exists("repository","ai_chat_eval") ){
+    return;
+  }
+  db_prepare(&q,
+    "SELECT coalesce(nullif(provider,''),'(unset)'),"
+    "       coalesce(nullif(model,''),'(unset)'),"
+    "       coalesce(nullif(reply_kind,''),'(unset)'),"
+    "       coalesce(nullif(quality_status,''),'(unset)'),"
+    "       coalesce(nullif(reasoning_status,''),'(unset)'),"
+    "       coalesce(nullif(user_feedback,''),'(none)'),"
+    "       count(*)"
+    "  FROM ai_chat_eval"
+    " GROUP BY provider, model, reply_kind, quality_status,"
+    "          reasoning_status, user_feedback"
+    " ORDER BY provider, model, reply_kind, quality_status,"
+    "          reasoning_status, user_feedback"
+  );
+  while( db_step(&q)==SQLITE_ROW ){
+    fossil_print("%s|%s|%s|%s|%s|%s|%d\n",
+      db_column_text(&q, 0),
+      db_column_text(&q, 1),
+      db_column_text(&q, 2),
+      db_column_text(&q, 3),
+      db_column_text(&q, 4),
+      db_column_text(&q, 5),
+      db_column_int(&q, 6)
+    );
+  }
+  db_finalize(&q);
+}
+
+/*
 ** COMMAND: agent
 **
 ** Usage: %fossil agent SUBCOMMAND ...
@@ -1773,6 +1894,9 @@ static void agent_retrieve_cmd(void){
 **
 **    fossil agent embed TEXT
 **       Generate and print (as hex) the embedding for TEXT.
+**
+**    fossil agent eval-report
+**       Print grouped `ai_chat_eval` summary rows.
 **
 **    fossil agent semantic-index
 **       Generate embeddings for all notes and store them in ai_vector.
@@ -1824,6 +1948,8 @@ void agent_cmd(void){
       fossil_fatal("failed to generate embedding");
     }
     blob_reset(&v);
+  }else if( fossil_strcmp(zCmd, "eval-report")==0 ){
+    agent_eval_report_cmd();
   }else if( fossil_strcmp(zCmd, "semantic-index")==0 ){
     agent_semantic_index_cmd();
   }else if( fossil_strcmp(zCmd, "wiki-sync")==0 ){
@@ -1925,6 +2051,12 @@ void agentui_page(void){
   @ <div class="forumEdit">
   @ <input type="button" class="btn" id="agent-chat-send" value="Send">
   @ </div>
+  @ <div class="forumEdit" id="agent-feedback-controls" style="margin-top:0.8em;">
+  @ <b>Feedback:</b>
+  @ <input type="button" class="btn" id="agent-feedback-useful" value="Useful" disabled>
+  @ <input type="button" class="btn" id="agent-feedback-not-useful" value="Not Useful" disabled>
+  @ <span class="dimmed" id="agent-feedback-status">No reply selected</span>
+  @ </div>
   @ <script nonce="%h(style_nonce())">
   @ (function(){
   @   var sid = %d(sidCurrent);
@@ -1935,8 +2067,13 @@ void agentui_page(void){
   @   var context = document.getElementById('agent-context');
   @   var statusBox = document.getElementById('agent-chat-status');
   @   var log = document.getElementById('agent-chat-log');
+  @   var feedbackUseful = document.getElementById('agent-feedback-useful');
+  @   var feedbackNotUseful = document.getElementById('agent-feedback-not-useful');
+  @   var feedbackStatus = document.getElementById('agent-feedback-status');
   @   var pollHandle = 0;
   @   var lastAcid = 0;
+  @   var lastReplyAcid = 0;
+  @   var lastReplyFeedback = '';
   @   var configSource = document.getElementById('agent-config-source');
   @   var cfgChatProvider = document.getElementById('agent-config-chat-provider');
   @   var cfgChatCommand = document.getElementById('agent-config-chat-command');
@@ -1955,6 +2092,17 @@ void agentui_page(void){
   @   }
   @   function setStatus(text){
   @     if(statusBox) statusBox.textContent = 'Status: ' + text;
+  @   }
+  @   function setFeedbackState(acid, feedback){
+  @     lastReplyAcid = acid || 0;
+  @     lastReplyFeedback = feedback || '';
+  @     if(feedbackUseful) feedbackUseful.disabled = !lastReplyAcid;
+  @     if(feedbackNotUseful) feedbackNotUseful.disabled = !lastReplyAcid;
+  @     if(feedbackStatus){
+  @       feedbackStatus.textContent = lastReplyAcid
+  @         ? ('Current: ' + (lastReplyFeedback || 'none'))
+  @         : 'No reply selected';
+  @     }
   @   }
   @   function showValue(node, value, fallback){
   @     if(node) node.textContent = value && value.length ? value : fallback;
@@ -2020,6 +2168,7 @@ void agentui_page(void){
   @     var i, msg, div, html;
   @     log.innerHTML = '';
   @     lastAcid = 0;
+  @     setFeedbackState(0, '');
   @     setStatus('Idle');
   @     if(!data || !data.messages) return;
   @     for(i=0; i<data.messages.length; i++){
@@ -2044,6 +2193,9 @@ void agentui_page(void){
   @     if(msg.meta){
   @       html += ' <span class="dimmed">meta=' + esc(msg.meta) + '</span>';
   @     }
+  @     if(msg.feedback){
+  @       html += ' <span class="dimmed">feedback=' + esc(msg.feedback) + '</span>';
+  @     }
   @     html += ' <pre style="white-space:pre-wrap;display:inline;margin:0">'
   @           + esc(msg.msg || '') + '</pre>';
   @     div.innerHTML = html;
@@ -2055,9 +2207,38 @@ void agentui_page(void){
   @       setStatus(msg.msg);
   @     }else if(msg.role==='agent' && msg.kind==='reply'){
   @       setStatus('Reply received');
+  @       setFeedbackState(msg.acid || 0, msg.feedback || '');
   @     }else if(msg.role==='agent' && msg.kind==='error'){
   @       setStatus('Reply failed');
+  @       setFeedbackState(msg.acid || 0, msg.feedback || '');
   @     }
+  @   }
+  @   function sendFeedback(value){
+  @     if(!sid || !lastReplyAcid) return;
+  @     if(feedbackStatus) feedbackStatus.textContent = 'Saving ' + value + '...';
+  @     fetch('agent-feedback', {
+  @       method: 'POST',
+  @       headers: {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'},
+  @       body: new URLSearchParams({sid: sid, acid: lastReplyAcid, feedback: value})
+  @     }).then(function(r){
+  @       return r.text().then(function(text){
+  @         var data;
+  @         try{
+  @           data = JSON.parse(text);
+  @         }catch(e){
+  @           throw new Error(text ? text.slice(0, 240) : ('HTTP ' + r.status));
+  @         }
+  @         if(!r.ok){
+  @           throw new Error(data.error || ('HTTP ' + r.status));
+  @         }
+  @         return data;
+  @       });
+  @     }).then(function(data){
+  @       setFeedbackState(data.acid || lastReplyAcid, data.feedback || value);
+  @       return refreshHistory();
+  @     }).catch(function(err){
+  @       if(feedbackStatus) feedbackStatus.textContent = 'Feedback failed: ' + err;
+  @     });
   @   }
   @   function refreshHistory(){
   @     return fetch('agent-history?sid='+encodeURIComponent(sid)).then(function(r){
@@ -2146,6 +2327,12 @@ void agentui_page(void){
   @   input.addEventListener('keydown', function(e){
   @     if((e.ctrlKey || e.metaKey) && e.key==='Enter') send.click();
   @   });
+  @   if(feedbackUseful){
+  @     feedbackUseful.addEventListener('click', function(){ sendFeedback('useful'); });
+  @   }
+  @   if(feedbackNotUseful){
+  @     feedbackNotUseful.addEventListener('click', function(){ sendFeedback('not-useful'); });
+  @   }
   @   window.addEventListener('beforeunload', function(){
   @     if(pollHandle) clearInterval(pollHandle);
   @   });
@@ -2230,6 +2417,58 @@ void agent_events_page(void){
 }
 
 /*
+** WEBPAGE: agent-feedback
+**
+** JSON endpoint to record user feedback for the latest terminal agent reply
+** in a session, or for a specific acid if provided.
+**
+** Parameters:
+**
+**    sid=SID
+**    acid=ACID      Optional target reply/error row
+**    feedback=TEXT  One of: useful, not-useful
+*/
+void agent_feedback_page(void){
+  int sid;
+  int acid;
+  const char *zFeedback;
+
+  login_check_credentials();
+  cgi_set_content_type("application/json");
+  if( !g.perm.Read ){
+    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
+    return;
+  }
+  sid = atoi(PD("sid","0"));
+  if( !agent_chat_session_exists(sid) ){
+    CX("{\"error\":%!j}\n", "missing or unknown sid parameter");
+    return;
+  }
+  acid = atoi(PD("acid","0"));
+  if( acid<=0 ) acid = agent_chat_latest_terminal_acid(sid);
+  if( !agent_chat_is_terminal_acid(sid, acid) ){
+    CX("{\"error\":%!j}\n", "missing or invalid terminal reply target");
+    return;
+  }
+  if( !db_table_exists("repository","ai_chat_eval")
+   || !db_exists("SELECT 1 FROM ai_chat_eval WHERE sid=%d AND acid=%d", sid, acid) ){
+    CX("{\"error\":%!j}\n", "no evaluation row found for reply target");
+    return;
+  }
+  zFeedback = PD("feedback","");
+  if( fossil_strcmp(zFeedback, "useful")!=0
+   && fossil_strcmp(zFeedback, "not-useful")!=0 ){
+    CX("{\"error\":%!j}\n", "feedback must be 'useful' or 'not-useful'");
+    return;
+  }
+  db_begin_write();
+  db_unprotect(PROTECT_READONLY);
+  ai_chat_eval_feedback(sid, acid, zFeedback);
+  db_end_transaction(0);
+  CX("{\"sid\":%d,\"acid\":%d,\"feedback\":%!j}\n", sid, acid, zFeedback);
+}
+
+/*
 ** WEBPAGE: agent-chat
 **
 ** JSON endpoint for the configured agent chat UI.
@@ -2243,6 +2482,7 @@ void agent_chat_page(void){
   const char *zProvider;
   const char *zUser;
   int sid;
+  int acid;
   int rc;
   char *zContextMsg = 0;
   char *zToolMeta = 0;
@@ -2306,8 +2546,8 @@ void agent_chat_page(void){
     "{\"stage\":\"backend\",\"status\":\"running\"}",
     "Waiting for backend reply"
   );
-  agent_chat_save(sid, zUser, "user", "prompt", zProvider, zModel,
-                  blob_str(&promptMeta), PD("msg",""));
+  (void)agent_chat_save(sid, zUser, "user", "prompt", zProvider, zModel,
+                        blob_str(&promptMeta), PD("msg",""));
   rc = agent_run_backend(zProvider, zModel, zMsg, &reply, &err);
   if( rc==0 ){
     agent_chat_save_event(
@@ -2315,8 +2555,9 @@ void agent_chat_page(void){
       "{\"stage\":\"backend\",\"status\":\"ok\"}",
       "Backend reply received"
     );
-    agent_chat_save(sid, zUser, "agent", "reply", zProvider, zModel, "",
-                    blob_str(&reply));
+    acid = agent_chat_save(sid, zUser, "agent", "reply", zProvider, zModel, "",
+                           blob_str(&reply));
+    ai_chat_eval_record(sid, acid, zProvider, zModel, "reply", blob_str(&reply));
     db_end_transaction(0);
     CX("{\"sid\":%d,\"provider\":%!j,\"model\":%!j,\"reply\":%!j}\n",
       sid, zProvider, zModel, blob_str(&reply));
@@ -2328,7 +2569,8 @@ void agent_chat_page(void){
       "{\"stage\":\"backend\",\"status\":\"error\"}",
       "Backend reply failed"
     );
-    agent_chat_save(sid, zUser, "agent", "error", zProvider, zModel, "", zErr);
+    acid = agent_chat_save(sid, zUser, "agent", "error", zProvider, zModel, "", zErr);
+    ai_chat_eval_record(sid, acid, zProvider, zModel, "error", zErr);
     db_end_transaction(0);
     CX("{\"sid\":%d,\"provider\":%!j,\"model\":%!j,\"error\":%!j}\n",
       sid, zProvider, zModel, zErr);
