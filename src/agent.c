@@ -859,6 +859,48 @@ static void agent_chat_render_history(int sidCurrent){
 }
 
 /*
+** Emit a JSON object describing a chat session and its stored messages.
+*/
+static void agent_emit_history_json(int sidCurrent){
+  Stmt q;
+  const char *zTitle = "New Chat";
+  const char *zProvider = agent_chat_session_provider(sidCurrent, "");
+  const char *zModel = agent_chat_session_model(sidCurrent, "");
+  if( sidCurrent>0 && db_table_exists("repository","agentchat_session") ){
+    zTitle = db_text("New Chat",
+      "SELECT coalesce(nullif(title,''),'New Chat') FROM agentchat_session"
+      " WHERE sid=%d",
+      sidCurrent
+    );
+  }
+  CX("{\"sid\":%d,\"title\":%!j,\"provider\":%!j,\"model\":%!j,\"messages\":[",
+     sidCurrent, zTitle, zProvider, zModel);
+  if( sidCurrent>0 && db_table_exists("repository","agentchat") ){
+    int first = 1;
+    db_prepare(&q,
+      "SELECT acid, role, kind, provider, model, msg FROM agentchat"
+      " WHERE sid=%d"
+      " ORDER BY acid ASC",
+      sidCurrent
+    );
+    while( db_step(&q)==SQLITE_ROW ){
+      CX("%s{\"acid\":%d,\"role\":%!j,\"kind\":%!j,\"provider\":%!j,"
+         "\"model\":%!j,\"msg\":%!j}",
+         first ? "" : ",",
+         db_column_int(&q, 0),
+         db_column_text(&q, 1),
+         db_column_text(&q, 2),
+         db_column_text(&q, 3),
+         db_column_text(&q, 4),
+         db_column_text(&q, 5));
+      first = 0;
+    }
+    db_finalize(&q);
+  }
+  CX("]}\n");
+}
+
+/*
 ** Return the most recent non-empty model recorded for sid, or zDefault.
 */
 static const char *agent_chat_session_model(int sid, const char *zDefault){
@@ -1947,6 +1989,28 @@ void agent_config_page(void){
   sidCurrent = agent_chat_session_exists(sidRequested) ? sidRequested : 0;
   cgi_set_content_type("application/json");
   agent_emit_config_json(sidCurrent);
+}
+
+/*
+** WEBPAGE: agent-history
+**
+** JSON description of a stored chat session and its ordered messages.
+** Query parameter: sid.
+*/
+void agent_history_page(void){
+  int sidRequested;
+  int sidCurrent;
+
+  login_check_credentials();
+  if( !g.perm.Read ){
+    cgi_set_content_type("application/json");
+    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
+    return;
+  }
+  sidRequested = atoi(PD("sid","0"));
+  sidCurrent = agent_chat_session_exists(sidRequested) ? sidRequested : 0;
+  cgi_set_content_type("application/json");
+  agent_emit_history_json(sidCurrent);
 }
 
 /*

@@ -215,6 +215,18 @@ test agent-chat-14 {[agent_http_status $response] eq {200}}
 test agent-chat-15 {[string first {"chat_provider":"codex"} $RESULT]>=0}
 test agent-chat-16 {[string first {"chat_model":"test-chat-model"} $RESULT]>=0}
 
+set response [agent_http_request $repository GET [subst {/agent-history?sid=$lastSid}] {}]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-chat-17 {[agent_http_status $response] eq {200}}
+test agent-chat-18 {[string first {"sid":} $RESULT]>=0}
+test agent-chat-19 {[string first {"title":"say only hi"} $RESULT]>=0}
+test agent-chat-20 {[string first {"provider":"codex"} $RESULT]>=0}
+test agent-chat-21 {[string first {"model":"test-chat-model"} $RESULT]>=0}
+test agent-chat-22 {[string first {"messages":[} $RESULT]>=0}
+test agent-chat-23 {[string first {"role":"user","kind":"prompt"} $RESULT]>=0}
+test agent-chat-24 {[string first {"role":"agent","kind":"reply"} $RESULT]>=0}
+
 ###############################################################################
 
 set body [subst {sid=0&msg=say+only+hi&model=qwen3.5%3A0.8b&context=0&proof=$proof}]
