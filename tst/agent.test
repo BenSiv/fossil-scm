@@ -195,21 +195,25 @@ test agent-chat-7 {[string first {reply:} [normalize_result]]>=0}
 fossil sql "SELECT provider || '|' || model FROM agentchat_session ORDER BY sid DESC LIMIT 1"
 test agent-chat-8 {[normalize_result] eq {codex|test-chat-model}}
 
+fossil sql "SELECT group_concat(rk, ',') FROM (SELECT role || '|' || kind AS rk FROM agentchat ORDER BY acid)"
+test agent-chat-9 {[normalize_result] eq {user|prompt,agent|reply}}
+
 fossil sql "SELECT sid FROM agentchat_session ORDER BY sid DESC LIMIT 1"
 set lastSid [normalize_result]
 set response [agent_http_request $repository GET [subst {/agentui?sid=$lastSid}] {}]
 set RESULT $response
 set CODE 0
-test agent-chat-9 {[agent_http_status $RESULT] eq {200}}
-test agent-chat-10 {[string first {value="codex"} $RESULT]>=0}
-test agent-chat-11 {[string first {value="test-chat-model"} $RESULT]>=0}
+test agent-chat-10 {[agent_http_status $RESULT] eq {200}}
+test agent-chat-11 {[string first {value="codex"} $RESULT]>=0}
+test agent-chat-12 {[string first {value="test-chat-model"} $RESULT]>=0}
+test agent-chat-13 {[string first {{reply}} $RESULT]>=0}
 
 set response [agent_http_request $repository GET [subst {/agent-config?sid=$lastSid}] {}]
 set RESULT [agent_http_body $response]
 set CODE 0
-test agent-chat-12 {[agent_http_status $response] eq {200}}
-test agent-chat-13 {[string first {"chat_provider":"codex"} $RESULT]>=0}
-test agent-chat-14 {[string first {"chat_model":"test-chat-model"} $RESULT]>=0}
+test agent-chat-14 {[agent_http_status $response] eq {200}}
+test agent-chat-15 {[string first {"chat_provider":"codex"} $RESULT]>=0}
+test agent-chat-16 {[string first {"chat_model":"test-chat-model"} $RESULT]>=0}
 
 ###############################################################################
 

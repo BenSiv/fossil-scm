@@ -75,6 +75,8 @@ Notes:
   embeddings are currently available.
 - `/agent-config` now also includes static provider choices and model
   suggestions so `/agentui` can populate controls from server-declared data.
+- chat rows now persist a structured `kind` classification such as `prompt`,
+  `reply`, or `error`, which is the first step toward structured chat events.
 - Runtime config lookup order is: `--agent-config`, `FOSSIL_AGENT_CONFIG`,
   repo setting `agent-config-path`, user config
   `${XDG_CONFIG_HOME:-$HOME/.config}/fossil/ai-agent.json`, then checkout-local
@@ -113,6 +115,7 @@ Codex, or network access. They cover:
 - `/agent-config` JSON for effective provider/model/config state
 - `/agent-config` capability flags for the active backend
 - `/agent-config` provider choices and model suggestions
+- structured chat event kinds in `agentchat`
 - first-use `/agent-chat` session creation and message persistence
 - effective chat and embedding model display in `/agentui`
 - provider/model persistence across reopened chat sessions
