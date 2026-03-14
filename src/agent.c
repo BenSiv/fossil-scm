@@ -393,6 +393,30 @@ static const char *agent_embedding_template(void){
 }
 
 /*
+** Return non-zero if the current embedding configuration is usable for
+** embedding generation.
+*/
+static int agent_embedding_is_available(void){
+  const char *zProvider = agent_embedding_provider();
+  const char *zModel = agent_embedding_model();
+  const char *zCmd = agent_embedding_template();
+  if( zModel==0 || zModel[0]==0 ) return 0;
+  if( zCmd && zCmd[0] ) return 1;
+  return zProvider && fossil_strcmp(zProvider, "ollama")==0;
+}
+
+/*
+** Return non-zero if the provider name is one of Fossil's built-in
+** compatibility backends.
+*/
+static int agent_provider_is_known(const char *zProvider){
+  return zProvider
+      && (fossil_strcmp(zProvider, "codex")==0
+       || fossil_strcmp(zProvider, "ollama")==0
+       || fossil_strcmp(zProvider, "custom")==0);
+}
+
+/*
 ** Emit a JSON object describing the effective chat and embedding config for
 ** sidCurrent. If sidCurrent refers to an existing session, chat provider/model
 ** reflect that session rather than the current default.
@@ -409,11 +433,25 @@ static void agent_emit_config_json(int sidCurrent){
   const char *zCmd = agent_command_template();
   const char *zEmbedCmd = agent_embedding_template();
   char *zSource = agent_config_source();
+  int chatProviderLocked = 1;
+  int chatSupportsStreaming = 0;
+  int chatSupportsModelDiscovery = 0;
+  int embeddingAvailable = agent_embedding_is_available();
+  int embeddingSupportsModelDiscovery = 0;
+  int chatProviderKnown = agent_provider_is_known(zChatProvider);
+  int embeddingProviderKnown = agent_provider_is_known(zEmbedProvider);
   CX("{\"sid\":%d,\"source\":%!j,\"chat_provider\":%!j,\"chat_command\":%!j,"
      "\"chat_model\":%!j,\"embedding_provider\":%!j,"
-     "\"embedding_command\":%!j,\"embedding_model\":%!j}\n",
+     "\"embedding_command\":%!j,\"embedding_model\":%!j,"
+     "\"chat_provider_locked\":%d,\"chat_supports_streaming\":%d,"
+     "\"chat_supports_model_discovery\":%d,\"embedding_available\":%d,"
+     "\"embedding_supports_model_discovery\":%d,"
+     "\"chat_provider_known\":%d,\"embedding_provider_known\":%d}\n",
      sidCurrent, zSource, zChatProvider, zCmd, zChatModel,
-     zEmbedProvider, zEmbedCmd, zEmbedModel);
+     zEmbedProvider, zEmbedCmd, zEmbedModel,
+     chatProviderLocked, chatSupportsStreaming, chatSupportsModelDiscovery,
+     embeddingAvailable, embeddingSupportsModelDiscovery,
+     chatProviderKnown, embeddingProviderKnown);
   fossil_free(zSource);
 }
 
@@ -1614,7 +1652,11 @@ void agentui_page(void){
   @ chat model: <span id="agent-config-chat-model">%h(zModel && zModel[0] ? zModel : "(unset)")</span><br>
   @ embedding provider: <span id="agent-config-embedding-provider">%h(zEmbedProvider)</span><br>
   @ embedding command: <span id="agent-config-embedding-command">%h(zEmbedCmd && zEmbedCmd[0] ? zEmbedCmd : "(builtin/default)")</span><br>
-  @ embedding model: <span id="agent-config-embedding-model">%h(zEmbedModel && zEmbedModel[0] ? zEmbedModel : "(unset)")</span>
+  @ embedding model: <span id="agent-config-embedding-model">%h(zEmbedModel && zEmbedModel[0] ? zEmbedModel : "(unset)")</span><br>
+  @ capabilities:
+  @ <span id="agent-config-capabilities">
+  @ chat streaming=no, model discovery=no, provider locked=yes, embeddings=%s(agent_embedding_is_available() ? "yes" : "no")
+  @ </span>
   @ </div>
   @ <div style="display:grid;grid-template-columns:minmax(12em,16em) 1fr;gap:1em;">
   @ <div>
@@ -1664,6 +1706,10 @@ void agentui_page(void){
   @   var cfgEmbedProvider = document.getElementById('agent-config-embedding-provider');
   @   var cfgEmbedCommand = document.getElementById('agent-config-embedding-command');
   @   var cfgEmbedModel = document.getElementById('agent-config-embedding-model');
+  @   var cfgCapabilities = document.getElementById('agent-config-capabilities');
+  @   function yesNo(v){
+  @     return v ? 'yes' : 'no';
+  @   }
   @   function showValue(node, value, fallback){
   @     if(node) node.textContent = value && value.length ? value : fallback;
   @   }
@@ -1684,6 +1730,13 @@ void agentui_page(void){
   @     showValue(cfgEmbedProvider, data.embedding_provider, '(unset)');
   @     showValue(cfgEmbedCommand, data.embedding_command, '(builtin/default)');
   @     showValue(cfgEmbedModel, data.embedding_model, '(unset)');
+  @     if(cfgCapabilities){
+  @       cfgCapabilities.textContent =
+  @         'chat streaming=' + yesNo(data.chat_supports_streaming)
+  @         + ', model discovery=' + yesNo(data.chat_supports_model_discovery)
+  @         + ', provider locked=' + yesNo(data.chat_provider_locked)
+  @         + ', embeddings=' + yesNo(data.embedding_available);
+  @     }
   @   }
   @   function addMsg(role, text){
   @     var div = document.createElement('div');
