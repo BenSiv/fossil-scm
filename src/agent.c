@@ -52,6 +52,8 @@ static int agent_generate_embedding(
   const char *zText,
   Blob *pOut
 );
+static const char *agent_chat_session_model(int sid, const char *zDefault);
+static const char *agent_chat_session_provider(int sid, const char *zDefault);
 static const char *agent_command_template(void);
 static const char *agent_embedding_template(void);
 
@@ -388,6 +390,31 @@ static const char *agent_embedding_template(void){
   fossil_free(zCached);
   zCached = agent_config_get("embedding_command");
   return zCached ? zCached : db_get("agent-embedding-command", "");
+}
+
+/*
+** Emit a JSON object describing the effective chat and embedding config for
+** sidCurrent. If sidCurrent refers to an existing session, chat provider/model
+** reflect that session rather than the current default.
+*/
+static void agent_emit_config_json(int sidCurrent){
+  const char *zChatProvider = agent_chat_session_provider(
+    sidCurrent, agent_chat_provider()
+  );
+  const char *zChatModel = agent_chat_session_model(
+    sidCurrent, agent_default_model()
+  );
+  const char *zEmbedProvider = agent_embedding_provider();
+  const char *zEmbedModel = agent_embedding_model();
+  const char *zCmd = agent_command_template();
+  const char *zEmbedCmd = agent_embedding_template();
+  char *zSource = agent_config_source();
+  CX("{\"sid\":%d,\"source\":%!j,\"chat_provider\":%!j,\"chat_command\":%!j,"
+     "\"chat_model\":%!j,\"embedding_provider\":%!j,"
+     "\"embedding_command\":%!j,\"embedding_model\":%!j}\n",
+     sidCurrent, zSource, zChatProvider, zCmd, zChatModel,
+     zEmbedProvider, zEmbedCmd, zEmbedModel);
+  fossil_free(zSource);
 }
 
 /*
@@ -1581,13 +1608,13 @@ void agentui_page(void){
   @ settings.</p>
   @ <div style="border:1px solid #888;padding:0.6em;margin:0 0 1em 0;background:rgba(127,127,127,0.05);">
   @ <b>Effective config</b><br>
-  @ source: %h(zConfigSource)<br>
-  @ chat provider: %h(zProvider)<br>
-  @ chat command: %h(zCmd)<br>
-  @ chat model: %h(zModel && zModel[0] ? zModel : "(unset)")<br>
-  @ embedding provider: %h(zEmbedProvider)<br>
-  @ embedding command: %h(zEmbedCmd && zEmbedCmd[0] ? zEmbedCmd : "(builtin/default)")<br>
-  @ embedding model: %h(zEmbedModel && zEmbedModel[0] ? zEmbedModel : "(unset)")
+  @ source: <span id="agent-config-source">%h(zConfigSource)</span><br>
+  @ chat provider: <span id="agent-config-chat-provider">%h(zProvider)</span><br>
+  @ chat command: <span id="agent-config-chat-command">%h(zCmd)</span><br>
+  @ chat model: <span id="agent-config-chat-model">%h(zModel && zModel[0] ? zModel : "(unset)")</span><br>
+  @ embedding provider: <span id="agent-config-embedding-provider">%h(zEmbedProvider)</span><br>
+  @ embedding command: <span id="agent-config-embedding-command">%h(zEmbedCmd && zEmbedCmd[0] ? zEmbedCmd : "(builtin/default)")</span><br>
+  @ embedding model: <span id="agent-config-embedding-model">%h(zEmbedModel && zEmbedModel[0] ? zEmbedModel : "(unset)")</span>
   @ </div>
   @ <div style="display:grid;grid-template-columns:minmax(12em,16em) 1fr;gap:1em;">
   @ <div>
@@ -1630,6 +1657,34 @@ void agentui_page(void){
   @   var model = document.getElementById('agent-model');
   @   var context = document.getElementById('agent-context');
   @   var log = document.getElementById('agent-chat-log');
+  @   var configSource = document.getElementById('agent-config-source');
+  @   var cfgChatProvider = document.getElementById('agent-config-chat-provider');
+  @   var cfgChatCommand = document.getElementById('agent-config-chat-command');
+  @   var cfgChatModel = document.getElementById('agent-config-chat-model');
+  @   var cfgEmbedProvider = document.getElementById('agent-config-embedding-provider');
+  @   var cfgEmbedCommand = document.getElementById('agent-config-embedding-command');
+  @   var cfgEmbedModel = document.getElementById('agent-config-embedding-model');
+  @   function showValue(node, value, fallback){
+  @     if(node) node.textContent = value && value.length ? value : fallback;
+  @   }
+  @   function applyConfig(data){
+  @     if(data.chat_provider){
+  @       provider.innerHTML = '';
+  @       var opt = document.createElement('option');
+  @       opt.value = data.chat_provider;
+  @       opt.textContent = data.chat_provider;
+  @       opt.selected = true;
+  @       provider.appendChild(opt);
+  @     }
+  @     if(data.chat_model!==undefined){ model.value = data.chat_model || ''; }
+  @     showValue(configSource, data.source, '(unknown)');
+  @     showValue(cfgChatProvider, data.chat_provider, '(unset)');
+  @     showValue(cfgChatCommand, data.chat_command, '(unset)');
+  @     showValue(cfgChatModel, data.chat_model, '(unset)');
+  @     showValue(cfgEmbedProvider, data.embedding_provider, '(unset)');
+  @     showValue(cfgEmbedCommand, data.embedding_command, '(builtin/default)');
+  @     showValue(cfgEmbedModel, data.embedding_model, '(unset)');
+  @   }
   @   function addMsg(role, text){
   @     var div = document.createElement('div');
   @     div.style.marginBottom = '0.8em';
@@ -1642,6 +1697,11 @@ void agentui_page(void){
   @     log.scrollTop = log.scrollHeight;
   @   }
   @   log.scrollTop = log.scrollHeight;
+  @   fetch('agent-config?sid='+encodeURIComponent(sid)).then(function(r){
+  @     return r.json();
+  @   }).then(function(data){
+  @     applyConfig(data);
+  @   }).catch(function(){});
   @   send.addEventListener('click', function(){
   @     var msg = input.value.trim();
   @     if(!msg) return;
@@ -1666,8 +1726,9 @@ void agentui_page(void){
   @       });
   @     }).then(function(data){
   @       sid = data.sid || sid;
-  @       if(data.provider){ provider.value = data.provider; }
-  @       if(data.model){ model.value = data.model; }
+  @       if(data.provider || data.model){
+  @         applyConfig({chat_provider: data.provider, chat_model: data.model});
+  @       }
   @       addMsg('Agent', data.reply || data.error || '(no reply)');
   @     }).catch(function(err){
   @       addMsg('Agent', 'Request failed: ' + err);
@@ -1682,6 +1743,28 @@ void agentui_page(void){
   @ </div>
   fossil_free(zConfigSource);
   style_finish_page();
+}
+
+/*
+** WEBPAGE: agent-config
+**
+** JSON description of the effective chat and embedding configuration used by
+** /agentui. Optional query parameter: sid.
+*/
+void agent_config_page(void){
+  int sidRequested;
+  int sidCurrent;
+
+  login_check_credentials();
+  if( !g.perm.Read ){
+    cgi_set_content_type("application/json");
+    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
+    return;
+  }
+  sidRequested = atoi(PD("sid","0"));
+  sidCurrent = agent_chat_session_exists(sidRequested) ? sidRequested : 0;
+  cgi_set_content_type("application/json");
+  agent_emit_config_json(sidCurrent);
 }
 
 /*

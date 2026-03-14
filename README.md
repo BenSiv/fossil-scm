@@ -68,6 +68,8 @@ Notes:
   with `model=auto`.
 - `/agentui` stores the effective provider/model with each chat session and
   restores that pair when an existing session is reopened.
+- `/agent-config` exposes the effective chat and embedding config as JSON for
+  `/agentui` and tests.
 - Runtime config lookup order is: `--agent-config`, `FOSSIL_AGENT_CONFIG`,
   repo setting `agent-config-path`, user config
   `${XDG_CONFIG_HOME:-$HOME/.config}/fossil/ai-agent.json`, then checkout-local
@@ -103,6 +105,7 @@ Codex, or network access. They cover:
 - `agent note`, `agent embed`, `semantic-index`, and `retrieve`
 - user-config and repo `agent-config-path` resolution
 - first-use `/agentui` rendering
+- `/agent-config` JSON for effective provider/model/config state
 - first-use `/agent-chat` session creation and message persistence
 - effective chat and embedding model display in `/agentui`
 - provider/model persistence across reopened chat sessions

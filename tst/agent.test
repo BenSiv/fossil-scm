@@ -143,11 +143,22 @@ set response [agent_http_request $repository GET /agentui {}]
 set RESULT $response
 set CODE 0
 test agent-ui-1 {[agent_http_status $RESULT] eq {200}}
-test agent-ui-2 {[string first [subst {source: repo agent-config-path: [file join $cfgDir agent.json]}] $RESULT]>=0}
-test agent-ui-3 {[string first {chat provider: codex} $RESULT]>=0}
-test agent-ui-4 {[string first {chat model: test-chat-model} $RESULT]>=0}
-test agent-ui-5 {[string first {embedding provider: ollama} $RESULT]>=0}
-test agent-ui-6 {[string first {embedding model: test-embed-model} $RESULT]>=0}
+test agent-ui-2 {[string first {id="agent-config-source"} $RESULT]>=0 && [string first [subst {repo agent-config-path: [file join $cfgDir agent.json]}] $RESULT]>=0}
+test agent-ui-3 {[string first {id="agent-config-chat-provider"} $RESULT]>=0 && [string first {>codex<} $RESULT]>=0}
+test agent-ui-4 {[string first {id="agent-config-chat-model"} $RESULT]>=0 && [string first {>test-chat-model<} $RESULT]>=0}
+test agent-ui-5 {[string first {id="agent-config-embedding-provider"} $RESULT]>=0 && [string first {>ollama<} $RESULT]>=0}
+test agent-ui-6 {[string first {id="agent-config-embedding-model"} $RESULT]>=0 && [string first {>test-embed-model<} $RESULT]>=0}
+
+###############################################################################
+
+set response [agent_http_request $repository GET /agent-config {}]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-config-1 {[agent_http_status $response] eq {200}}
+test agent-config-2 {[string first {"chat_provider":"codex"} $RESULT]>=0}
+test agent-config-3 {[string first {"chat_model":"test-chat-model"} $RESULT]>=0}
+test agent-config-4 {[string first {"embedding_provider":"ollama"} $RESULT]>=0}
+test agent-config-5 {[string first {"embedding_model":"test-embed-model"} $RESULT]>=0}
 
 ###############################################################################
 
@@ -180,6 +191,13 @@ set CODE 0
 test agent-chat-9 {[agent_http_status $RESULT] eq {200}}
 test agent-chat-10 {[string first {value="codex"} $RESULT]>=0}
 test agent-chat-11 {[string first {value="test-chat-model"} $RESULT]>=0}
+
+set response [agent_http_request $repository GET [subst {/agent-config?sid=$lastSid}] {}]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-chat-12 {[agent_http_status $response] eq {200}}
+test agent-chat-13 {[string first {"chat_provider":"codex"} $RESULT]>=0}
+test agent-chat-14 {[string first {"chat_model":"test-chat-model"} $RESULT]>=0}
 
 ###############################################################################
 
