@@ -1857,6 +1857,11 @@ void agentui_page(void){
   @   var cfgEmbedCommand = document.getElementById('agent-config-embedding-command');
   @   var cfgEmbedModel = document.getElementById('agent-config-embedding-model');
   @   var cfgCapabilities = document.getElementById('agent-config-capabilities');
+  @   function esc(text){
+  @     return (text || '').replace(/[&<>]/g, function(c){
+  @       return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];
+  @     });
+  @   }
   @   function yesNo(v){
   @     return v ? 'yes' : 'no';
   @   }
@@ -1920,13 +1925,45 @@ void agentui_page(void){
   @         + ', embeddings=' + yesNo(data.embedding_available);
   @     }
   @   }
+  @   function renderHistory(data){
+  @     var i, msg, div, html;
+  @     log.innerHTML = '';
+  @     if(!data || !data.messages) return;
+  @     for(i=0; i<data.messages.length; i++){
+  @       msg = data.messages[i];
+  @       div = document.createElement('div');
+  @       div.style.marginBottom = '0.8em';
+  @       html = '<b>' + (msg.role==='user' ? 'You' : 'Agent') + ':</b>';
+  @       if(msg.provider){
+  @         html += ' <span class="dimmed">[' + esc(msg.provider)
+  @              + (msg.model ? ' / ' + esc(msg.model) : '') + ']</span>';
+  @       }
+  @       if(msg.kind){
+  @         html += ' <span class="dimmed">{' + esc(msg.kind) + '}</span>';
+  @       }
+  @       if(msg.meta){
+  @         html += ' <span class="dimmed">meta=' + esc(msg.meta) + '</span>';
+  @       }
+  @       html += ' <pre style="white-space:pre-wrap;display:inline;margin:0">'
+  @             + esc(msg.msg || '') + '</pre>';
+  @       div.innerHTML = html;
+  @       log.appendChild(div);
+  @     }
+  @     log.scrollTop = log.scrollHeight;
+  @   }
+  @   function refreshHistory(){
+  @     return fetch('agent-history?sid='+encodeURIComponent(sid)).then(function(r){
+  @       return r.json();
+  @     }).then(function(data){
+  @       renderHistory(data);
+  @       return data;
+  @     });
+  @   }
   @   function addMsg(role, text){
   @     var div = document.createElement('div');
   @     div.style.marginBottom = '0.8em';
   @     div.innerHTML = '<b>'+role+':</b> <pre style="white-space:pre-wrap;display:inline;margin:0">'
-  @       + text.replace(/[&<>]/g, function(c){
-  @           return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];
-  @         })
+  @       + esc(text)
   @       + '</pre>';
   @     log.appendChild(div);
   @     log.scrollTop = log.scrollHeight;
@@ -1937,6 +1974,7 @@ void agentui_page(void){
   @   }).then(function(data){
   @     applyConfig(data);
   @   }).catch(function(){});
+  @   refreshHistory().catch(function(){});
   @   send.addEventListener('click', function(){
   @     var msg = input.value.trim();
   @     if(!msg) return;
@@ -1964,7 +2002,9 @@ void agentui_page(void){
   @       if(data.provider || data.model){
   @         applyConfig({chat_provider: data.provider, chat_model: data.model});
   @       }
-  @       addMsg('Agent', data.reply || data.error || '(no reply)');
+  @       return refreshHistory().catch(function(){
+  @         addMsg('Agent', data.reply || data.error || '(no reply)');
+  @       });
   @     }).catch(function(err){
   @       addMsg('Agent', 'Request failed: ' + err);
   @     });

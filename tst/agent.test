@@ -152,6 +152,7 @@ test agent-ui-7 {[string first {id="agent-config-capabilities"} $RESULT]>=0 && [
 test agent-ui-8 {[string first {id="agent-model-suggestions"} $RESULT]>=0}
 test agent-ui-9 {[string first {<option value="codex" selected>} $RESULT]>=0}
 test agent-ui-10 {[string first {<select id="agent-provider" disabled>} $RESULT]>=0}
+test agent-ui-11 {[string first {fetch('agent-history?sid='+encodeURIComponent(sid))} $RESULT]>=0}
 
 ###############################################################################
 

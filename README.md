@@ -78,7 +78,8 @@ Notes:
 - chat rows now persist a structured `kind` classification such as `prompt`,
   `reply`, or `error`, which is the first step toward structured chat events.
 - `/agent-history` exposes a stored chat session and its ordered messages as
-  JSON, providing a structured read path for future UI work.
+  JSON, providing a structured read path for future UI work. `/agentui` now
+  uses this endpoint for browser-side history rendering.
 - chat rows now also support a lightweight `meta` field for structured event
   metadata such as whether context assembly was enabled for a prompt.
 - Runtime config lookup order is: `--agent-config`, `FOSSIL_AGENT_CONFIG`,
