@@ -625,6 +625,7 @@ static const char zAgentChatSchema[] =
 @   kind TEXT,
 @   provider TEXT,
 @   model TEXT,
+@   meta TEXT,
 @   msg TEXT NOT NULL
 @ );
 ;
@@ -654,6 +655,9 @@ static void agent_chat_create_tables(void){
     }
     if( !db_table_has_column("repository","agentchat","kind") ){
       db_multi_exec("ALTER TABLE agentchat ADD COLUMN kind TEXT");
+    }
+    if( !db_table_has_column("repository","agentchat","meta") ){
+      db_multi_exec("ALTER TABLE agentchat ADD COLUMN meta TEXT");
     }
     if( !db_table_has_column("repository","agentchat_session","provider") ){
       db_multi_exec("ALTER TABLE agentchat_session ADD COLUMN provider TEXT");
@@ -773,19 +777,21 @@ static void agent_chat_save(
   const char *zKind,
   const char *zProvider,
   const char *zModel,
+  const char *zMeta,
   const char *zMsg
 ){
   if( zMsg==0 || zMsg[0]==0 ) return;
   agent_chat_create_tables();
   db_multi_exec(
-    "INSERT INTO agentchat(sid,mtime,xfrom,role,kind,provider,model,msg)"
-    " VALUES(%d,julianday('now'),%Q,%Q,%Q,%Q,%Q,%Q)",
+    "INSERT INTO agentchat(sid,mtime,xfrom,role,kind,provider,model,meta,msg)"
+    " VALUES(%d,julianday('now'),%Q,%Q,%Q,%Q,%Q,%Q,%Q)",
     sid,
     zUser ? zUser : "",
     zRole ? zRole : "agent",
     zKind ? zKind : "message",
     zProvider ? zProvider : "",
     zModel ? zModel : "",
+    zMeta ? zMeta : "",
     zMsg
   );
   agent_chat_session_touch(sid, zMsg, zProvider, zModel);
@@ -833,7 +839,7 @@ static void agent_chat_render_history(int sidCurrent){
   if( nLimit<=0 || sidCurrent<=0 ) return;
   if( !db_table_exists("repository","agentchat") ) return;
   db_prepare(&q,
-    "SELECT role, kind, provider, model, msg FROM agentchat"
+    "SELECT role, kind, provider, model, meta, msg FROM agentchat"
     " WHERE sid=%d"
     " ORDER BY acid ASC LIMIT %d",
     sidCurrent, nLimit
@@ -843,7 +849,8 @@ static void agent_chat_render_history(int sidCurrent){
     const char *zKind = db_column_text(&q, 1);
     const char *zProvider = db_column_text(&q, 2);
     const char *zModel = db_column_text(&q, 3);
-    const char *zMsg = db_column_text(&q, 4);
+    const char *zMeta = db_column_text(&q, 4);
+    const char *zMsg = db_column_text(&q, 5);
     @ <div style="margin-bottom:0.8em;">
     @ <b>%h(zRole && fossil_strcmp(zRole,"user")==0 ? "You" : "Agent"):</b>
     if( zProvider && zProvider[0] ){
@@ -851,6 +858,9 @@ static void agent_chat_render_history(int sidCurrent){
     }
     if( zKind && zKind[0] ){
       @ <span class="dimmed">{%h(zKind)}</span>
+    }
+    if( zMeta && zMeta[0] ){
+      @ <span class="dimmed">meta=%h(zMeta)</span>
     }
     @ <pre style="white-space:pre-wrap;display:inline;margin:0">%h(zMsg)</pre>
     @ </div>
@@ -878,21 +888,22 @@ static void agent_emit_history_json(int sidCurrent){
   if( sidCurrent>0 && db_table_exists("repository","agentchat") ){
     int first = 1;
     db_prepare(&q,
-      "SELECT acid, role, kind, provider, model, msg FROM agentchat"
+      "SELECT acid, role, kind, provider, model, meta, msg FROM agentchat"
       " WHERE sid=%d"
       " ORDER BY acid ASC",
       sidCurrent
     );
     while( db_step(&q)==SQLITE_ROW ){
       CX("%s{\"acid\":%d,\"role\":%!j,\"kind\":%!j,\"provider\":%!j,"
-         "\"model\":%!j,\"msg\":%!j}",
+         "\"model\":%!j,\"meta\":%!j,\"msg\":%!j}",
          first ? "" : ",",
          db_column_int(&q, 0),
          db_column_text(&q, 1),
          db_column_text(&q, 2),
          db_column_text(&q, 3),
          db_column_text(&q, 4),
-         db_column_text(&q, 5));
+         db_column_text(&q, 5),
+         db_column_text(&q, 6));
       first = 0;
     }
     db_finalize(&q);
@@ -2021,6 +2032,7 @@ void agent_history_page(void){
 void agent_chat_page(void){
   Blob reply = BLOB_INITIALIZER;
   Blob err = BLOB_INITIALIZER;
+  Blob promptMeta = BLOB_INITIALIZER;
   const char *zMsg;
   const char *zModel;
   const char *zProvider;
@@ -2065,25 +2077,29 @@ void agent_chat_page(void){
     }
     blob_reset(&ctx);
   }
+  blob_appendf(&promptMeta, "{\"context\":%s}", PB("context") ? "true" : "false");
   if( sid<=0 || !agent_chat_session_exists(sid) ){
     sid = agent_chat_session_create(zUser, zProvider, zModel);
   }
-  agent_chat_save(sid, zUser, "user", "prompt", zProvider, zModel, PD("msg",""));
+  agent_chat_save(sid, zUser, "user", "prompt", zProvider, zModel,
+                  blob_str(&promptMeta), PD("msg",""));
   rc = agent_run_backend(zProvider, zModel, zMsg, &reply, &err);
   if( rc==0 ){
-    agent_chat_save(sid, zUser, "agent", "reply", zProvider, zModel, blob_str(&reply));
+    agent_chat_save(sid, zUser, "agent", "reply", zProvider, zModel, "",
+                    blob_str(&reply));
     db_end_transaction(0);
     CX("{\"sid\":%d,\"provider\":%!j,\"model\":%!j,\"reply\":%!j}\n",
       sid, zProvider, zModel, blob_str(&reply));
   }else{
     const char *zErr = blob_size(&err)>0 ? blob_str(&err)
                                          : "agent invocation failed";
-    agent_chat_save(sid, zUser, "agent", "error", zProvider, zModel, zErr);
+    agent_chat_save(sid, zUser, "agent", "error", zProvider, zModel, "", zErr);
     db_end_transaction(0);
     CX("{\"sid\":%d,\"provider\":%!j,\"model\":%!j,\"error\":%!j}\n",
       sid, zProvider, zModel, zErr);
   }
   if( PB("context") ) fossil_free((char*)zMsg);
+  blob_reset(&promptMeta);
   blob_reset(&reply);
   blob_reset(&err);
 }

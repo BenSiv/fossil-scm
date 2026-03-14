@@ -79,6 +79,8 @@ Notes:
   `reply`, or `error`, which is the first step toward structured chat events.
 - `/agent-history` exposes a stored chat session and its ordered messages as
   JSON, providing a structured read path for future UI work.
+- chat rows now also support a lightweight `meta` field for structured event
+  metadata such as whether context assembly was enabled for a prompt.
 - Runtime config lookup order is: `--agent-config`, `FOSSIL_AGENT_CONFIG`,
   repo setting `agent-config-path`, user config
   `${XDG_CONFIG_HOME:-$HOME/.config}/fossil/ai-agent.json`, then checkout-local
@@ -119,6 +121,7 @@ Codex, or network access. They cover:
 - `/agent-config` provider choices and model suggestions
 - `/agent-history` JSON for stored sessions and ordered messages
 - structured chat event kinds in `agentchat`
+- lightweight structured `meta` on `agentchat` rows
 - first-use `/agent-chat` session creation and message persistence
 - effective chat and embedding model display in `/agentui`
 - provider/model persistence across reopened chat sessions
