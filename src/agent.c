@@ -417,6 +417,15 @@ static int agent_provider_is_known(const char *zProvider){
 }
 
 /*
+** Return non-zero if the current chat provider should remain fixed in the UI.
+** This stays locked until provider switching has a complete server-side
+** implementation.
+*/
+static int agent_chat_provider_locked(void){
+  return 1;
+}
+
+/*
 ** Return a static list of known provider names.
 */
 static const char *const *agent_provider_choices(int *pnChoice){
@@ -494,7 +503,7 @@ static void agent_emit_config_json(int sidCurrent){
   const char *zCmd = agent_command_template();
   const char *zEmbedCmd = agent_embedding_template();
   char *zSource = agent_config_source();
-  int chatProviderLocked = 1;
+  int chatProviderLocked = agent_chat_provider_locked();
   int chatSupportsStreaming = 0;
   int chatSupportsModelDiscovery = 0;
   int embeddingAvailable = agent_embedding_is_available();
@@ -1695,6 +1704,7 @@ void agentui_page(void){
   const char *zEmbedProvider;
   const char *zUser;
   char *zConfigSource;
+  int chatProviderLocked;
   int sidCurrent;
   int sidRequested;
 
@@ -1714,6 +1724,7 @@ void agentui_page(void){
   zProvider = zSessionProvider;
   zEmbedProvider = agent_embedding_provider();
   zConfigSource = agent_config_source();
+  chatProviderLocked = agent_chat_provider_locked();
   style_set_current_feature("agent");
   style_header("Agent Chat");
   @ <div class="fossil-doc" data-title="Agent Chat">
@@ -1744,7 +1755,7 @@ void agentui_page(void){
   @ <div>
   @ <div class="forumEdit">
   @ <label for="agent-provider"><b>Provider:</b></label>
-  @ <select id="agent-provider" disabled>
+  @ <select id="agent-provider"%s(chatProviderLocked ? " disabled" : "")>
   @ <option value="%h(zProvider)" selected>%h(zProvider)</option>
   @ </select>
   @ &nbsp;&nbsp;
@@ -1826,6 +1837,7 @@ void agentui_page(void){
   @     }
   @   }
   @   function applyConfig(data){
+  @     provider.disabled = !!data.chat_provider_locked;
   @     setOptions(provider, data.chat_provider_choices || [data.chat_provider], data.chat_provider);
   @     if(data.chat_model!==undefined){ model.value = data.chat_model || ''; }
   @     setDatalist(document.getElementById('agent-model-suggestions'),

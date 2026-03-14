@@ -151,6 +151,7 @@ test agent-ui-6 {[string first {id="agent-config-embedding-model"} $RESULT]>=0 &
 test agent-ui-7 {[string first {id="agent-config-capabilities"} $RESULT]>=0 && [string first {chat streaming=no, model discovery=no, provider locked=yes, embeddings=yes} $RESULT]>=0}
 test agent-ui-8 {[string first {id="agent-model-suggestions"} $RESULT]>=0}
 test agent-ui-9 {[string first {<option value="codex" selected>} $RESULT]>=0}
+test agent-ui-10 {[string first {<select id="agent-provider" disabled>} $RESULT]>=0}
 
 ###############################################################################
 
