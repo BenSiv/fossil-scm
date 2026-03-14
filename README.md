@@ -76,11 +76,19 @@ Notes:
 - `/agent-config` now also includes static provider choices and model
   suggestions so `/agentui` can populate controls from server-declared data.
 - chat rows now persist a structured `kind` classification such as `prompt`,
-  `reply`, `error`, or `progress`, which is the first step toward structured
-  chat events.
+  `reply`, `error`, `progress`, or `tool`, which is the first step toward
+  structured chat events.
 - `/agent-history` exposes a stored chat session and its ordered messages as
   JSON, providing a structured read path for future UI work. `/agentui` now
   uses this endpoint for browser-side history rendering.
+- `/agent-events` exposes the ordered stored event stream for a session, with
+  optional `after=` filtering for incremental polling.
+- backend execution now records explicit `running` and `ok` progress events so
+  incremental clients can distinguish in-flight work from final replies.
+- `/agentui` now shows the newest execution state in a dedicated status line
+  above the chat log, driven by the structured event stream.
+- the session list now includes a compact last-known state label such as
+  `running`, `ok`, `reply`, or `error` beside each saved conversation.
 - chat rows now also support a lightweight `meta` field for structured event
   metadata such as whether context assembly was enabled for a prompt.
 - Runtime config lookup order is: `--agent-config`, `FOSSIL_AGENT_CONFIG`,

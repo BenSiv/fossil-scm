@@ -153,6 +153,15 @@ test agent-ui-8 {[string first {id="agent-model-suggestions"} $RESULT]>=0}
 test agent-ui-9 {[string first {<option value="codex" selected>} $RESULT]>=0}
 test agent-ui-10 {[string first {<select id="agent-provider" disabled>} $RESULT]>=0}
 test agent-ui-11 {[string first {fetch('agent-history?sid='+encodeURIComponent(sid))} $RESULT]>=0}
+test agent-ui-12 {[string first {fetch('agent-events?sid='+encodeURIComponent(sid)+'&after='+encodeURIComponent(lastAcid))} $RESULT]>=0}
+test agent-ui-13 {[string first {restartPolling} $RESULT]>=0}
+test agent-ui-14 {[string first {clearInterval(pollHandle)} $RESULT]>=0}
+test agent-ui-15 {[string first {setInterval(} $RESULT]>=0}
+test agent-ui-16 {[string first {beforeunload} $RESULT]>=0}
+test agent-ui-17 {[string first {id="agent-chat-status"} $RESULT]>=0}
+test agent-ui-18 {[string first {Status: Idle} $RESULT]>=0}
+test agent-ui-19 {[string first {setStatus('Sending request...')} $RESULT]>=0}
+test agent-ui-20 {[string first {setStatus('Reply received')} $RESULT]>=0}
 
 ###############################################################################
 
@@ -185,7 +194,7 @@ test agent-chat-3 {[string first {"model":"test-chat-model"} [agent_http_body $R
 test agent-chat-4 {[string first {test-agent model=test-chat-model} [agent_http_body $RESULT]]>=0}
 
 fossil sql "SELECT count(*) FROM agentchat"
-test agent-chat-5 {[normalize_result] eq {3}}
+test agent-chat-5 {[normalize_result] eq {6}}
 
 fossil sql "SELECT title FROM agentchat_session ORDER BY sid DESC LIMIT 1"
 test agent-chat-6 {[normalize_result] eq {say only hi}}
@@ -197,49 +206,88 @@ fossil sql "SELECT provider || '|' || model FROM agentchat_session ORDER BY sid 
 test agent-chat-8 {[normalize_result] eq {codex|test-chat-model}}
 
 fossil sql "SELECT group_concat(rk, ',') FROM (SELECT role || '|' || kind AS rk FROM agentchat ORDER BY acid)"
-test agent-chat-9 {[normalize_result] eq {system|progress,user|prompt,agent|reply}}
+test agent-chat-9 {[normalize_result] eq {system|progress,system|tool,system|progress,user|prompt,system|progress,agent|reply}}
 
 fossil sql "SELECT meta FROM agentchat WHERE role='system' ORDER BY acid ASC LIMIT 1"
 test agent-chat-10 {[normalize_result] eq {{"stage":"context","enabled":true}}}
 
+fossil sql "SELECT meta FROM agentchat WHERE role='system' AND kind='tool' ORDER BY acid ASC LIMIT 1"
+test agent-chat-11 {[normalize_result] eq {{"tool":"chat-backend","provider":"codex"}}}
+
+fossil sql "SELECT meta FROM agentchat WHERE role='system' AND kind='progress' ORDER BY acid ASC LIMIT 1 OFFSET 1"
+test agent-chat-12 {[normalize_result] eq {{"stage":"backend","status":"running"}}}
+
+fossil sql "SELECT meta FROM agentchat WHERE role='system' AND kind='progress' ORDER BY acid DESC LIMIT 1"
+test agent-chat-13 {[normalize_result] eq {{"stage":"backend","status":"ok"}}}
+
 fossil sql "SELECT meta FROM agentchat WHERE role='user' ORDER BY acid ASC LIMIT 1"
-test agent-chat-11 {[normalize_result] eq {{"context":true}}}
+test agent-chat-14 {[normalize_result] eq {{"context":true}}}
 
 fossil sql "SELECT sid FROM agentchat_session ORDER BY sid DESC LIMIT 1"
 set lastSid [normalize_result]
 set response [agent_http_request $repository GET [subst {/agentui?sid=$lastSid}] {}]
 set RESULT $response
 set CODE 0
-test agent-chat-12 {[agent_http_status $RESULT] eq {200}}
-test agent-chat-13 {[string first {value="codex"} $RESULT]>=0}
-test agent-chat-14 {[string first {value="test-chat-model"} $RESULT]>=0}
-test agent-chat-15 {[string first {{progress}} $RESULT]>=0}
-test agent-chat-16 {[string first {System:} $RESULT]>=0}
-test agent-chat-17 {[string first {meta={&quot;stage&quot;:&quot;context&quot;,&quot;enabled&quot;:true}} $RESULT]>=0}
-test agent-chat-18 {[string first {{reply}} $RESULT]>=0}
-test agent-chat-19 {[string first {meta={&quot;context&quot;:true}} $RESULT]>=0}
+test agent-chat-15 {[agent_http_status $RESULT] eq {200}}
+test agent-chat-16 {[string first {value="codex"} $RESULT]>=0}
+test agent-chat-17 {[string first {value="test-chat-model"} $RESULT]>=0}
+test agent-chat-18 {[string first {{progress}} $RESULT]>=0}
+test agent-chat-19 {[string first {{tool}} $RESULT]>=0}
+test agent-chat-20 {[string first {System:} $RESULT]>=0}
+test agent-chat-20a {[string first {[codex / test-chat-model | reply]} $RESULT]>=0}
+test agent-chat-21 {[string first {meta={&quot;stage&quot;:&quot;context&quot;,&quot;enabled&quot;:true}} $RESULT]>=0}
+test agent-chat-22 {[string first {meta={&quot;tool&quot;:&quot;chat-backend&quot;,&quot;provider&quot;:&quot;codex&quot;}} $RESULT]>=0}
+test agent-chat-23 {[string first {meta={&quot;stage&quot;:&quot;backend&quot;,&quot;status&quot;:&quot;running&quot;}} $RESULT]>=0}
+test agent-chat-24 {[string first {meta={&quot;stage&quot;:&quot;backend&quot;,&quot;status&quot;:&quot;ok&quot;}} $RESULT]>=0}
+test agent-chat-25 {[string first {{reply}} $RESULT]>=0}
+test agent-chat-26 {[string first {meta={&quot;context&quot;:true}} $RESULT]>=0}
 
 set response [agent_http_request $repository GET [subst {/agent-config?sid=$lastSid}] {}]
 set RESULT [agent_http_body $response]
 set CODE 0
-test agent-chat-20 {[agent_http_status $response] eq {200}}
-test agent-chat-21 {[string first {"chat_provider":"codex"} $RESULT]>=0}
-test agent-chat-22 {[string first {"chat_model":"test-chat-model"} $RESULT]>=0}
+test agent-chat-27 {[agent_http_status $response] eq {200}}
+test agent-chat-28 {[string first {"chat_provider":"codex"} $RESULT]>=0}
+test agent-chat-29 {[string first {"chat_model":"test-chat-model"} $RESULT]>=0}
 
 set response [agent_http_request $repository GET [subst {/agent-history?sid=$lastSid}] {}]
 set RESULT [agent_http_body $response]
 set CODE 0
-test agent-chat-23 {[agent_http_status $response] eq {200}}
-test agent-chat-24 {[string first {"sid":} $RESULT]>=0}
-test agent-chat-25 {[string first {"title":"say only hi"} $RESULT]>=0}
-test agent-chat-26 {[string first {"provider":"codex"} $RESULT]>=0}
-test agent-chat-27 {[string first {"model":"test-chat-model"} $RESULT]>=0}
-test agent-chat-28 {[string first {"messages":[} $RESULT]>=0}
-test agent-chat-29 {[string first {"role":"system","kind":"progress"} $RESULT]>=0}
-test agent-chat-30 {[string first {"meta":"{\"stage\":\"context\",\"enabled\":true}"} $RESULT]>=0}
-test agent-chat-31 {[string first {"role":"user","kind":"prompt"} $RESULT]>=0}
-test agent-chat-32 {[string first {"meta":"{\"context\":true}"} $RESULT]>=0}
-test agent-chat-33 {[string first {"role":"agent","kind":"reply"} $RESULT]>=0}
+test agent-chat-30 {[agent_http_status $response] eq {200}}
+test agent-chat-31 {[string first {"sid":} $RESULT]>=0}
+test agent-chat-32 {[string first {"title":"say only hi"} $RESULT]>=0}
+test agent-chat-33 {[string first {"provider":"codex"} $RESULT]>=0}
+test agent-chat-34 {[string first {"model":"test-chat-model"} $RESULT]>=0}
+test agent-chat-35 {[string first {"messages":[} $RESULT]>=0}
+test agent-chat-36 {[string first {"role":"system","kind":"progress"} $RESULT]>=0}
+test agent-chat-37 {[string first {"meta":"{\"stage\":\"context\",\"enabled\":true}"} $RESULT]>=0}
+test agent-chat-38 {[string first {"role":"system","kind":"tool"} $RESULT]>=0}
+test agent-chat-39 {[string first {"meta":"{\"tool\":\"chat-backend\",\"provider\":\"codex\"}"} $RESULT]>=0}
+test agent-chat-40 {[string first {"meta":"{\"stage\":\"backend\",\"status\":\"running\"}"} $RESULT]>=0}
+test agent-chat-41 {[string first {"meta":"{\"stage\":\"backend\",\"status\":\"ok\"}"} $RESULT]>=0}
+test agent-chat-42 {[string first {"role":"user","kind":"prompt"} $RESULT]>=0}
+test agent-chat-43 {[string first {"meta":"{\"context\":true}"} $RESULT]>=0}
+test agent-chat-44 {[string first {"role":"agent","kind":"reply"} $RESULT]>=0}
+
+set response [agent_http_request $repository GET [subst {/agent-events?sid=$lastSid}] {}]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-chat-45 {[agent_http_status $response] eq {200}}
+test agent-chat-46 {[string first {"sid":} $RESULT]>=0}
+test agent-chat-47 {[string first {"after":0} $RESULT]>=0}
+test agent-chat-48 {[string first {"events":[} $RESULT]>=0}
+test agent-chat-49 {[string first {"role":"system","kind":"tool"} $RESULT]>=0}
+test agent-chat-50 {[string first {"meta":"{\"stage\":\"backend\",\"status\":\"running\"}"} $RESULT]>=0}
+test agent-chat-51 {[string first {"role":"agent","kind":"reply"} $RESULT]>=0}
+
+set response [agent_http_request $repository GET [subst {/agent-events?sid=$lastSid&after=3}] {}]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-chat-52 {[agent_http_status $response] eq {200}}
+test agent-chat-53 {[string first {"after":3} $RESULT]>=0}
+test agent-chat-54 {[string first {"acid":4,"role":"user","kind":"prompt"} $RESULT]>=0}
+test agent-chat-55 {[string first {"acid":5,"role":"system","kind":"progress"} $RESULT]>=0}
+test agent-chat-56 {[string first {"acid":6,"role":"agent","kind":"reply"} $RESULT]>=0}
+test agent-chat-57 {[string first {"acid":1,} $RESULT]<0}
 
 ###############################################################################
 
@@ -249,7 +297,7 @@ set RESULT [agent_http_body $response]
 set CODE 0
 test agent-chat-mismatch-1 {[string first {looks like an Ollama model but provider is codex} $RESULT]>=0}
 fossil sql "SELECT count(*) FROM agentchat"
-test agent-chat-mismatch-2 {[normalize_result] eq {3}}
+test agent-chat-mismatch-2 {[normalize_result] eq {6}}
 
 ###############################################################################
 

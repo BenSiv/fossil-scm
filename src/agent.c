@@ -795,12 +795,49 @@ static void agent_chat_save(
     zMeta ? zMeta : "",
     zMsg
   );
-  if( zRole && fossil_strcmp(zRole,"system")==0
-   && zKind && fossil_strcmp(zKind,"progress")==0
-  ){
+  if( zRole && fossil_strcmp(zRole,"system")==0 ){
     zTitleMsg = "";
   }
   agent_chat_session_touch(sid, zTitleMsg, zProvider, zModel);
+}
+
+/*
+** Persist a system event for a chat session.
+*/
+static void agent_chat_save_event(
+  int sid,
+  const char *zUser,
+  const char *zKind,
+  const char *zProvider,
+  const char *zModel,
+  const char *zMeta,
+  const char *zMsg
+){
+  agent_chat_save(sid, zUser, "system", zKind, zProvider, zModel, zMeta, zMsg);
+}
+
+/*
+** Return a compact state label for the latest stored event in sid.
+*/
+static const char *agent_chat_session_state(int sid){
+  if( sid<=0 || !db_table_exists("repository","agentchat") ) return "";
+  return db_text("",
+    "SELECT CASE"
+    "  WHEN role='agent' AND kind='reply' THEN 'reply'"
+    "  WHEN role='agent' AND kind='error' THEN 'error'"
+    "  WHEN role='system' AND kind='progress'"
+    "   AND meta LIKE '%%\"status\":\"running\"%%' THEN 'running'"
+    "  WHEN role='system' AND kind='progress'"
+    "   AND meta LIKE '%%\"status\":\"ok\"%%' THEN 'ok'"
+    "  WHEN role='system' AND kind='progress'"
+    "   AND meta LIKE '%%\"status\":\"error\"%%' THEN 'error'"
+    "  WHEN role='system' AND kind='tool' THEN 'tool'"
+    "  WHEN role='system' AND kind='progress' THEN 'progress'"
+    "  WHEN role='user' AND kind='prompt' THEN 'prompt'"
+    "  ELSE coalesce(kind, role, '') END"
+    " FROM agentchat WHERE sid=%d ORDER BY acid DESC LIMIT 1",
+    sid
+  );
 }
 
 /*
@@ -825,11 +862,12 @@ static void agent_chat_render_sessions(const char *zUser, int sidCurrent){
     const char *zTitle = db_column_text(&q, 1);
     const char *zProvider = db_column_text(&q, 2);
     const char *zModel = db_column_text(&q, 3);
+    const char *zState = agent_chat_session_state(sid);
     @ <div>
     if( sid==sidCurrent ){
-      @ <b>%h(zTitle)</b> <span class="dimmed">[%h(zProvider)%s(zModel&&zModel[0]?" / ":"")%h(zModel)]</span>
+      @ <b>%h(zTitle)</b> <span class="dimmed">[%h(zProvider)%s(zModel&&zModel[0]?" / ":"")%h(zModel)%s(zState&&zState[0]?" | ":"")%h(zState)]</span>
     }else{
-      @ <a href="%R/agentui?sid=%d(sid)">%h(zTitle)</a> <span class="dimmed">[%h(zProvider)%s(zModel&&zModel[0]?" / ":"")%h(zModel)]</span>
+      @ <a href="%R/agentui?sid=%d(sid)">%h(zTitle)</a> <span class="dimmed">[%h(zProvider)%s(zModel&&zModel[0]?" / ":"")%h(zModel)%s(zState&&zState[0]?" | ":"")%h(zState)]</span>
     }
     @ </div>
   }
@@ -901,6 +939,40 @@ static void agent_emit_history_json(int sidCurrent){
       " WHERE sid=%d"
       " ORDER BY acid ASC",
       sidCurrent
+    );
+    while( db_step(&q)==SQLITE_ROW ){
+      CX("%s{\"acid\":%d,\"role\":%!j,\"kind\":%!j,\"provider\":%!j,"
+         "\"model\":%!j,\"meta\":%!j,\"msg\":%!j}",
+         first ? "" : ",",
+         db_column_int(&q, 0),
+         db_column_text(&q, 1),
+         db_column_text(&q, 2),
+         db_column_text(&q, 3),
+         db_column_text(&q, 4),
+         db_column_text(&q, 5),
+         db_column_text(&q, 6));
+      first = 0;
+    }
+    db_finalize(&q);
+  }
+  CX("]}\n");
+}
+
+/*
+** Emit a JSON object describing ordered chat events for sidCurrent. If
+** afterAcid is greater than zero, only events with acid>afterAcid are
+** returned.
+*/
+static void agent_emit_events_json(int sidCurrent, int afterAcid){
+  Stmt q;
+  int first = 1;
+  CX("{\"sid\":%d,\"after\":%d,\"events\":[", sidCurrent, afterAcid);
+  if( sidCurrent>0 && db_table_exists("repository","agentchat") ){
+    db_prepare(&q,
+      "SELECT acid, role, kind, provider, model, meta, msg FROM agentchat"
+      " WHERE sid=%d AND acid>%d"
+      " ORDER BY acid ASC",
+      sidCurrent, afterAcid
     );
     while( db_step(&q)==SQLITE_ROW ){
       CX("%s{\"acid\":%d,\"role\":%!j,\"kind\":%!j,\"provider\":%!j,"
@@ -1837,6 +1909,10 @@ void agentui_page(void){
   @ &nbsp;&nbsp;
   @ <label><input type="checkbox" id="agent-context" checked> <b>Context Awareness</b></label>
   @ </div>
+  @ <div id="agent-chat-status"
+  @  style="margin:0.6em 0;padding:0.5em 0.7em;border:1px solid #888;background:rgba(127,127,127,0.05);">
+  @ Status: Idle
+  @ </div>
   @ <div id="agent-chat-log"
   @  style="min-height:320px;max-height:520px;overflow:auto;border:1px solid
   @  #888;padding:0.8em;margin:1em 0;background:rgba(127,127,127,0.05);">
@@ -1857,7 +1933,10 @@ void agentui_page(void){
   @   var provider = document.getElementById('agent-provider');
   @   var model = document.getElementById('agent-model');
   @   var context = document.getElementById('agent-context');
+  @   var statusBox = document.getElementById('agent-chat-status');
   @   var log = document.getElementById('agent-chat-log');
+  @   var pollHandle = 0;
+  @   var lastAcid = 0;
   @   var configSource = document.getElementById('agent-config-source');
   @   var cfgChatProvider = document.getElementById('agent-config-chat-provider');
   @   var cfgChatCommand = document.getElementById('agent-config-chat-command');
@@ -1873,6 +1952,9 @@ void agentui_page(void){
   @   }
   @   function yesNo(v){
   @     return v ? 'yes' : 'no';
+  @   }
+  @   function setStatus(text){
+  @     if(statusBox) statusBox.textContent = 'Status: ' + text;
   @   }
   @   function showValue(node, value, fallback){
   @     if(node) node.textContent = value && value.length ? value : fallback;
@@ -1937,28 +2019,45 @@ void agentui_page(void){
   @   function renderHistory(data){
   @     var i, msg, div, html;
   @     log.innerHTML = '';
+  @     lastAcid = 0;
+  @     setStatus('Idle');
   @     if(!data || !data.messages) return;
   @     for(i=0; i<data.messages.length; i++){
   @       msg = data.messages[i];
-  @       div = document.createElement('div');
-  @       div.style.marginBottom = '0.8em';
-  @       html = '<b>' + (msg.role==='user' ? 'You' : 'Agent') + ':</b>';
-  @       if(msg.provider){
-  @         html += ' <span class="dimmed">[' + esc(msg.provider)
-  @              + (msg.model ? ' / ' + esc(msg.model) : '') + ']</span>';
-  @       }
-  @       if(msg.kind){
-  @         html += ' <span class="dimmed">{' + esc(msg.kind) + '}</span>';
-  @       }
-  @       if(msg.meta){
-  @         html += ' <span class="dimmed">meta=' + esc(msg.meta) + '</span>';
-  @       }
-  @       html += ' <pre style="white-space:pre-wrap;display:inline;margin:0">'
-  @             + esc(msg.msg || '') + '</pre>';
-  @       div.innerHTML = html;
-  @       log.appendChild(div);
+  @       appendEvent(msg);
   @     }
   @     log.scrollTop = log.scrollHeight;
+  @   }
+  @   function appendEvent(msg){
+  @     var div = document.createElement('div');
+  @     var html;
+  @     div.style.marginBottom = '0.8em';
+  @     html = '<b>' + (msg.role==='user' ? 'You'
+  @            : (msg.role==='system' ? 'System' : 'Agent')) + ':</b>';
+  @     if(msg.provider){
+  @       html += ' <span class="dimmed">[' + esc(msg.provider)
+  @            + (msg.model ? ' / ' + esc(msg.model) : '') + ']</span>';
+  @     }
+  @     if(msg.kind){
+  @       html += ' <span class="dimmed">{' + esc(msg.kind) + '}</span>';
+  @     }
+  @     if(msg.meta){
+  @       html += ' <span class="dimmed">meta=' + esc(msg.meta) + '</span>';
+  @     }
+  @     html += ' <pre style="white-space:pre-wrap;display:inline;margin:0">'
+  @           + esc(msg.msg || '') + '</pre>';
+  @     div.innerHTML = html;
+  @     log.appendChild(div);
+  @     if(msg.acid && msg.acid>lastAcid) lastAcid = msg.acid;
+  @     if(msg.kind==='progress' && msg.msg){
+  @       setStatus(msg.msg);
+  @     }else if(msg.kind==='tool' && msg.msg){
+  @       setStatus(msg.msg);
+  @     }else if(msg.role==='agent' && msg.kind==='reply'){
+  @       setStatus('Reply received');
+  @     }else if(msg.role==='agent' && msg.kind==='error'){
+  @       setStatus('Reply failed');
+  @     }
   @   }
   @   function refreshHistory(){
   @     return fetch('agent-history?sid='+encodeURIComponent(sid)).then(function(r){
@@ -1967,6 +2066,28 @@ void agentui_page(void){
   @       renderHistory(data);
   @       return data;
   @     });
+  @   }
+  @   function refreshEvents(){
+  @     if(!sid) return Promise.resolve();
+  @     return fetch('agent-events?sid='+encodeURIComponent(sid)+'&after='+encodeURIComponent(lastAcid))
+  @       .then(function(r){
+  @         return r.json();
+  @       }).then(function(data){
+  @         var i;
+  @         if(!data || !data.events) return data;
+  @         for(i=0; i<data.events.length; i++){
+  @           appendEvent(data.events[i]);
+  @         }
+  @         if(data.events.length) log.scrollTop = log.scrollHeight;
+  @         return data;
+  @       });
+  @   }
+  @   function restartPolling(){
+  @     if(pollHandle) clearInterval(pollHandle);
+  @     if(!sid) return;
+  @     pollHandle = setInterval(function(){
+  @       refreshEvents().catch(function(){});
+  @     }, 2000);
   @   }
   @   function addMsg(role, text){
   @     var div = document.createElement('div');
@@ -1983,10 +2104,13 @@ void agentui_page(void){
   @   }).then(function(data){
   @     applyConfig(data);
   @   }).catch(function(){});
-  @   refreshHistory().catch(function(){});
+  @   refreshHistory().then(function(){
+  @     restartPolling();
+  @   }).catch(function(){});
   @   send.addEventListener('click', function(){
   @     var msg = input.value.trim();
   @     if(!msg) return;
+  @     setStatus('Sending request...');
   @     addMsg('You', msg);
   @     input.value = '';
   @     fetch('agent-chat', {
@@ -2011,7 +2135,8 @@ void agentui_page(void){
   @       if(data.provider || data.model){
   @         applyConfig({chat_provider: data.provider, chat_model: data.model});
   @       }
-  @       return refreshHistory().catch(function(){
+  @       restartPolling();
+  @       return refreshEvents().catch(function(){
   @         addMsg('Agent', data.reply || data.error || '(no reply)');
   @       });
   @     }).catch(function(err){
@@ -2020,6 +2145,9 @@ void agentui_page(void){
   @   });
   @   input.addEventListener('keydown', function(e){
   @     if((e.ctrlKey || e.metaKey) && e.key==='Enter') send.click();
+  @   });
+  @   window.addEventListener('beforeunload', function(){
+  @     if(pollHandle) clearInterval(pollHandle);
   @   });
   @ })();
   @ </script>
@@ -2074,6 +2202,34 @@ void agent_history_page(void){
 }
 
 /*
+** WEBPAGE: agent-events
+**
+** JSON description of ordered stored chat events for a session.
+** Query parameters:
+**
+**    sid=SID      Session id
+**    after=ACID   Optional lower bound for incremental polling
+*/
+void agent_events_page(void){
+  int sidRequested;
+  int sidCurrent;
+  int afterAcid;
+
+  login_check_credentials();
+  if( !g.perm.Read ){
+    cgi_set_content_type("application/json");
+    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
+    return;
+  }
+  sidRequested = atoi(PD("sid","0"));
+  sidCurrent = agent_chat_session_exists(sidRequested) ? sidRequested : 0;
+  afterAcid = atoi(PD("after","0"));
+  if( afterAcid<0 ) afterAcid = 0;
+  cgi_set_content_type("application/json");
+  agent_emit_events_json(sidCurrent, afterAcid);
+}
+
+/*
 ** WEBPAGE: agent-chat
 **
 ** JSON endpoint for the configured agent chat UI.
@@ -2089,6 +2245,8 @@ void agent_chat_page(void){
   int sid;
   int rc;
   char *zContextMsg = 0;
+  char *zToolMeta = 0;
+  char *zToolMsg = 0;
 
   login_check_credentials();
   if( !g.perm.Read ){
@@ -2131,16 +2289,32 @@ void agent_chat_page(void){
     sid = agent_chat_session_create(zUser, zProvider, zModel);
   }
   if( PB("context") ){
-    agent_chat_save(
-      sid, zUser, "system", "progress", zProvider, zModel,
+    agent_chat_save_event(
+      sid, zUser, "progress", zProvider, zModel,
       "{\"stage\":\"context\",\"enabled\":true}",
       "Repository context assembled"
     );
   }
+  zToolMeta = mprintf("{\"tool\":\"chat-backend\",\"provider\":%!j}", zProvider);
+  zToolMsg = mprintf("Invoking %s backend",
+                     zProvider && zProvider[0] ? zProvider : "configured");
+  agent_chat_save_event(
+    sid, zUser, "tool", zProvider, zModel, zToolMeta, zToolMsg
+  );
+  agent_chat_save_event(
+    sid, zUser, "progress", zProvider, zModel,
+    "{\"stage\":\"backend\",\"status\":\"running\"}",
+    "Waiting for backend reply"
+  );
   agent_chat_save(sid, zUser, "user", "prompt", zProvider, zModel,
                   blob_str(&promptMeta), PD("msg",""));
   rc = agent_run_backend(zProvider, zModel, zMsg, &reply, &err);
   if( rc==0 ){
+    agent_chat_save_event(
+      sid, zUser, "progress", zProvider, zModel,
+      "{\"stage\":\"backend\",\"status\":\"ok\"}",
+      "Backend reply received"
+    );
     agent_chat_save(sid, zUser, "agent", "reply", zProvider, zModel, "",
                     blob_str(&reply));
     db_end_transaction(0);
@@ -2149,12 +2323,19 @@ void agent_chat_page(void){
   }else{
     const char *zErr = blob_size(&err)>0 ? blob_str(&err)
                                          : "agent invocation failed";
+    agent_chat_save_event(
+      sid, zUser, "progress", zProvider, zModel,
+      "{\"stage\":\"backend\",\"status\":\"error\"}",
+      "Backend reply failed"
+    );
     agent_chat_save(sid, zUser, "agent", "error", zProvider, zModel, "", zErr);
     db_end_transaction(0);
     CX("{\"sid\":%d,\"provider\":%!j,\"model\":%!j,\"error\":%!j}\n",
       sid, zProvider, zModel, zErr);
   }
   if( PB("context") ) fossil_free((char*)zMsg);
+  fossil_free(zToolMeta);
+  fossil_free(zToolMsg);
   blob_reset(&promptMeta);
   blob_reset(&reply);
   blob_reset(&err);
