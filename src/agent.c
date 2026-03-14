@@ -780,6 +780,7 @@ static void agent_chat_save(
   const char *zMeta,
   const char *zMsg
 ){
+  const char *zTitleMsg = zMsg;
   if( zMsg==0 || zMsg[0]==0 ) return;
   agent_chat_create_tables();
   db_multi_exec(
@@ -794,7 +795,12 @@ static void agent_chat_save(
     zMeta ? zMeta : "",
     zMsg
   );
-  agent_chat_session_touch(sid, zMsg, zProvider, zModel);
+  if( zRole && fossil_strcmp(zRole,"system")==0
+   && zKind && fossil_strcmp(zKind,"progress")==0
+  ){
+    zTitleMsg = "";
+  }
+  agent_chat_session_touch(sid, zTitleMsg, zProvider, zModel);
 }
 
 /*
@@ -846,13 +852,16 @@ static void agent_chat_render_history(int sidCurrent){
   );
   while( db_step(&q)==SQLITE_ROW ){
     const char *zRole = db_column_text(&q, 0);
+    const char *zRoleLabel =
+      zRole && fossil_strcmp(zRole,"user")==0 ? "You" :
+      zRole && fossil_strcmp(zRole,"system")==0 ? "System" : "Agent";
     const char *zKind = db_column_text(&q, 1);
     const char *zProvider = db_column_text(&q, 2);
     const char *zModel = db_column_text(&q, 3);
     const char *zMeta = db_column_text(&q, 4);
     const char *zMsg = db_column_text(&q, 5);
     @ <div style="margin-bottom:0.8em;">
-    @ <b>%h(zRole && fossil_strcmp(zRole,"user")==0 ? "You" : "Agent"):</b>
+    @ <b>%h(zRoleLabel):</b>
     if( zProvider && zProvider[0] ){
       @ <span class="dimmed">[%h(zProvider)%s(zModel&&zModel[0]?" / ":"")%h(zModel)]</span>
     }
@@ -2120,6 +2129,13 @@ void agent_chat_page(void){
   blob_appendf(&promptMeta, "{\"context\":%s}", PB("context") ? "true" : "false");
   if( sid<=0 || !agent_chat_session_exists(sid) ){
     sid = agent_chat_session_create(zUser, zProvider, zModel);
+  }
+  if( PB("context") ){
+    agent_chat_save(
+      sid, zUser, "system", "progress", zProvider, zModel,
+      "{\"stage\":\"context\",\"enabled\":true}",
+      "Repository context assembled"
+    );
   }
   agent_chat_save(sid, zUser, "user", "prompt", zProvider, zModel,
                   blob_str(&promptMeta), PD("msg",""));

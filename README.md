@@ -76,7 +76,8 @@ Notes:
 - `/agent-config` now also includes static provider choices and model
   suggestions so `/agentui` can populate controls from server-declared data.
 - chat rows now persist a structured `kind` classification such as `prompt`,
-  `reply`, or `error`, which is the first step toward structured chat events.
+  `reply`, `error`, or `progress`, which is the first step toward structured
+  chat events.
 - `/agent-history` exposes a stored chat session and its ordered messages as
   JSON, providing a structured read path for future UI work. `/agentui` now
   uses this endpoint for browser-side history rendering.
