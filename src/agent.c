@@ -417,6 +417,67 @@ static int agent_provider_is_known(const char *zProvider){
 }
 
 /*
+** Return a static list of known provider names.
+*/
+static const char *const *agent_provider_choices(int *pnChoice){
+  static const char *const azChoice[] = {
+    "codex",
+    "ollama",
+    "custom"
+  };
+  if( pnChoice ) *pnChoice = count(azChoice);
+  return azChoice;
+}
+
+/*
+** Return a static list of model suggestions for zProvider. The current model
+** is emitted separately by agent_emit_config_json(), so these are only hints.
+*/
+static const char *const *agent_model_suggestions(
+  const char *zProvider,
+  int *pnChoice
+){
+  static const char *const azCodex[] = {
+    "auto"
+  };
+  static const char *const azOllama[] = {
+    "qwen3.5:0.8b",
+    "llama3.2",
+    "gemma3"
+  };
+  static const char *const azCustom[] = {
+    "auto"
+  };
+  if( zProvider==0 ) zProvider = "";
+  if( fossil_strcmp(zProvider, "codex")==0 ){
+    if( pnChoice ) *pnChoice = count(azCodex);
+    return azCodex;
+  }
+  if( fossil_strcmp(zProvider, "ollama")==0 ){
+    if( pnChoice ) *pnChoice = count(azOllama);
+    return azOllama;
+  }
+  if( pnChoice ) *pnChoice = count(azCustom);
+  return azCustom;
+}
+
+/*
+** Emit a JSON string array field.
+*/
+static void agent_emit_json_string_array(
+  const char *zLabel,
+  const char *const *azValue,
+  int nValue
+){
+  int i;
+  CX("\"%s\":[", zLabel);
+  for(i=0; i<nValue; i++){
+    CX("%s%!j", i>0 ? "," : "", azValue[i]);
+  }
+  CX("]");
+}
+
+/*
 ** Emit a JSON object describing the effective chat and embedding config for
 ** sidCurrent. If sidCurrent refers to an existing session, chat provider/model
 ** reflect that session rather than the current default.
@@ -440,18 +501,32 @@ static void agent_emit_config_json(int sidCurrent){
   int embeddingSupportsModelDiscovery = 0;
   int chatProviderKnown = agent_provider_is_known(zChatProvider);
   int embeddingProviderKnown = agent_provider_is_known(zEmbedProvider);
+  int nProviderChoice = 0;
+  int nModelChoice = 0;
+  const char *const *azProviderChoice = agent_provider_choices(&nProviderChoice);
+  const char *const *azModelChoice = agent_model_suggestions(
+    zChatProvider, &nModelChoice
+  );
   CX("{\"sid\":%d,\"source\":%!j,\"chat_provider\":%!j,\"chat_command\":%!j,"
      "\"chat_model\":%!j,\"embedding_provider\":%!j,"
      "\"embedding_command\":%!j,\"embedding_model\":%!j,"
      "\"chat_provider_locked\":%d,\"chat_supports_streaming\":%d,"
      "\"chat_supports_model_discovery\":%d,\"embedding_available\":%d,"
      "\"embedding_supports_model_discovery\":%d,"
-     "\"chat_provider_known\":%d,\"embedding_provider_known\":%d}\n",
+     "\"chat_provider_known\":%d,\"embedding_provider_known\":%d,",
      sidCurrent, zSource, zChatProvider, zCmd, zChatModel,
      zEmbedProvider, zEmbedCmd, zEmbedModel,
      chatProviderLocked, chatSupportsStreaming, chatSupportsModelDiscovery,
      embeddingAvailable, embeddingSupportsModelDiscovery,
      chatProviderKnown, embeddingProviderKnown);
+  agent_emit_json_string_array(
+    "chat_provider_choices", azProviderChoice, nProviderChoice
+  );
+  CX(",");
+  agent_emit_json_string_array(
+    "chat_model_suggestions", azModelChoice, nModelChoice
+  );
+  CX("}\n");
   fossil_free(zSource);
 }
 
@@ -1674,7 +1749,8 @@ void agentui_page(void){
   @ </select>
   @ &nbsp;&nbsp;
   @ <label for="agent-model"><b>Model:</b></label>
-  @ <input type="text" id="agent-model" size="24" value="%h(zModel)">
+  @ <input type="text" id="agent-model" size="24" list="agent-model-suggestions" value="%h(zModel)">
+  @ <datalist id="agent-model-suggestions"></datalist>
   @ &nbsp;&nbsp;
   @ <label><input type="checkbox" id="agent-context" checked> <b>Context Awareness</b></label>
   @ </div>
@@ -1713,16 +1789,47 @@ void agentui_page(void){
   @   function showValue(node, value, fallback){
   @     if(node) node.textContent = value && value.length ? value : fallback;
   @   }
-  @   function applyConfig(data){
-  @     if(data.chat_provider){
-  @       provider.innerHTML = '';
-  @       var opt = document.createElement('option');
-  @       opt.value = data.chat_provider;
-  @       opt.textContent = data.chat_provider;
-  @       opt.selected = true;
-  @       provider.appendChild(opt);
+  @   function setOptions(selectNode, values, selectedValue){
+  @     var i, opt;
+  @     if(!selectNode || !values || !values.length) return;
+  @     selectNode.innerHTML = '';
+  @     for(i=0; i<values.length; i++){
+  @       opt = document.createElement('option');
+  @       opt.value = values[i];
+  @       opt.textContent = values[i];
+  @       if(values[i]===selectedValue) opt.selected = true;
+  @       selectNode.appendChild(opt);
   @     }
+  @     if(selectedValue && values.indexOf(selectedValue)<0){
+  @       opt = document.createElement('option');
+  @       opt.value = selectedValue;
+  @       opt.textContent = selectedValue;
+  @       opt.selected = true;
+  @       selectNode.appendChild(opt);
+  @     }
+  @   }
+  @   function setDatalist(listNode, values, selectedValue){
+  @     var seen = Object.create(null);
+  @     var i, opt;
+  @     if(!listNode) return;
+  @     listNode.innerHTML = '';
+  @     function addOne(value){
+  @       if(!value || seen[value]) return;
+  @       seen[value] = true;
+  @       opt = document.createElement('option');
+  @       opt.value = value;
+  @       listNode.appendChild(opt);
+  @     }
+  @     addOne(selectedValue);
+  @     if(values){
+  @       for(i=0; i<values.length; i++) addOne(values[i]);
+  @     }
+  @   }
+  @   function applyConfig(data){
+  @     setOptions(provider, data.chat_provider_choices || [data.chat_provider], data.chat_provider);
   @     if(data.chat_model!==undefined){ model.value = data.chat_model || ''; }
+  @     setDatalist(document.getElementById('agent-model-suggestions'),
+  @       data.chat_model_suggestions || [], data.chat_model);
   @     showValue(configSource, data.source, '(unknown)');
   @     showValue(cfgChatProvider, data.chat_provider, '(unset)');
   @     showValue(cfgChatCommand, data.chat_command, '(unset)');

@@ -73,6 +73,8 @@ Notes:
 - `/agent-config` also reports current backend capability flags such as
   provider locking, streaming support, model discovery support, and whether
   embeddings are currently available.
+- `/agent-config` now also includes static provider choices and model
+  suggestions so `/agentui` can populate controls from server-declared data.
 - Runtime config lookup order is: `--agent-config`, `FOSSIL_AGENT_CONFIG`,
   repo setting `agent-config-path`, user config
   `${XDG_CONFIG_HOME:-$HOME/.config}/fossil/ai-agent.json`, then checkout-local
@@ -110,6 +112,7 @@ Codex, or network access. They cover:
 - first-use `/agentui` rendering
 - `/agent-config` JSON for effective provider/model/config state
 - `/agent-config` capability flags for the active backend
+- `/agent-config` provider choices and model suggestions
 - first-use `/agent-chat` session creation and message persistence
 - effective chat and embedding model display in `/agentui`
 - provider/model persistence across reopened chat sessions

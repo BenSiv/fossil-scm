@@ -149,6 +149,8 @@ test agent-ui-4 {[string first {id="agent-config-chat-model"} $RESULT]>=0 && [st
 test agent-ui-5 {[string first {id="agent-config-embedding-provider"} $RESULT]>=0 && [string first {>ollama<} $RESULT]>=0}
 test agent-ui-6 {[string first {id="agent-config-embedding-model"} $RESULT]>=0 && [string first {>test-embed-model<} $RESULT]>=0}
 test agent-ui-7 {[string first {id="agent-config-capabilities"} $RESULT]>=0 && [string first {chat streaming=no, model discovery=no, provider locked=yes, embeddings=yes} $RESULT]>=0}
+test agent-ui-8 {[string first {id="agent-model-suggestions"} $RESULT]>=0}
+test agent-ui-9 {[string first {<option value="codex" selected>} $RESULT]>=0}
 
 ###############################################################################
 
@@ -166,6 +168,8 @@ test agent-config-8 {[string first {"chat_supports_model_discovery":0} $RESULT]>
 test agent-config-9 {[string first {"embedding_available":1} $RESULT]>=0}
 test agent-config-10 {[string first {"chat_provider_known":1} $RESULT]>=0}
 test agent-config-11 {[string first {"embedding_provider_known":1} $RESULT]>=0}
+test agent-config-12 {[string first {"chat_provider_choices":["codex","ollama","custom"]} $RESULT]>=0}
+test agent-config-13 {[string first {"chat_model_suggestions":["auto"]} $RESULT]>=0}
 
 ###############################################################################
 
