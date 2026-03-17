@@ -1,6 +1,6 @@
-# AI Integration Implementation Plan
+# Pool Processing Loop Implementation Plan
 
-This plan moves Fossil from a wrapper-driven agent integration to a
+This document outlines the implementation plan for the AI agent orchestration layer and the new self-maintaining knowledge pool processing loop.
 provider-aware system without discarding the simplicity of local commands and
 single-binary deployment.
 
@@ -136,6 +136,26 @@ Exit criteria:
 
 - session metadata remains meaningful even after config changes
 - the UI cannot silently display one backend while invoking another
+
+---
+
+### [pool-processing]
+
+This component introduces the "pool processing loop" which allows the AI agent to self-maintain the knowledge pool, transitioning items between tiers (Atomic → Composed → Wiki → Curated → Derived).
+
+#### [MODIFY] [agent.c](file:///wsl.localhost/Ubuntu/home/bensiv/fossil-scm/src/agent.c)
+- **`ai_cmd` (CLI entry point)**: Add a `fossil agent pool-process <tier>` subcommand. This will invoke a TH1 script (either built-in or from the database config) that queries pending items for a tier and processes them.
+- **`agent_register_th1`**: Register the 4 new TH1 pool commands described below.
+- **TH1 Command Implementations**:
+  - `pool_list_pending <tier_num>`: Returns a TCL list of `nid`s from `ai_note` that are ready to be processed *up* to the requested tier. E.g., if passing `2`, it queries notes at `tier=1` that haven't been processed yet.
+  - `pool_get <nid>`: Returns the raw text/body of the specified note from `ai_note`.
+  - `pool_put <target_tier_num> <body> <?metadata?>`: Creates a new `ai_note` at the target tier containing the synthesized body. Returns the new `nid`. Uses `ai_note_create`.
+  - `pool_link <from_nid> <to_nid> <link_type>`: Records a relationship in `ai_note_link`. Uses `ai_note_link_upsert`. Uses link_type strings like `derived-from` or `composed-of`.
+
+#### [MODIFY] [ai.c](file:///wsl.localhost/Ubuntu/home/bensiv/fossil-scm/src/ai.c)
+- Expose `ai_note_link_upsert` for use by the TH1 layer by dropping the `static` keyword and adding it to `ai.h`.
+
+---
 
 ## Phase D: Streaming And Structured Events
 
