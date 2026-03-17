@@ -1,0 +1,65 @@
+#
+# Copyright (c) 2026
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the Simplified BSD License (also
+# known as the "2-Clause License" or "FreeBSD License".)
+#
+# This program is distributed in the hope that it will be useful,
+# but without even the implied warranty of merchantability or fitness for a
+# particular purpose.
+#
+############################################################################
+#
+# Deterministic repository state projection tests.
+#
+
+require_no_open_checkout
+
+set repoPath [test_setup ""]
+set repoFile [file join $repoPath state-test.fossil]
+
+exec $::fossilexe new $repoFile --admin-user tester
+exec $::fossilexe open $repoFile
+
+###############################################################################
+
+fossil ai init
+fossil set agent-model "state-model"
+
+write_file state-note.txt "Projected state note body.\n"
+fossil agent note state-note.txt --title "State Note"
+test state-note-1 {[normalize_result] eq {Added note: State Note}}
+
+fossil sql "INSERT INTO ai_chat_eval(sid,acid,provider,model,reply_kind,quality_status,reasoning_status,user_feedback,action_summary) VALUES(1,1,'codex','state-model','final','ok','none','useful','demo')"
+
+set outDir [file join [pwd] state-out]
+fossil state export $outDir
+test state-export-1 {[regexp {^Exported state to } [normalize_result]]}
+
+test state-export-2 {[file exists [file join $outDir manifest.json]]}
+test state-export-3 {[file exists [file join $outDir config settings.json]]}
+test state-export-4 {[file exists [file join $outDir config reportfmt.json]]}
+test state-export-5 {[file exists [file join $outDir ai notes.json]]}
+test state-export-6 {[file exists [file join $outDir ai chat-eval.json]]}
+
+set manifest [read_file [file join $outDir manifest.json]]
+test state-export-7 {[string first {"schema_version": 1} $manifest]>=0}
+test state-export-8 {[string first {"ai_notes": 1} $manifest]>=0}
+test state-export-9 {[string first {"ai_chat_eval": 1} $manifest]>=0}
+
+set settingsJson [read_file [file join $outDir config settings.json]]
+test state-export-10 {[string first {"name": "agent-model", "value": "state-model"} $settingsJson]>=0}
+
+set notesJson [read_file [file join $outDir ai notes.json]]
+test state-export-11 {[string first {"title": "State Note"} $notesJson]>=0}
+test state-export-12 {[string first {Projected state note body.} $notesJson]>=0}
+
+set evalJson [read_file [file join $outDir ai chat-eval.json]]
+test state-export-13 {[string first {"provider": "codex"} $evalJson]>=0}
+test state-export-14 {[string first {"user_feedback": "useful"} $evalJson]>=0}
+test state-export-15 {[string first {"reply_kind": "final"} $evalJson]>=0}
+
+###############################################################################
+
+test_cleanup

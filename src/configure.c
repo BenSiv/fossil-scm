@@ -771,6 +771,264 @@ static void export_config(
   blob_reset(&out);
 }
 
+/*
+** Create zDir if needed or fail.
+*/
+static void state_export_mkdir(const char *zDir){
+  if( file_mkdir(zDir, ExtFILE, 0) ){
+    fossil_fatal("cannot create directory \"%s\"", zDir);
+  }
+}
+
+/*
+** Write blob content to zPath or fail.
+*/
+static void state_export_write(const char *zPath, Blob *pOut){
+  if( blob_write_to_file(pOut, zPath)<0 ){
+    fossil_fatal("cannot write \"%s\"", zPath);
+  }
+}
+
+/*
+** Export repository settings into zDir/settings.json.
+*/
+static int state_export_settings(const char *zDir){
+  Blob out = BLOB_INITIALIZER;
+  Stmt q;
+  int n = 0;
+  char *zPath = mprintf("%s/settings.json", zDir);
+  state_export_mkdir(zDir);
+  blob_appendf(&out,
+    "{\n"
+    "  \"domain\": \"settings\",\n"
+    "  \"items\": [\n"
+  );
+  db_prepare(&q,
+    "SELECT name, value, mtime FROM config"
+    " WHERE value IS NOT NULL"
+    " ORDER BY name"
+  );
+  while( db_step(&q)==SQLITE_ROW ){
+    const char *zName = db_column_text(&q, 0);
+    if( db_setting_is_protected(zName) ) continue;
+    blob_appendf(&out,
+      "%s    {\"name\": %!j, \"value\": %!j, \"mtime\": %.17g}\n",
+      n>0 ? ",\n" : "",
+      zName,
+      db_column_text(&q, 1),
+      db_column_double(&q, 2)
+    );
+    n++;
+  }
+  db_finalize(&q);
+  blob_appendf(&out, "\n  ]\n}\n");
+  state_export_write(zPath, &out);
+  fossil_free(zPath);
+  blob_reset(&out);
+  return n;
+}
+
+/*
+** Export report formats into zDir/reportfmt.json.
+*/
+static int state_export_reportfmt(const char *zDir){
+  Blob out = BLOB_INITIALIZER;
+  Stmt q;
+  int n = 0;
+  char *zPath = mprintf("%s/reportfmt.json", zDir);
+  state_export_mkdir(zDir);
+  blob_appendf(&out,
+    "{\n"
+    "  \"domain\": \"reportfmt\",\n"
+    "  \"items\": [\n"
+  );
+  if( db_table_exists("repository","reportfmt") ){
+    report_update_reportfmt_table();
+    db_prepare(&q,
+      "SELECT rn, title, owner, cols, sqlcode, coalesce(jx,'')"
+      " FROM reportfmt ORDER BY rn"
+    );
+    while( db_step(&q)==SQLITE_ROW ){
+      blob_appendf(&out,
+        "%s    {\"rn\": %d, \"title\": %!j, \"owner\": %!j,"
+        " \"cols\": %!j, \"sqlcode\": %!j, \"jx\": %!j}\n",
+        n>0 ? ",\n" : "",
+        db_column_int(&q, 0),
+        db_column_text(&q, 1),
+        db_column_text(&q, 2),
+        db_column_text(&q, 3),
+        db_column_text(&q, 4),
+        db_column_text(&q, 5)
+      );
+      n++;
+    }
+    db_finalize(&q);
+  }
+  blob_appendf(&out, "\n  ]\n}\n");
+  state_export_write(zPath, &out);
+  fossil_free(zPath);
+  blob_reset(&out);
+  return n;
+}
+
+/*
+** Export ai_note rows into zDir/notes.json.
+*/
+static int state_export_ai_notes(const char *zDir){
+  Blob out = BLOB_INITIALIZER;
+  Stmt q;
+  int n = 0;
+  char *zPath = mprintf("%s/notes.json", zDir);
+  state_export_mkdir(zDir);
+  blob_appendf(&out,
+    "{\n"
+    "  \"domain\": \"ai-notes\",\n"
+    "  \"items\": [\n"
+  );
+  if( db_table_exists("repository","ai_note") ){
+    db_prepare(&q,
+      "SELECT nid, tier, title, body, source_type, coalesce(source_ref,''),"
+      "       coalesce(process_level,''), coalesce(metadata,''),"
+      "       heat, retrieval_count, coalesce(content_hash,''),"
+      "       coalesce(duplicate_of,0), coalesce(merged_into,0)"
+      "  FROM ai_note ORDER BY nid"
+    );
+    while( db_step(&q)==SQLITE_ROW ){
+      blob_appendf(&out,
+        "%s    {\"nid\": %d, \"tier\": %d, \"title\": %!j, \"body\": %!j,"
+        " \"source_type\": %!j, \"source_ref\": %!j,"
+        " \"process_level\": %!j, \"metadata\": %!j,"
+        " \"heat\": %.17g, \"retrieval_count\": %d,"
+        " \"content_hash\": %!j, \"duplicate_of\": %d, \"merged_into\": %d}\n",
+        n>0 ? ",\n" : "",
+        db_column_int(&q, 0),
+        db_column_int(&q, 1),
+        db_column_text(&q, 2),
+        db_column_text(&q, 3),
+        db_column_text(&q, 4),
+        db_column_text(&q, 5),
+        db_column_text(&q, 6),
+        db_column_text(&q, 7),
+        db_column_double(&q, 8),
+        db_column_int(&q, 9),
+        db_column_text(&q, 10),
+        db_column_int(&q, 11),
+        db_column_int(&q, 12)
+      );
+      n++;
+    }
+    db_finalize(&q);
+  }
+  blob_appendf(&out, "\n  ]\n}\n");
+  state_export_write(zPath, &out);
+  fossil_free(zPath);
+  blob_reset(&out);
+  return n;
+}
+
+/*
+** Export ai_chat_eval rows into zDir/chat-eval.json.
+*/
+static int state_export_ai_chat_eval(const char *zDir){
+  Blob out = BLOB_INITIALIZER;
+  Stmt q;
+  int n = 0;
+  char *zPath = mprintf("%s/chat-eval.json", zDir);
+  state_export_mkdir(zDir);
+  blob_appendf(&out,
+    "{\n"
+    "  \"domain\": \"ai-chat-eval\",\n"
+    "  \"items\": [\n"
+  );
+  if( db_table_exists("repository","ai_chat_eval") ){
+    db_prepare(&q,
+      "SELECT eval_id, sid, acid, provider, model, reply_kind,"
+      "       quality_status, reasoning_status,"
+      "       coalesce(user_feedback,''),"
+      "       coalesce(feedback_at,0), action_summary, created_at"
+      "  FROM ai_chat_eval ORDER BY eval_id"
+    );
+    while( db_step(&q)==SQLITE_ROW ){
+      blob_appendf(&out,
+        "%s    {\"eval_id\": %d, \"sid\": %d, \"acid\": %d,"
+        " \"provider\": %!j, \"model\": %!j, \"reply_kind\": %!j,"
+        " \"quality_status\": %!j, \"reasoning_status\": %!j,"
+        " \"user_feedback\": %!j, \"feedback_at\": %.17g,"
+        " \"action_summary\": %!j, \"created_at\": %.17g}\n",
+        n>0 ? ",\n" : "",
+        db_column_int(&q, 0),
+        db_column_int(&q, 1),
+        db_column_int(&q, 2),
+        db_column_text(&q, 3),
+        db_column_text(&q, 4),
+        db_column_text(&q, 5),
+        db_column_text(&q, 6),
+        db_column_text(&q, 7),
+        db_column_text(&q, 8),
+        db_column_double(&q, 9),
+        db_column_text(&q, 10),
+        db_column_double(&q, 11)
+      );
+      n++;
+    }
+    db_finalize(&q);
+  }
+  blob_appendf(&out, "\n  ]\n}\n");
+  state_export_write(zPath, &out);
+  fossil_free(zPath);
+  blob_reset(&out);
+  return n;
+}
+
+/*
+** Export a deterministic file-tree projection of selected repository state.
+*/
+static void state_export_cmd(void){
+  Blob dir = BLOB_INITIALIZER;
+  Blob manifest = BLOB_INITIALIZER;
+  char *zConfigDir;
+  char *zAiDir;
+  char *zManifest;
+  int nSettings;
+  int nReportfmt;
+  int nAiNotes;
+  int nAiChatEval;
+
+  if( g.argc!=4 ) usage("export DIRECTORY");
+  file_canonical_name(g.argv[3], &dir, 0);
+  state_export_mkdir(blob_str(&dir));
+  zConfigDir = mprintf("%s/config", blob_str(&dir));
+  zAiDir = mprintf("%s/ai", blob_str(&dir));
+  nSettings = state_export_settings(zConfigDir);
+  nReportfmt = state_export_reportfmt(zConfigDir);
+  nAiNotes = state_export_ai_notes(zAiDir);
+  nAiChatEval = state_export_ai_chat_eval(zAiDir);
+  zManifest = mprintf("%s/manifest.json", blob_str(&dir));
+  blob_appendf(&manifest,
+    "{\n"
+    "  \"schema_version\": 1,\n"
+    "  \"repository\": %!j,\n"
+    "  \"exported_at\": %!j,\n"
+    "  \"domains\": {\n"
+    "    \"settings\": %d,\n"
+    "    \"reportfmt\": %d,\n"
+    "    \"ai_notes\": %d,\n"
+    "    \"ai_chat_eval\": %d\n"
+    "  }\n"
+    "}\n",
+    g.zRepositoryName,
+    db_text(0, "SELECT datetime('now')"),
+    nSettings, nReportfmt, nAiNotes, nAiChatEval
+  );
+  state_export_write(zManifest, &manifest);
+  fossil_print("Exported state to %s\n", blob_str(&dir));
+  fossil_free(zConfigDir);
+  fossil_free(zAiDir);
+  fossil_free(zManifest);
+  blob_reset(&manifest);
+  blob_reset(&dir);
+}
+
 
 /*
 ** COMMAND: configuration*
@@ -959,6 +1217,40 @@ void configuration_cmd(void){
                  " export import merge pull push reset");
   }
   configure_rebuild();
+}
+
+/*
+** COMMAND: state
+**
+** Usage: %fossil state SUBCOMMAND ...
+**
+** > fossil state export DIRECTORY
+**
+**       Export a deterministic file-tree projection of selected repository
+**       state into DIRECTORY. This is an export-only view intended to make
+**       non-check-in repository state easier to inspect while keeping the
+**       repository database canonical.
+**
+**       Current exported domains:
+**
+**         config/settings.json
+**         config/reportfmt.json
+**         ai/notes.json
+**         ai/chat-eval.json
+**         manifest.json
+*/
+void state_cmd(void){
+  const char *zCmd;
+  db_find_and_open_repository(0, 0);
+  if( g.argc<3 ){
+    usage("SUBCOMMAND ...");
+  }
+  zCmd = g.argv[2];
+  if( fossil_strcmp(zCmd, "export")==0 ){
+    state_export_cmd();
+  }else{
+    fossil_fatal("unknown state subcommand: %s", zCmd);
+  }
 }
 
 

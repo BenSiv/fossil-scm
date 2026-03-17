@@ -24,7 +24,7 @@ SRCDIR_tools = ./dev/tools
 #    by the shell.
 #
 #
-OBJDIR = bld
+OBJDIR = out
 
 #### C Compiler and options for use in building executables that
 #    will run on the platform that is doing the build.  This is used
@@ -47,9 +47,9 @@ TCLSH = tclsh
 
 CFLAGS = -g -Os
 CFLAGS_INCLUDE = -I. -I$(SRCDIR) -I$(SRCDIR_extsrc)
-LIB =	  -lresolv -lssl -lcrypto -lz -ldl -lpthread -lm
+LIB =	  -lresolv /home/bensiv/fossil-scm/dep/vendor/compat/zlib/libz.a -lssl -lcrypto /home/bensiv/fossil-scm/dep/vendor/compat/zlib/libz.a -ldl -lpthread -lm
 BCCFLAGS =	 $(CFLAGS)
-TCCFLAGS =	-Wall -Wdeclaration-after-statement -DFOSSIL_DYNAMIC_BUILD=1  $(CFLAGS) -DHAVE_AUTOCONFIG_H
+TCCFLAGS =	-Wall -Wdeclaration-after-statement -DFOSSIL_ENABLE_JSON -DFOSSIL_DYNAMIC_BUILD=1 -I/home/bensiv/fossil-scm/dep/vendor/compat/zlib  $(CFLAGS) -DHAVE_AUTOCONFIG_H
 #
 # Fuzzing may be enable by appending -fsanitize=fuzzer -DFOSSIL_FUZZ
 # to the TCCFLAGS variable.
@@ -71,7 +71,7 @@ SQLITE3_ORIGIN = 0
 USE_LINENOISE = 1
 USE_MMAN_H = 0
 USE_SEE = 0
-APPNAME = fossil
+APPNAME = bin/fossil
 #
 # APPNAME = fossil-fuzz
 # may be more appropriate for fuzzing.
@@ -99,11 +99,11 @@ SHELL_OPTIONS +=
 # ^^^ must come after main.mk is included
 
 distclean: clean
-	-rm -f autoconfig.h config.log Makefile
+	-rm -f out/autoconfig.h log/config.log Makefile
 	-rm -f cscope.out tags
 
 reconfig:
-	./configure
+	./configure --conf=/home/bensiv/fossil-scm/bld/auto.def --json --with-zlib=tree
 
 tags:
 	ctags -R ./src
@@ -123,14 +123,14 @@ tags:
 # This is also why we repeat the reconfig target's command here instead
 # of delegating to it with "$(MAKE) reconfig": having children running
 # around interfering makes this failure mode even worse.
-Makefile: ./Makefile.in $(SRCDIR)/main.mk /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/autosetup /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/local.tcl /home/bensiv/Projects/fossil-scm/auto.def /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/system.tcl /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/cc.tcl /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/cc-lib.tcl
-	./configure
-	touch /home/bensiv/Projects/fossil-scm/Makefile
+Makefile: ./bld/Makefile.in $(SRCDIR)/main.mk /home/bensiv/fossil-scm/dep/vendor/autosetup/autosetup /home/bensiv/fossil-scm/dep/vendor/autosetup/local.tcl /home/bensiv/fossil-scm/bld/auto.def /home/bensiv/fossil-scm/dep/vendor/autosetup/system.tcl /home/bensiv/fossil-scm/dep/vendor/autosetup/cc.tcl /home/bensiv/fossil-scm/dep/vendor/autosetup/cc-lib.tcl
+	./configure --conf=/home/bensiv/fossil-scm/bld/auto.def --json --with-zlib=tree
+	touch /home/bensiv/fossil-scm/Makefile
 
 # Container stuff
-SRCTB := src-.tar.gz
-IMGVER := fossil:
-CNTVER := fossil-
+SRCTB := src-6ea30fb3cd36.tar.gz
+IMGVER := fossil:6ea30fb3cd36
+CNTVER := fossil-6ea30fb3cd36
 CENGINE := docker
 container:
 	$(CENGINE) image inspect $(IMGVER) > /dev/null 2>&1 || \
@@ -156,11 +156,12 @@ container-clean:
 	-$(CENGINE) image     rm   $(IMGVER)
 
 container-image:
-	$(APPNAME) tarball --name src  $(SRCTB)
+	$(APPNAME) tarball --name src 6ea30fb3cd36 $(SRCTB)
 	$(CENGINE) buildx build \
 		--load \
 		--tag $(IMGVER) \
 		--build-arg FSLURL=$(SRCTB) \
+		-f ./pub/pkg/docker/Dockerfile \
 		$(DBFLAGS) .
 	rm -f $(SRCTB)
 

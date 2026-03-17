@@ -94,6 +94,9 @@ Notes:
 - `ai_chat_eval` records a lightweight evaluation row for each persisted final
   chat outcome, and now also stores simple user feedback such as `useful` or
   `not-useful`.
+- `fossil state export DIRECTORY` writes a deterministic file-tree projection
+  of selected repository state. Current domains are documented in
+  [`doc/STATE_PROJECTION.md`](doc/STATE_PROJECTION.md).
 - chat rows now also support a lightweight `meta` field for structured event
   metadata such as whether context assembly was enabled for a prompt.
 - Runtime config lookup order is: `--agent-config`, `FOSSIL_AGENT_CONFIG`,
