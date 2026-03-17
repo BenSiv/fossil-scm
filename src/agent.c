@@ -2039,6 +2039,20 @@ void agentui_page(void){
   @  style="margin:0.6em 0;padding:0.5em 0.7em;border:1px solid #888;background:rgba(127,127,127,0.05);">
   @ Status: Idle
   @ </div>
+  @ <style nonce="%h(style_nonce())">
+  @   .spinner {
+  @     display: inline-block;
+  @     width: 1em; height: 1em;
+  @     border: 2px solid rgba(0,0,0,0.1);
+  @     border-radius: 50%%;
+  @     border-top-color: #555;
+  @     animation: spin 1s ease-in-out infinite;
+  @     vertical-align: middle;
+  @     margin-left: 0.5em;
+  @   }
+  @   @keyframes spin { to { transform: rotate(360deg); } }
+  @   .thinking-details[open] summary { margin-bottom: 0.5em; }
+  @ </style>
   @ <div id="agent-chat-log"
   @  style="min-height:320px;max-height:520px;overflow:auto;border:1px solid
   @  #888;padding:0.8em;margin:1em 0;background:rgba(127,127,127,0.05);">
@@ -2090,8 +2104,12 @@ void agentui_page(void){
   @   function yesNo(v){
   @     return v ? 'yes' : 'no';
   @   }
-  @   function setStatus(text){
-  @     if(statusBox) statusBox.textContent = 'Status: ' + text;
+  @   function setStatus(text, status){
+  @     var statusText = 'Status: ' + text;
+  @     if(status==='running'){
+  @       statusText += ' <span class="spinner"></span>';
+  @     }
+  @     if(statusBox) statusBox.innerHTML = statusText;
   @   }
   @   function setFeedbackState(acid, feedback){
   @     lastReplyAcid = acid || 0;
@@ -2178,6 +2196,9 @@ void agentui_page(void){
   @     log.scrollTop = log.scrollHeight;
   @   }
   @   function appendEvent(msg){
+  @     var meta;
+  @     try{ meta = msg.meta ? JSON.parse(msg.meta) : {}; }catch(e){ meta = {}; }
+  @     if(meta.hidden || msg.kind==='context') return;
   @     var div = document.createElement('div');
   @     var html;
   @     div.style.marginBottom = '0.8em';
@@ -2190,7 +2211,12 @@ void agentui_page(void){
   @     if(msg.kind){
   @       html += ' <span class="dimmed">{' + esc(msg.kind) + '}</span>';
   @     }
-  @     if(msg.meta){
+  @     if(meta.thinking){
+  @       html += ' <details class="thinking-details"><summary class="dimmed">Reasoning</summary>'
+  @            + '<pre style="white-space:pre-wrap;margin:0.5em 0;padding:0.5em;border-left:3px solid #ccc;background:rgba(0,0,0,0.02)">'
+  @            + esc(meta.thinking) + '</pre></details>';
+  @     }
+  @     if(msg.meta && !meta.thinking){
   @       html += ' <span class="dimmed">meta=' + esc(msg.meta) + '</span>';
   @     }
   @     if(msg.feedback){
@@ -2202,14 +2228,14 @@ void agentui_page(void){
   @     log.appendChild(div);
   @     if(msg.acid && msg.acid>lastAcid) lastAcid = msg.acid;
   @     if(msg.kind==='progress' && msg.msg){
-  @       setStatus(msg.msg);
+  @       setStatus(msg.msg, meta.status || '');
   @     }else if(msg.kind==='tool' && msg.msg){
-  @       setStatus(msg.msg);
+  @       setStatus(msg.msg, '');
   @     }else if(msg.role==='agent' && msg.kind==='reply'){
-  @       setStatus('Reply received');
+  @       setStatus('Reply received', '');
   @       setFeedbackState(msg.acid || 0, msg.feedback || '');
   @     }else if(msg.role==='agent' && msg.kind==='error'){
-  @       setStatus('Reply failed');
+  @       setStatus('Reply failed', 'error');
   @       setFeedbackState(msg.acid || 0, msg.feedback || '');
   @     }
   @   }
@@ -2473,20 +2499,96 @@ void agent_feedback_page(void){
 **
 ** JSON endpoint for the configured agent chat UI.
 */
+/*
+** Builtin TH1 orchestration script for the AI agent.
+*/
+static const char zAgentOrchestrateBuiltin[] =
+"set thinking_tag [agent_config thinking_tag]\n"
+"if {[string compare $thinking_tag \"\"] == 0} {set thinking_tag \"thought\"}\n"
+"\n"
+"set full_prompt $msg\n"
+"set context \"\"\n"
+"\n"
+"if {$context_enabled} {\n"
+"  agent_save_event $sid $user \"progress\" $provider $model \\\n"
+"    \"{\\\"stage\\\":\\\"context\\\",\\\"status\\\":\\\"running\\\"}\" \\\n"
+"    \"Assembling repository context...\"\n"
+"  set context [agent_context $msg $model]\n"
+"  if {[string compare $context \"\"] != 0} {\n"
+"    agent_save_event $sid $user \"context\" $provider $model \\\n"
+"      \"{\\\"stage\\\":\\\"context\\\",\\\"hidden\\\":true}\" \\\n"
+"      $context\n"
+"    set full_prompt \"Context:\\n$context\\n\\nUser request:\\n$msg\"\n"
+"  }\n"
+"  agent_save_event $sid $user \"progress\" $provider $model \\\n"
+"    \"{\\\"stage\\\":\\\"context\\\",\\\"status\\\":\\\"ok\\\"}\" \\\n"
+"    \"Repository context assembled\"\n"
+"}\n"
+"\n"
+"agent_save_event $sid $user \"tool\" $provider $model \\\n"
+"  \"{\\\"tool\\\":\\\"chat-backend\\\",\\\"provider\\\":\\\"$provider\\\"}\" \\\n"
+"  \"Invoking $provider backend\"\n"
+"agent_save_event $sid $user \"progress\" $provider $model \\\n"
+"  \"{\\\"stage\\\":\\\"backend\\\",\\\"status\\\":\\\"running\\\"}\" \\\n"
+"  \"Waiting for backend reply...\"\n"
+"\n"
+"if {[string compare $context \"\"] != 0} {\n"
+"  set prompt_meta \"{\\\"context\\\":true}\"\n"
+"} else {\n"
+"  set prompt_meta \"{\\\"context\\\":false}\"\n"
+"}\n"
+"agent_save $sid $user \"user\" \"prompt\" $provider $model $prompt_meta $msg\n"
+"\n"
+"if {[catch {agent_run $provider $model $full_prompt} reply]} {\n"
+"  agent_save_event $sid $user \"progress\" $provider $model \\\n"
+"    \"{\\\"stage\\\":\\\"backend\\\",\\\"status\\\":\\\"error\\\"}\" \\\n"
+"    \"Backend reply failed\"\n"
+"  set acid [agent_save $sid $user \"agent\" \"error\" $provider $model \"\" $reply]\n"
+"  agent_eval $sid $acid $provider $model \"error\" $reply\n"
+"  return \"{\\\"error\\\":[agent_json_quote $reply]}\"\n"
+"}\n"
+"\n"
+"set start_tag \"<$thinking_tag>\"\n"
+"set end_tag \"</$thinking_tag>\"\n"
+"set s [string first $start_tag $reply]\n"
+"set e [string first $end_tag $reply]\n"
+"set thinking \"\"\n"
+"set clean_reply $reply\n"
+"if {$s != -1} {\n"
+"  if {$e != -1} {\n"
+"    set s_end [expr {$s + [string length $start_tag]}]\n"
+"    set thinking [string range $reply $s_end [expr {$e - 1}]]\n"
+"    set pre  [string range $reply 0 [expr {$s - 1}]]\n"
+"    set post [string range $reply [expr {$e + [string length $end_tag]}] [expr {[string length $reply] - 1}]]\n"
+"    set clean_reply \"$pre$post\"\n"
+"  }\n"
+"}\n"
+"\n"
+"agent_save_event $sid $user \"progress\" $provider $model \\\n"
+"  \"{\\\"stage\\\":\\\"backend\\\",\\\"status\\\":\\\"ok\\\"}\" \\\n"
+"  \"Backend reply received\"\n"
+"\n"
+"set meta \"\"\n"
+"if {[string compare $thinking \"\"] != 0} {\n"
+"  set meta \"{\\\"thinking\\\":[agent_json_quote $thinking]}\"\n"
+"}\n"
+"set acid [agent_save $sid $user \"agent\" \"reply\" $provider $model $meta $clean_reply]\n"
+"agent_eval $sid $acid $provider $model \"reply\" $reply\n"
+"return \"{\\\"sid\\\":$sid,\\\"provider\\\":[agent_json_quote $provider],\\\"model\\\":[agent_json_quote $model],\\\"reply\\\":[agent_json_quote $reply]}\"\n"
+;
+
+/*
+** WEBPAGE: agent-chat
+**
+** JSON endpoint for the configured agent chat UI. Refactored to use TH1 orchestration.
+*/
 void agent_chat_page(void){
-  Blob reply = BLOB_INITIALIZER;
   Blob err = BLOB_INITIALIZER;
-  Blob promptMeta = BLOB_INITIALIZER;
   const char *zMsg;
   const char *zModel;
   const char *zProvider;
   const char *zUser;
   int sid;
-  int acid;
-  int rc;
-  char *zContextMsg = 0;
-  char *zToolMeta = 0;
-  char *zToolMsg = 0;
 
   login_check_credentials();
   if( !g.perm.Read ){
@@ -2500,12 +2602,9 @@ void agent_chat_page(void){
   zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
   sid = atoi(PD("sid","0"));
   cgi_set_content_type("application/json");
-  if( zMsg[0]==0 ){
-    CX("{\"error\":%!j}\n", "missing msg parameter");
-    return;
-  }
-  if( zModel[0]==0 ){
-    CX("{\"error\":%!j}\n", "missing model parameter");
+
+  if( zMsg[0]==0 || zModel[0]==0 ){
+    CX("{\"error\":%!j}\n", "missing msg or model parameter");
     return;
   }
   if( agent_validate_provider_model(zProvider, zModel, &err) ){
@@ -2513,72 +2612,222 @@ void agent_chat_page(void){
     blob_reset(&err);
     return;
   }
+
   db_begin_write();
   db_unprotect(PROTECT_READONLY);
-  if( PB("context") ){
-    Blob ctx = BLOB_INITIALIZER;
-    if( agent_assemble_context(&ctx, zModel, zMsg) ){
-      blob_appendf(&ctx, "User request:\n%s\n", zMsg);
-      zContextMsg = fossil_strdup(blob_str(&ctx));
-      zMsg = zContextMsg;
-    }
-    blob_reset(&ctx);
-  }
-  blob_appendf(&promptMeta, "{\"context\":%s}", PB("context") ? "true" : "false");
   if( sid<=0 || !agent_chat_session_exists(sid) ){
     sid = agent_chat_session_create(zUser, zProvider, zModel);
   }
-  if( PB("context") ){
-    agent_chat_save_event(
-      sid, zUser, "progress", zProvider, zModel,
-      "{\"stage\":\"context\",\"enabled\":true}",
-      "Repository context assembled"
-    );
+
+  /* Execute TH1 orchestration */
+  Th_FossilInit(TH_INIT_DEFAULT);
+  Th_StoreInt("sid", sid);
+  Th_SetVar(g.interp, "msg",       3, zMsg,      (int)strlen(zMsg));
+  Th_SetVar(g.interp, "provider",  8, zProvider, (int)strlen(zProvider));
+  Th_SetVar(g.interp, "model",     5, zModel,    (int)strlen(zModel));
+  Th_SetVar(g.interp, "user",      4, zUser,     (int)strlen(zUser));
+  Th_StoreInt("context_enabled", PB("context"));
+
+  {
+    int thRc = Th_Eval(g.interp, 0, zAgentOrchestrateBuiltin, -1);
+    int nResult = 0;
+    const char *zResult = Th_GetResult(g.interp, &nResult);
+    if( thRc==TH_ERROR ){
+      CX("{\"error\":%!j}\n", zResult ? zResult : "TH1 eval failed");
+    }else{
+      /* TH_OK or TH_RETURN are both success; script result is the JSON */
+      CX("%.*s\n", nResult, zResult ? zResult : "{}");
+    }
   }
-  zToolMeta = mprintf("{\"tool\":\"chat-backend\",\"provider\":%!j}", zProvider);
-  zToolMsg = mprintf("Invoking %s backend",
-                     zProvider && zProvider[0] ? zProvider : "configured");
-  agent_chat_save_event(
-    sid, zUser, "tool", zProvider, zModel, zToolMeta, zToolMsg
-  );
-  agent_chat_save_event(
-    sid, zUser, "progress", zProvider, zModel,
-    "{\"stage\":\"backend\",\"status\":\"running\"}",
-    "Waiting for backend reply"
-  );
-  (void)agent_chat_save(sid, zUser, "user", "prompt", zProvider, zModel,
-                        blob_str(&promptMeta), PD("msg",""));
-  rc = agent_run_backend(zProvider, zModel, zMsg, &reply, &err);
-  if( rc==0 ){
-    agent_chat_save_event(
-      sid, zUser, "progress", zProvider, zModel,
-      "{\"stage\":\"backend\",\"status\":\"ok\"}",
-      "Backend reply received"
-    );
-    acid = agent_chat_save(sid, zUser, "agent", "reply", zProvider, zModel, "",
-                           blob_str(&reply));
-    ai_chat_eval_record(sid, acid, zProvider, zModel, "reply", blob_str(&reply));
-    db_end_transaction(0);
-    CX("{\"sid\":%d,\"provider\":%!j,\"model\":%!j,\"reply\":%!j}\n",
-      sid, zProvider, zModel, blob_str(&reply));
+  
+  db_end_transaction(0);
+  blob_reset(&err);
+}
+
+/*
+** TH1 command: agent_context MESSAGE ?MODEL?
+**
+** Assembles the repository context for the given message and model.
+*/
+static int agent_context_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  Blob out = BLOB_INITIALIZER;
+  if( argc!=2 && argc!=3 ){
+    return Th_WrongNumArgs(interp, "agent_context MESSAGE ?MODEL?");
+  }
+  if( agent_assemble_context(&out, argc==3 ? argv[2] : 0, argv[1]) ){
+    Th_SetResult(interp, blob_str(&out), blob_size(&out));
   }else{
-    const char *zErr = blob_size(&err)>0 ? blob_str(&err)
-                                         : "agent invocation failed";
-    agent_chat_save_event(
-      sid, zUser, "progress", zProvider, zModel,
-      "{\"stage\":\"backend\",\"status\":\"error\"}",
-      "Backend reply failed"
-    );
-    acid = agent_chat_save(sid, zUser, "agent", "error", zProvider, zModel, "", zErr);
-    ai_chat_eval_record(sid, acid, zProvider, zModel, "error", zErr);
-    db_end_transaction(0);
-    CX("{\"sid\":%d,\"provider\":%!j,\"model\":%!j,\"error\":%!j}\n",
-      sid, zProvider, zModel, zErr);
+    Th_SetResult(interp, "", 0);
   }
-  if( PB("context") ) fossil_free((char*)zMsg);
-  fossil_free(zToolMeta);
-  fossil_free(zToolMsg);
-  blob_reset(&promptMeta);
+  blob_reset(&out);
+  return TH_OK;
+}
+
+/*
+** TH1 command: agent_run PROVIDER MODEL MSG
+**
+** Calls the configured AI backend and returns the raw response.
+*/
+static int agent_run_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  Blob reply = BLOB_INITIALIZER;
+  Blob err = BLOB_INITIALIZER;
+  int rc;
+  if( argc!=4 ){
+    return Th_WrongNumArgs(interp, "agent_run PROVIDER MODEL MSG");
+  }
+  rc = agent_run_backend(argv[1], argv[2], argv[3], &reply, &err);
+  if( rc==0 ){
+    Th_SetResult(interp, blob_str(&reply), blob_size(&reply));
+  }else{
+    Th_SetResult(interp, blob_str(&err), blob_size(&err));
+    rc = TH_ERROR;
+  }
   blob_reset(&reply);
   blob_reset(&err);
+  return rc;
+}
+
+/*
+** TH1 command: agent_save SID USER ROLE KIND PROVIDER MODEL META MSG
+**
+** Persists a chat record to the database. Returns the acid.
+*/
+static int agent_save_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  int sid, acid;
+  if( argc!=9 ){
+    return Th_WrongNumArgs(interp, "agent_save SID USER ROLE KIND PROVIDER MODEL META MSG");
+  }
+  sid = atoi(argv[1]);
+  acid = agent_chat_save(sid, argv[2], argv[3], argv[4], argv[5], argv[6], argv[7], argv[8]);
+  Th_SetResultInt(interp, acid);
+  return TH_OK;
+}
+
+/*
+** TH1 command: agent_save_event SID USER KIND PROVIDER MODEL META MSG
+**
+** Persists a system event to the database.
+*/
+static int agent_save_event_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  int sid;
+  if( argc!=8 ){
+    return Th_WrongNumArgs(interp, "agent_save_event SID USER KIND PROVIDER MODEL META MSG");
+  }
+  sid = atoi(argv[1]);
+  agent_chat_save_event(sid, argv[2], argv[3], argv[4], argv[5], argv[6], argv[7]);
+  return TH_OK;
+}
+
+/*
+** TH1 command: agent_config KEY
+**
+** Returns a setting from cfg/ai-agent.json.
+*/
+static int agent_config_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  char *zVal;
+  if( argc!=2 ){
+    return Th_WrongNumArgs(interp, "agent_config KEY");
+  }
+  zVal = agent_config_get(argv[1]);
+  if( zVal ){
+    Th_SetResult(interp, zVal, -1);
+    fossil_free(zVal);
+  }else{
+    Th_SetResult(interp, "", 0);
+  }
+  return TH_OK;
+}
+
+/*
+** TH1 command: agent_eval SID ACID PROVIDER MODEL KIND MSG
+**
+** Records an evaluation row for a message.
+*/
+static int agent_eval_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  if( argc!=7 ){
+    return Th_WrongNumArgs(interp, "agent_eval SID ACID PROVIDER MODEL KIND MSG");
+  }
+  ai_chat_eval_record(atoi(argv[1]), atoi(argv[2]), argv[3], argv[4], argv[5], argv[6]);
+  return TH_OK;
+}
+
+/*
+** TH1 command: agent_json_quote MSG
+**
+** Returns a JSON-quoted version of the string.
+*/
+static int agent_json_quote_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  char *zEsc;
+  if( argc!=2 ){
+    return Th_WrongNumArgs(interp, "agent_json_quote MSG");
+  }
+  zEsc = mprintf("%!j", argv[1]);
+  Th_SetResult(interp, zEsc, -1);
+  fossil_free(zEsc);
+  return TH_OK;
+}
+
+/*
+** Register all agent commands with the TH1 interpreter.
+*/
+void agent_register_th1(Th_Interp *interp){
+  static const struct {
+    const char *zName;
+    Th_CommandProc xProc;
+  } aCmd[] = {
+    {"agent_context",    agent_context_th1},
+    {"agent_run",        agent_run_th1},
+    {"agent_save",       agent_save_th1},
+    {"agent_save_event", agent_save_event_th1},
+    {"agent_config",     agent_config_th1},
+    {"agent_eval",       agent_eval_th1},
+    {"agent_json_quote", agent_json_quote_th1},
+    {0, 0}
+  };
+  int i;
+  for(i=0; aCmd[i].zName; i++){
+    Th_CreateCommand(interp, aCmd[i].zName, aCmd[i].xProc, 0, 0);
+  }
 }

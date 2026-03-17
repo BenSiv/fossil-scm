@@ -1,0 +1,502 @@
+#!/usr/bin/env tclsh
+#
+# Copyright (c) 2026
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the Simplified BSD License (also
+# known as the "2-Clause License" or "FreeBSD License".)
+#
+#############################################################################
+#
+# Regression tests for the TH1 Agent Orchestration Layer.
+#
+# Coverage:
+#   - Unit tests for every agent_* TH1 command (wrong-arg errors and basic
+#     return-type checks).
+#   - TH1 language pattern tests: verifying that the constructs used inside
+#     the orchestration script (string compare, nested if, explicit string
+#     range indices) are evaluated correctly by TH1's interpreter.
+#   - Full end-to-end integration tests via the HTTP harness, covering the
+#     normal reply flow and the thinking-extraction flow.
+#
+
+require_no_open_checkout
+
+set path [file dirname [info script]]
+set backend [file normalize [file join $path fake-agent-backend.sh]]
+
+# A fake backend that emits thinking tags so we can test extraction.
+set thinkingBackend [file normalize [file join [pwd] fake-thinking-backend.sh]]
+write_file $thinkingBackend {#!/usr/bin/env bash
+mode="${FOSSIL_AGENT_MODE:-}"
+model="${FOSSIL_AGENT_MODEL:-}"
+case "$mode" in
+  chat)
+    printf '<thought>This is the internal reasoning step.</thought>\n'
+    printf 'reply: plain answer without thinking tags\n'
+    ;;
+  embed)
+    printf '{"embedding":[0.125,0.25,0.5,1.0]}\n'
+    ;;
+  *)
+    printf 'Error: unsupported mode: %s\n' "$mode"; exit 1 ;;
+esac
+}
+file attributes $thinkingBackend -permissions 0755
+
+proc agent_http_request {repository method url body} {
+  set requestFile [file join [pwd] th1-agent-http-[getSeqNo].txt]
+  set outFile [file join [pwd] th1-agent-http-out-[getSeqNo].txt]
+  if {$method eq "POST"} {
+    set len [string length $body]
+    write_file $requestFile [subst {POST $url HTTP/1.0\r
+Host: localhost\r
+User-Agent: Fossil-TH1-Agent-Test\r
+Content-Type: application/x-www-form-urlencoded\r
+Content-Length: $len\r
+\r
+$body}]
+  } else {
+    write_file $requestFile [subst {GET $url HTTP/1.0\r
+Host: localhost\r
+User-Agent: Fossil-TH1-Agent-Test\r
+\r
+}]
+  }
+  fossil http --in $requestFile --out $outFile --ipaddr 127.0.0.1 \
+      $repository --localauth -expectError
+  set result [expr {[file exists $outFile] ? [read_file $outFile] : ""}]
+  catch {file delete $requestFile}
+  catch {file delete $outFile}
+  return $result
+}
+
+proc agent_http_status {response} {
+  set status ""
+  set response [string map [list \r\n \n] $response]
+  regexp {^HTTP/\S+\s+([0-9][0-9][0-9])} $response dummy status
+  return $status
+}
+
+proc agent_http_body {response} {
+  set response [string map [list \r\n \n] $response]
+  set sep [string first "\n\n" $response]
+  if {$sep<0} { return "" }
+  return [string range $response [expr {$sep+2}] end]
+}
+
+test_setup
+
+fossil test-th-eval --open-config {repository}
+set repository [normalize_result]
+if {[string length $repository] == 0} {
+  puts "Detection of open repository file failed."
+  test_cleanup_then_return
+}
+
+set cfgDir [file normalize [file join [pwd] th1-agent-config]]
+file mkdir $cfgDir
+write_file [file join $cfgDir agent.json] [subst -nocommands {
+{
+  "provider": "ollama",
+  "model": "test-th1-model",
+  "command": "$backend",
+  "thinking_tag": "thought",
+  "embedding_provider": "ollama",
+  "embedding_model": "test-embed-model",
+  "embedding_command": "$backend"
+}
+}]
+fossil set agent-config-path [file join $cfgDir agent.json]
+
+fossil ai init
+fossil test-th-eval {set out [proc_verify_csrf]; set out}
+set proof [normalize_result]
+
+###############################################################################
+# TH1 Language Pattern Tests
+# These tests pin-down the exact TH1 idioms used inside the orchestration
+# script so any regresion in TH1's interpreter is caught before the full
+# integration runs.
+###############################################################################
+
+# string compare equality and inequality
+fossil test-th-eval {string compare "" "" }
+test th1-agent-lang-1 {$RESULT eq {0}}
+
+fossil test-th-eval {string compare "a" "" }
+test th1-agent-lang-2 {$RESULT ne {0}}
+
+fossil test-th-eval {if {[string compare "" ""] == 0} {set r yes} else {set r no}; set r}
+test th1-agent-lang-3 {$RESULT eq {yes}}
+
+fossil test-th-eval {if {[string compare "x" ""] != 0} {set r yes} else {set r no}; set r}
+test th1-agent-lang-4 {$RESULT eq {yes}}
+
+fossil test-th-eval {if {[string compare "x" "x"] != 0} {set r yes} else {set r no}; set r}
+test th1-agent-lang-5 {$RESULT eq {no}}
+
+# Nested if replacing && for Boolean AND
+fossil test-th-eval {set s 5; set e 10; if {$s != -1} { if {$e != -1} { set r both } else { set r s_only } } else { set r neither }; set r}
+test th1-agent-lang-6 {$RESULT eq {both}}
+
+fossil test-th-eval {set s -1; set e 10; if {$s != -1} { if {$e != -1} { set r both } else { set r s_only } } else { set r neither }; set r}
+test th1-agent-lang-7 {$RESULT eq {neither}}
+
+fossil test-th-eval {set s 5; set e -1; if {$s != -1} { if {$e != -1} { set r both } else { set r s_only } } else { set r neither }; set r}
+test th1-agent-lang-8 {$RESULT eq {s_only}}
+
+# string range with explicit arithmetic end index (no 'end' keyword)
+fossil test-th-eval {set str "hello world"; string range $str 0 [expr {[string length $str] - 1}]}
+test th1-agent-lang-9 {$RESULT eq {hello world}}
+
+fossil test-th-eval {set str "hello world"; string range $str 6 [expr {[string length $str] - 1}]}
+test th1-agent-lang-10 {$RESULT eq {world}}
+
+fossil test-th-eval {set str "hello world"; string range $str 0 4}
+test th1-agent-lang-11 {$RESULT eq {hello}}
+
+# string first returns -1 for missing needle
+fossil test-th-eval {string first {<thought>} {no tags here}}
+test th1-agent-lang-12 {$RESULT eq {-1}}
+
+fossil test-th-eval {string first {<thought>} {<thought>ideas</thought>}}
+test th1-agent-lang-13 {$RESULT eq {0}}
+
+fossil test-th-eval {string first {</thought>} {<thought>ideas</thought>}}
+test th1-agent-lang-14 {$RESULT eq {13}}
+
+# string length
+fossil test-th-eval {string length ""}
+test th1-agent-lang-15 {$RESULT eq {0}}
+
+fossil test-th-eval {string length "hello"}
+test th1-agent-lang-16 {$RESULT eq {5}}
+
+# catch / TH_ERROR path
+fossil test-th-eval {if {[catch {error "boom"} msg]} {set r "caught: $msg"} else {set r "ok"}; set r}
+test th1-agent-lang-17 {$RESULT eq {caught: boom}}
+
+fossil test-th-eval {if {[catch {set x 1} msg]} {set r "caught"} else {set r "ok=$x"}; set r}
+test th1-agent-lang-18 {$RESULT eq {ok=1}}
+
+# Thinking extraction simulation (same logic as orchestration script)
+fossil test-th-eval {
+set reply {<thought>internal reasoning</thought>
+plain reply text}
+set start_tag {<thought>}
+set end_tag {</thought>}
+set s [string first $start_tag $reply]
+set e [string first $end_tag $reply]
+set thinking {}
+set clean_reply $reply
+if {$s != -1} {
+  if {$e != -1} {
+    set s_end [expr {$s + [string length $start_tag]}]
+    set thinking [string range $reply $s_end [expr {$e - 1}]]
+    set pre  [string range $reply 0 [expr {$s - 1}]]
+    set post [string range $reply [expr {$e + [string length $end_tag]}] [expr {[string length $reply] - 1}]]
+    set clean_reply "$pre$post"
+  }
+}
+set thinking
+}
+test th1-agent-lang-19 {$RESULT eq {internal reasoning}}
+
+fossil test-th-eval {
+set reply {<thought>internal reasoning</thought>
+plain reply text}
+set start_tag {<thought>}
+set end_tag {</thought>}
+set s [string first $start_tag $reply]
+set e [string first $end_tag $reply]
+set thinking {}
+set clean_reply $reply
+if {$s != -1} {
+  if {$e != -1} {
+    set s_end [expr {$s + [string length $start_tag]}]
+    set thinking [string range $reply $s_end [expr {$e - 1}]]
+    set pre  [string range $reply 0 [expr {$s - 1}]]
+    set post [string range $reply [expr {$e + [string length $end_tag]}] [expr {[string length $reply] - 1}]]
+    set clean_reply "$pre$post"
+  }
+}
+string trim $clean_reply
+}
+test th1-agent-lang-20 {$RESULT eq {plain reply text}}
+
+# No thinking tags - clean_reply stays unchanged
+fossil test-th-eval {
+set reply {just a plain reply}
+set start_tag {<thought>}
+set end_tag {</thought>}
+set s [string first $start_tag $reply]
+set thinking {}
+set clean_reply $reply
+if {$s != -1} {
+  set clean_reply "EXTRACTED"
+}
+list $thinking $clean_reply
+}
+test th1-agent-lang-21 {$RESULT eq {{ } {just a plain reply}}}
+
+###############################################################################
+# agent_* TH1 Command – Wrong Argument Count Tests
+###############################################################################
+
+fossil test-th-eval --open-config {agent_context}
+test th1-agent-ctx-args-1 {[string first {wrong # args} $RESULT]>=0}
+
+fossil test-th-eval --open-config {agent_context a b c}
+test th1-agent-ctx-args-2 {[string first {wrong # args} $RESULT]>=0}
+
+fossil test-th-eval --open-config {agent_run}
+test th1-agent-run-args-1 {[string first {wrong # args} $RESULT]>=0}
+
+fossil test-th-eval --open-config {agent_run a}
+test th1-agent-run-args-2 {[string first {wrong # args} $RESULT]>=0}
+
+fossil test-th-eval --open-config {agent_run a b}
+test th1-agent-run-args-3 {[string first {wrong # args} $RESULT]>=0}
+
+fossil test-th-eval --open-config {agent_save}
+test th1-agent-save-args-1 {[string first {wrong # args} $RESULT]>=0}
+
+fossil test-th-eval --open-config {agent_save_event}
+test th1-agent-evt-args-1 {[string first {wrong # args} $RESULT]>=0}
+
+fossil test-th-eval --open-config {agent_config}
+test th1-agent-cfg-args-1 {[string first {wrong # args} $RESULT]>=0}
+
+fossil test-th-eval --open-config {agent_config a b}
+test th1-agent-cfg-args-2 {[string first {wrong # args} $RESULT]>=0}
+
+fossil test-th-eval --open-config {agent_json_quote}
+test th1-agent-jq-args-1 {[string first {wrong # args} $RESULT]>=0}
+
+fossil test-th-eval --open-config {agent_json_quote a b}
+test th1-agent-jq-args-2 {[string first {wrong # args} $RESULT]>=0}
+
+fossil test-th-eval --open-config {agent_eval}
+test th1-agent-eval-args-1 {[string first {wrong # args} $RESULT]>=0}
+
+fossil test-th-eval --open-config {agent_eval a b c}
+test th1-agent-eval-args-2 {[string first {wrong # args} $RESULT]>=0}
+
+###############################################################################
+# agent_json_quote – JSON Quoting Unit Tests
+###############################################################################
+
+fossil test-th-eval {agent_json_quote {hello}}
+test th1-agent-jq-1 {$RESULT eq {"hello"}}
+
+fossil test-th-eval {agent_json_quote {}}
+test th1-agent-jq-2 {$RESULT eq {""}}
+
+fossil test-th-eval {agent_json_quote {say "hello"}}
+test th1-agent-jq-3 {[string first {\\"hello\\"} $RESULT]>=0}
+
+fossil test-th-eval {agent_json_quote "line1\nline2"}
+test th1-agent-jq-4 {[string first {\\n} $RESULT]>=0}
+
+fossil test-th-eval {agent_json_quote {back\slash}}
+test th1-agent-jq-5 {[string first {\\\\} $RESULT]>=0}
+
+# Verify that agent_json_quote produces a valid JSON-embeddable token:
+# the result must start and end with a double-quote character.
+fossil test-th-eval {
+set q [agent_json_quote {test value}]
+expr {[string index $q 0] eq "\"" && [string index $q [expr {[string length $q]-1}]] eq "\""}
+}
+test th1-agent-jq-6 {$RESULT eq {1}}
+
+###############################################################################
+# agent_config – Config Lookup Unit Tests
+###############################################################################
+
+fossil test-th-eval --open-config {agent_config thinking_tag}
+test th1-agent-cfg-1 {$RESULT eq {thought}}
+
+fossil test-th-eval --open-config {agent_config model}
+test th1-agent-cfg-2 {$RESULT eq {test-th1-model}}
+
+fossil test-th-eval --open-config {agent_config provider}
+test th1-agent-cfg-3 {$RESULT eq {ollama}}
+
+fossil test-th-eval --open-config {agent_config nonexistent_key_xyz}
+test th1-agent-cfg-4 {$RESULT eq {}}
+
+###############################################################################
+# Full End-to-End: Normal Chat Flow (no thinking tags)
+###############################################################################
+
+set body [subst {sid=0&msg=hello+agent&model=test-th1-model&context=0&proof=$proof}]
+set response [agent_http_request $repository POST /agent-chat $body]
+set RESULT $response
+set CODE 0
+test th1-agent-e2e-1 {[agent_http_status $RESULT] eq {200}}
+
+set body2 [agent_http_body $response]
+test th1-agent-e2e-2 {[string first {"sid":} $body2]>=0}
+test th1-agent-e2e-3 {[string first {"model":} $body2]>=0}
+test th1-agent-e2e-4 {[string first {"reply":} $body2]>=0}
+# Verify no error key in a normal reply
+test th1-agent-e2e-5 {[string first {"error":} $body2]<0}
+# Verify the model name echoed by fake-agent-backend is in the reply
+test th1-agent-e2e-6 {[string first {test-th1-model} $body2]>=0}
+
+# Without context, only the mandatory events should be stored.
+# Expected sequence: tool, progress(running), user|prompt, progress(ok), agent|reply
+fossil sql "SELECT group_concat(role||'|'||kind, ',') FROM (SELECT role, kind FROM agentchat ORDER BY acid)"
+test th1-agent-e2e-7 {
+  set evts [normalize_result]
+  # Must include user prompt and agent reply
+  expr {[string first {user|prompt} $evts]>=0 && [string first {agent|reply} $evts]>=0}
+}
+
+fossil sql "SELECT msg FROM agentchat WHERE role='agent' AND kind='reply' ORDER BY acid DESC LIMIT 1"
+test th1-agent-e2e-8 {[string first {reply:} [normalize_result]]>=0}
+
+# No thinking metadata when backend emits no tags
+fossil sql "SELECT meta FROM agentchat WHERE role='agent' AND kind='reply' ORDER BY acid DESC LIMIT 1"
+test th1-agent-e2e-9 {[normalize_result] eq {}}
+
+# Verify eval record was created
+fossil sql "SELECT count(*) FROM ai_chat_eval WHERE reply_kind='final'"
+test th1-agent-e2e-10 {[normalize_result] >= 1}
+
+###############################################################################
+# Full End-to-End: Chat with Context Enabled
+###############################################################################
+
+set body [subst {sid=0&msg=context+request&model=test-th1-model&context=1&proof=$proof}]
+set response [agent_http_request $repository POST /agent-chat $body]
+set body2 [agent_http_body $response]
+set RESULT $response
+set CODE 0
+test th1-agent-ctx-1 {[agent_http_status $RESULT] eq {200}}
+test th1-agent-ctx-2 {[string first {"reply":} $body2]>=0}
+
+# With context=1, event sequence must include context|progress events
+fossil sql "SELECT count(*) FROM agentchat WHERE kind='progress' ORDER BY acid"
+test th1-agent-ctx-3 {[normalize_result] >= 2}
+
+fossil sql "SELECT meta FROM agentchat WHERE role='user' AND kind='prompt' ORDER BY acid DESC LIMIT 1"
+test th1-agent-ctx-4 {[normalize_result] eq {{"context":true}}}
+
+###############################################################################
+# Full End-to-End: Thinking Extraction Flow
+###############################################################################
+
+# Reconfigure to use the thinking-emitting backend
+write_file [file join $cfgDir agent.json] [subst -nocommands {
+{
+  "provider": "ollama",
+  "model": "test-th1-model",
+  "command": "$thinkingBackend",
+  "thinking_tag": "thought",
+  "embedding_provider": "ollama",
+  "embedding_model": "test-embed-model",
+  "embedding_command": "$backend"
+}
+}]
+
+set body [subst {sid=0&msg=think+and+answer&model=test-th1-model&context=0&proof=$proof}]
+set response [agent_http_request $repository POST /agent-chat $body]
+set body2 [agent_http_body $response]
+set RESULT $response
+set CODE 0
+test th1-agent-think-1 {[agent_http_status $RESULT] eq {200}}
+test th1-agent-think-2 {[string first {"reply":} $body2]>=0}
+
+# The raw reply returned to the client still contains the full text
+test th1-agent-think-3 {[string first {thought} $body2]>=0}
+
+# The stored reply (clean_reply) must NOT contain the <thought> tags
+fossil sql "SELECT msg FROM agentchat WHERE role='agent' AND kind='reply' ORDER BY acid DESC LIMIT 1"
+test th1-agent-think-4 {
+  set r [normalize_result]
+  expr {[string first {<thought>} $r]<0 && [string first {plain answer} $r]>=0}
+}
+
+# The thinking metadata must have been stored
+fossil sql "SELECT meta FROM agentchat WHERE role='agent' AND kind='reply' ORDER BY acid DESC LIMIT 1"
+test th1-agent-think-5 {[string first {thinking} [normalize_result]]>=0}
+
+# The extracted thinking text must match what the fake backend emitted
+fossil sql "SELECT meta FROM agentchat WHERE role='agent' AND kind='reply' ORDER BY acid DESC LIMIT 1"
+test th1-agent-think-6 {[string first {internal reasoning} [normalize_result]]>=0}
+
+###############################################################################
+# Full End-to-End: Error Path (bad model / provider mismatch)
+###############################################################################
+
+# Restore the normal backend but send a model that looks Ollama-specific
+# to a codex provider – this exercises the early-validation error path.
+write_file [file join $cfgDir agent.json] [subst -nocommands {
+{
+  "provider": "codex",
+  "model": "test-th1-model",
+  "command": "$backend",
+  "embedding_provider": "ollama",
+  "embedding_model": "test-embed-model",
+  "embedding_command": "$backend"
+}
+}]
+
+set body [subst {sid=0&msg=hello&model=qwen3.5:0.8b&context=0&proof=$proof}]
+set response [agent_http_request $repository POST /agent-chat $body]
+set body2 [agent_http_body $response]
+set RESULT $body2
+set CODE 0
+test th1-agent-err-1 {[string first {"error":} $body2]>=0}
+test th1-agent-err-2 {[string first {ollama} $body2]>=0 || [string first {mismatch} $body2]>=0 || [string first {codex} $body2]>=0}
+
+###############################################################################
+# agent-events and agent-history consistency after TH1 orchestration
+###############################################################################
+
+# Restore the normal backend
+write_file [file join $cfgDir agent.json] [subst -nocommands {
+{
+  "provider": "ollama",
+  "model": "test-th1-model",
+  "command": "$backend",
+  "thinking_tag": "thought",
+  "embedding_provider": "ollama",
+  "embedding_model": "test-embed-model",
+  "embedding_command": "$backend"
+}
+}]
+
+set body [subst {sid=0&msg=events+and+history&model=test-th1-model&context=0&proof=$proof}]
+set response [agent_http_request $repository POST /agent-chat $body]
+set body2 [agent_http_body $response]
+
+# Extract the returned sid
+regexp {"sid":([0-9]+)} $body2 dummy newSid
+
+set evtResponse [agent_http_request $repository GET [subst {/agent-events?sid=$newSid}] {}]
+set evtBody [agent_http_body $evtResponse]
+set RESULT $evtResponse
+set CODE 0
+test th1-agent-ev-1 {[agent_http_status $RESULT] eq {200}}
+test th1-agent-ev-2 {[string first {"events":[} $evtBody]>=0}
+test th1-agent-ev-3 {[string first {"role":"system","kind":"tool"} $evtBody]>=0}
+test th1-agent-ev-4 {[string first {"role":"system","kind":"progress"} $evtBody]>=0}
+test th1-agent-ev-5 {[string first {"role":"user","kind":"prompt"} $evtBody]>=0}
+test th1-agent-ev-6 {[string first {"role":"agent","kind":"reply"} $evtBody]>=0}
+
+set histResponse [agent_http_request $repository GET [subst {/agent-history?sid=$newSid}] {}]
+set histBody [agent_http_body $histResponse]
+set RESULT $histResponse
+set CODE 0
+test th1-agent-hist-1 {[agent_http_status $RESULT] eq {200}}
+test th1-agent-hist-2 {[string first {"sid":} $histBody]>=0}
+test th1-agent-hist-3 {[string first {"messages":[} $histBody]>=0}
+test th1-agent-hist-4 {[string first {"title":"events and history"} $histBody]>=0}
+test th1-agent-hist-5 {[string first {"role":"agent","kind":"reply"} $histBody]>=0}
+
+###############################################################################
+
+test_cleanup

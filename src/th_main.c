@@ -22,6 +22,8 @@
 #include "th_main.h"
 #include "sqlite3.h"
 
+void agent_register_th1(Th_Interp*);
+
 #if INTERFACE
 /*
 ** Flag parameters to the Th_FossilInit() routine used to control the
@@ -2468,6 +2470,7 @@ void Th_FossilInit(u32 flags){
       th_register_tcl(g.interp, &g.tcl);  /* Tcl integration commands. */
     }
 #endif
+    agent_register_th1(g.interp);
     for(i=0; i<count(aCommand); i++){
       if ( !aCommand[i].zName || !aCommand[i].xProc ) continue;
       Th_CreateCommand(g.interp, aCommand[i].zName, aCommand[i].xProc,

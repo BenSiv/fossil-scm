@@ -39,6 +39,8 @@ The practical state is:
 - make `/agentui` truthful about what backend will run
 - prepare for streaming and structured message handling
 - keep the current retrieval loop while extending evaluation to chat
+- **Introduce TH1 Glue Layer**: Move orchestration, prompt engineering, and parsing from C to TH1 scripts for flexibility and safety. See [TH1_ORCHESTRATION.md](file:///wsl.localhost/Ubuntu/home/bensiv/fossil-scm/doc/ai/TH1_ORCHESTRATION.md).
+- keep the core C logic lean and focused on "Muscle" (Vector search, DB access, process execution).
 
 ## Phase A: Visibility And Safety
 
@@ -140,6 +142,7 @@ Exit criteria:
 Objective:
 
 - move from buffered one-shot replies to streamed, typed output
+- replace hardcoded C chat logic with a flexible TH1 orchestration layer
 
 Transport options:
 
