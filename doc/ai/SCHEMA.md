@@ -30,6 +30,7 @@ Scope: define additional SQLite tables in the Fossil repository database using a
     - `source_ref` TEXT              -- durable reference when source_id is insufficient
     - `process_level` TEXT           -- raw|grouped|curated|atomic
     - `metadata` TEXT                -- JSON metadata payload
+    - `artifact_weight` REAL DEFAULT 0.05
     - `heat` REAL DEFAULT 1.0
     - `retrieval_count` INTEGER DEFAULT 0
     - `last_retrieved_at` TEXT

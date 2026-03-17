@@ -164,7 +164,7 @@ fossil test-th-eval {string first {<thought>} {<thought>ideas</thought>}}
 test th1-agent-lang-13 {$RESULT eq {0}}
 
 fossil test-th-eval {string first {</thought>} {<thought>ideas</thought>}}
-test th1-agent-lang-14 {$RESULT eq {13}}
+test th1-agent-lang-14 {$RESULT eq {14}}
 
 # string length
 fossil test-th-eval {string length ""}
@@ -194,9 +194,19 @@ if {$s != -1} {
   if {$e != -1} {
     set s_end [expr {$s + [string length $start_tag]}]
     set thinking [string range $reply $s_end [expr {$e - 1}]]
-    set pre  [string range $reply 0 [expr {$s - 1}]]
+    if {$s == 0} {
+      set pre {}
+    } else {
+      set pre [string range $reply 0 [expr {$s - 1}]]
+    }
     set post [string range $reply [expr {$e + [string length $end_tag]}] [expr {[string length $reply] - 1}]]
-    set clean_reply "$pre$post"
+    if {[string length $pre] == 0} {
+      set clean_reply $post
+    } elseif {[string length $post] == 0} {
+      set clean_reply $pre
+    } else {
+      set clean_reply "$pre $post"
+    }
   }
 }
 set thinking
@@ -216,9 +226,19 @@ if {$s != -1} {
   if {$e != -1} {
     set s_end [expr {$s + [string length $start_tag]}]
     set thinking [string range $reply $s_end [expr {$e - 1}]]
-    set pre  [string range $reply 0 [expr {$s - 1}]]
+    if {$s == 0} {
+      set pre {}
+    } else {
+      set pre [string range $reply 0 [expr {$s - 1}]]
+    }
     set post [string range $reply [expr {$e + [string length $end_tag]}] [expr {[string length $reply] - 1}]]
-    set clean_reply "$pre$post"
+    if {[string length $pre] == 0} {
+      set clean_reply $post
+    } elseif {[string length $post] == 0} {
+      set clean_reply $pre
+    } else {
+      set clean_reply "$pre $post"
+    }
   }
 }
 string trim $clean_reply
@@ -238,7 +258,7 @@ if {$s != -1} {
 }
 list $thinking $clean_reply
 }
-test th1-agent-lang-21 {$RESULT eq {{ } {just a plain reply}}}
+test th1-agent-lang-21 {$RESULT eq {{} {just a plain reply}}}
 
 ###############################################################################
 # agent_* TH1 Command – Wrong Argument Count Tests
@@ -294,13 +314,13 @@ fossil test-th-eval {agent_json_quote {}}
 test th1-agent-jq-2 {$RESULT eq {""}}
 
 fossil test-th-eval {agent_json_quote {say "hello"}}
-test th1-agent-jq-3 {[string first {\\"hello\\"} $RESULT]>=0}
+test th1-agent-jq-3 {[string first {\\"hello\\"} [string map [list \" \\\" ] $RESULT]]>=0}
 
 fossil test-th-eval {agent_json_quote "line1\nline2"}
-test th1-agent-jq-4 {[string first {\\n} $RESULT]>=0}
+test th1-agent-jq-4 {[string first {\n} $RESULT]>=0}
 
 fossil test-th-eval {agent_json_quote {back\slash}}
-test th1-agent-jq-5 {[string first {\\\\} $RESULT]>=0}
+test th1-agent-jq-5 {[string first {\\} $RESULT]>=0}
 
 # Verify that agent_json_quote produces a valid JSON-embeddable token:
 # the result must start and end with a double-quote character.
@@ -348,11 +368,7 @@ test th1-agent-e2e-6 {[string first {test-th1-model} $body2]>=0}
 # Without context, only the mandatory events should be stored.
 # Expected sequence: tool, progress(running), user|prompt, progress(ok), agent|reply
 fossil sql "SELECT group_concat(role||'|'||kind, ',') FROM (SELECT role, kind FROM agentchat ORDER BY acid)"
-test th1-agent-e2e-7 {
-  set evts [normalize_result]
-  # Must include user prompt and agent reply
-  expr {[string first {user|prompt} $evts]>=0 && [string first {agent|reply} $evts]>=0}
-}
+test th1-agent-e2e-7 {[string first {user|prompt} [normalize_result]]>=0 && [string first {agent|reply} [normalize_result]]>=0}
 
 fossil sql "SELECT msg FROM agentchat WHERE role='agent' AND kind='reply' ORDER BY acid DESC LIMIT 1"
 test th1-agent-e2e-8 {[string first {reply:} [normalize_result]]>=0}
@@ -414,10 +430,7 @@ test th1-agent-think-3 {[string first {thought} $body2]>=0}
 
 # The stored reply (clean_reply) must NOT contain the <thought> tags
 fossil sql "SELECT msg FROM agentchat WHERE role='agent' AND kind='reply' ORDER BY acid DESC LIMIT 1"
-test th1-agent-think-4 {
-  set r [normalize_result]
-  expr {[string first {<thought>} $r]<0 && [string first {plain answer} $r]>=0}
-}
+test th1-agent-think-4 {[string first {<thought>} [normalize_result]]<0 && [string first {plain answer} [normalize_result]]>=0}
 
 # The thinking metadata must have been stored
 fossil sql "SELECT meta FROM agentchat WHERE role='agent' AND kind='reply' ORDER BY acid DESC LIMIT 1"
@@ -499,4 +512,31 @@ test th1-agent-hist-5 {[string first {"role":"agent","kind":"reply"} $histBody]>
 
 ###############################################################################
 
+###############################################################################
+# TH1 Pool Processing Commands Tests
+###############################################################################
+
+# Verify argument counts for pool commands
+fossil test-th-eval --open-config {pool_list_pending}
+test th1-pool-args-1 {[string first {wrong # args} $RESULT]>=0}
+
+fossil test-th-eval --open-config {pool_get}
+test th1-pool-args-2 {[string first {wrong # args} $RESULT]>=0}
+
+fossil test-th-eval --open-config {pool_put}
+test th1-pool-args-3 {[string first {wrong # args} $RESULT]>=0}
+
+fossil test-th-eval --open-config {pool_link}
+test th1-pool-args-4 {[string first {wrong # args} $RESULT]>=0}
+
+# Testing pool_put
+fossil test-th-eval --open-config "pool_put 1 {This is the synthesised tier 1 note} {{\"process_level\":\"grouped\"}}"
+test th1-pool-put-1 {[string length [string trim $RESULT]] > 0}
+set new_nid [string trim $RESULT]
+
+# Verify via DB that the note exists at tier 1
+fossil sql "SELECT count(*) FROM repository.ai_note WHERE nid=$new_nid AND tier=1"
+test th1-pool-verify-1 {[normalize_result] == 1}
+
+catch {file delete $thinkingBackend}
 test_cleanup

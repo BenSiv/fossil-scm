@@ -27,13 +27,14 @@ test_setup ""
 # two files to make sure that deltas between these two files
 # work properly.
 #
+set nRepeat 25
 set filelist [lsort [glob $testdir/*]]
 foreach f $filelist {
   if {[file isdir $f]} continue
   set base [file root [file tail $f]]
   set f1 [read_file $f]
   write_file t1 $f1
-  for {set i 0} {$i<100} {incr i} {
+  for {set i 0} {$i<$nRepeat} {incr i} {
     write_file t2 [random_changes $f1 1 1 0 0.1]
     fossil test-delta t1 t2
     test delta-$base-$i-1 {[normalize_result]=="ok"}

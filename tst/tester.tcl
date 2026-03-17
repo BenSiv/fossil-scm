@@ -1174,7 +1174,7 @@ foreach testfile $argv {
   if { [catch {source $testdir/$testfile.test} testerror testopts] } {
     test test-framework-$testfile 0
     protOut "!!!!! $testfile: $testerror"
-    protOutDict $testopts"
+    protOutDict $testopts
   } else {
     test test-framework-$testfile 1
   }

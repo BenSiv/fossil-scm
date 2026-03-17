@@ -889,6 +889,7 @@ static int state_export_ai_notes(const char *zDir){
     db_prepare(&q,
       "SELECT nid, tier, title, body, source_type, coalesce(source_ref,''),"
       "       coalesce(process_level,''), coalesce(metadata,''),"
+      "       coalesce(artifact_weight,0.05),"
       "       heat, retrieval_count, coalesce(content_hash,''),"
       "       coalesce(duplicate_of,0), coalesce(merged_into,0)"
       "  FROM ai_note ORDER BY nid"
@@ -898,6 +899,7 @@ static int state_export_ai_notes(const char *zDir){
         "%s    {\"nid\": %d, \"tier\": %d, \"title\": %!j, \"body\": %!j,"
         " \"source_type\": %!j, \"source_ref\": %!j,"
         " \"process_level\": %!j, \"metadata\": %!j,"
+        " \"artifact_weight\": %.17g,"
         " \"heat\": %.17g, \"retrieval_count\": %d,"
         " \"content_hash\": %!j, \"duplicate_of\": %d, \"merged_into\": %d}\n",
         n>0 ? ",\n" : "",
@@ -910,10 +912,11 @@ static int state_export_ai_notes(const char *zDir){
         db_column_text(&q, 6),
         db_column_text(&q, 7),
         db_column_double(&q, 8),
-        db_column_int(&q, 9),
-        db_column_text(&q, 10),
-        db_column_int(&q, 11),
-        db_column_int(&q, 12)
+        db_column_double(&q, 9),
+        db_column_int(&q, 10),
+        db_column_text(&q, 11),
+        db_column_int(&q, 12),
+        db_column_int(&q, 13)
       );
       n++;
     }

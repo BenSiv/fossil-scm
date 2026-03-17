@@ -706,9 +706,17 @@ static int agent_chat_session_exists(int sid){
   return sid>0 && db_exists("SELECT 1 FROM agentchat_session WHERE sid=%d", sid);
 }
 
-/*
-** Resolve the current session id for zUser, creating one if needed.
-*/
+static int agent_chat_latest_session_user(const char *zUser){
+  return db_int(0, "SELECT max(sid) FROM repository.ai_chat_session"
+                   " WHERE user=%Q", zUser);
+}
+
+static int agent_chat_current_session_user(const char *zUser){
+  int cur = db_int(0, "SELECT current_sid FROM repository.ai_chat_user"
+                      " WHERE user=%Q", zUser);
+  return cur ? cur : agent_chat_latest_session_user(zUser);
+}
+
 static int agent_chat_current_session(const char *zUser){
   int sid;
   agent_chat_create_tables();
@@ -728,9 +736,6 @@ static int agent_chat_current_session(const char *zUser){
   return sid>0 ? sid : agent_chat_session_create(zUser, agent_chat_provider(), agent_default_model());
 }
 
-/*
-** Return the most recent session id for zUser without creating a new one.
-*/
 static int agent_chat_latest_session(const char *zUser){
   if( !db_table_exists("repository","agentchat_session") ) return 0;
   return db_int(0,
@@ -1384,6 +1389,7 @@ static int agent_semantic_search(
     "                 WHEN 1 THEN 0.10"
     "                 ELSE 0.0"
     "               END"
+    "             - MIN(coalesce(n.artifact_weight,0.05),0.30)"
     "             - (MIN(coalesce(n.heat,1.0),25.0)*0.02)"
     "             - (MIN(coalesce(n.retrieval_count,0),50)*0.01)"
     "           ) AS weighted_score"
@@ -1874,6 +1880,71 @@ static void agent_eval_report_cmd(void){
 }
 
 /*
+** CLI command: fossil agent pool-process TIER [SCRIPT]
+**
+** Runs the given TH1 script (or a default) to transition notes
+** into the requested tier.
+*/
+static void agent_pool_process_cmd(void){
+  int tier;
+  const char *zScript;
+  char *zEnvScript = 0;
+  int thRc;
+  if( g.argc<4 ){
+    usage("pool-process TIER [TH1_SCRIPT_PATH]");
+  }
+  tier = atoi(g.argv[3]);
+  if( tier<1 || tier>3 ){
+    fossil_fatal("tier must be 1, 2, or 3");
+  }
+  
+  if( g.argc>=5 ){
+    Blob b = BLOB_INITIALIZER;
+    blob_read_from_file(&b, g.argv[4], ExtFILE);
+    zScript = blob_str(&b);
+  }else{
+    const char *zEnv = fossil_getenv("FOSSIL_AGENT_POOL_SCRIPT");
+    if( zEnv && zEnv[0] ){
+      Blob b = BLOB_INITIALIZER;
+      blob_read_from_file(&b, zEnv, ExtFILE);
+      zEnvScript = blob_str(&b);
+      zScript = zEnvScript;
+    }else{
+      zScript = "set pending [pool_list_pending $target_tier]\n"
+                "if {[llength $pending] == 0} { return }\n"
+                "foreach nid $pending {\n"
+                "  set body [pool_get $nid]\n"
+                "  set prompt \"Synthesize and upgrade this context to tier $target_tier:\\n\\n$body\"\n"
+                "  set reply [agent_run $provider $model $prompt]\n"
+                "  set new_nid [pool_put $target_tier $reply]\n"
+                "  pool_link $nid $new_nid \\\"derived-from\\\"\n"
+                "}\n"
+                "return \\\"Processed [llength $pending] items\\\"\n";
+    }
+  }
+
+  ai_require_enabled();
+  db_begin_write();
+  Th_FossilInit(TH_INIT_DEFAULT);
+  Th_StoreInt("target_tier", tier);
+  Th_Store("provider", agent_chat_provider());
+  Th_Store("model", agent_default_model());
+  
+  thRc = Th_Eval(g.interp, 0, zScript, -1);
+  if( thRc==TH_ERROR ){
+    int nResult = 0;
+    const char *zResult = Th_GetResult(g.interp, &nResult);
+    fossil_fatal("pool-process TH1 error: %.*s", nResult, zResult ? zResult : "");
+  }else{
+    int nResult = 0;
+    const char *zResult = Th_GetResult(g.interp, &nResult);
+    fossil_print("pool-process completed: %.*s\n", nResult, zResult ? zResult : "success");
+  }
+  db_end_transaction(0);
+  fossil_free(zEnvScript);
+}
+
+/*
 ** COMMAND: agent
 **
 ** Usage: %fossil agent SUBCOMMAND ...
@@ -1954,6 +2025,8 @@ void agent_cmd(void){
     agent_semantic_index_cmd();
   }else if( fossil_strcmp(zCmd, "wiki-sync")==0 ){
     agent_wiki_sync_cmd();
+  }else if( fossil_strcmp(zCmd, "pool-process")==0 ){
+    agent_pool_process_cmd();
   }else{
     fossil_fatal("unknown agent subcommand: %s", zCmd);
   }
@@ -2510,27 +2583,26 @@ static const char zAgentOrchestrateBuiltin[] =
 "set context \"\"\n"
 "\n"
 "if {$context_enabled} {\n"
-"  agent_save_event $sid $user \"progress\" $provider $model \\\n"
-"    \"{\\\"stage\\\":\\\"context\\\",\\\"status\\\":\\\"running\\\"}\" \\\n"
-"    \"Assembling repository context...\"\n"
+"  set event_meta \"{\\\"stage\\\":\\\"context\\\",\\\"status\\\":\\\"running\\\"}\"\n"
+"  set event_msg \"Assembling repository context...\"\n"
+"  agent_save_event $sid $user \"progress\" $provider $model $event_meta $event_msg\n"
 "  set context [agent_context $msg $model]\n"
 "  if {[string compare $context \"\"] != 0} {\n"
-"    agent_save_event $sid $user \"context\" $provider $model \\\n"
-"      \"{\\\"stage\\\":\\\"context\\\",\\\"hidden\\\":true}\" \\\n"
-"      $context\n"
+"    set event_meta \"{\\\"stage\\\":\\\"context\\\",\\\"hidden\\\":true}\"\n"
+"    agent_save_event $sid $user \"context\" $provider $model $event_meta $context\n"
 "    set full_prompt \"Context:\\n$context\\n\\nUser request:\\n$msg\"\n"
 "  }\n"
-"  agent_save_event $sid $user \"progress\" $provider $model \\\n"
-"    \"{\\\"stage\\\":\\\"context\\\",\\\"status\\\":\\\"ok\\\"}\" \\\n"
-"    \"Repository context assembled\"\n"
+"  set event_meta \"{\\\"stage\\\":\\\"context\\\",\\\"status\\\":\\\"ok\\\"}\"\n"
+"  set event_msg \"Repository context assembled\"\n"
+"  agent_save_event $sid $user \"progress\" $provider $model $event_meta $event_msg\n"
 "}\n"
 "\n"
-"agent_save_event $sid $user \"tool\" $provider $model \\\n"
-"  \"{\\\"tool\\\":\\\"chat-backend\\\",\\\"provider\\\":\\\"$provider\\\"}\" \\\n"
-"  \"Invoking $provider backend\"\n"
-"agent_save_event $sid $user \"progress\" $provider $model \\\n"
-"  \"{\\\"stage\\\":\\\"backend\\\",\\\"status\\\":\\\"running\\\"}\" \\\n"
-"  \"Waiting for backend reply...\"\n"
+"set event_meta \"{\\\"tool\\\":\\\"chat-backend\\\",\\\"provider\\\":\\\"$provider\\\"}\"\n"
+"set event_msg \"Invoking $provider backend\"\n"
+"agent_save_event $sid $user \"tool\" $provider $model $event_meta $event_msg\n"
+"set event_meta \"{\\\"stage\\\":\\\"backend\\\",\\\"status\\\":\\\"running\\\"}\"\n"
+"set event_msg \"Waiting for backend reply...\"\n"
+"agent_save_event $sid $user \"progress\" $provider $model $event_meta $event_msg\n"
 "\n"
 "if {[string compare $context \"\"] != 0} {\n"
 "  set prompt_meta \"{\\\"context\\\":true}\"\n"
@@ -2540,9 +2612,9 @@ static const char zAgentOrchestrateBuiltin[] =
 "agent_save $sid $user \"user\" \"prompt\" $provider $model $prompt_meta $msg\n"
 "\n"
 "if {[catch {agent_run $provider $model $full_prompt} reply]} {\n"
-"  agent_save_event $sid $user \"progress\" $provider $model \\\n"
-"    \"{\\\"stage\\\":\\\"backend\\\",\\\"status\\\":\\\"error\\\"}\" \\\n"
-"    \"Backend reply failed\"\n"
+"  set event_meta \"{\\\"stage\\\":\\\"backend\\\",\\\"status\\\":\\\"error\\\"}\"\n"
+"  set event_msg \"Backend reply failed\"\n"
+"  agent_save_event $sid $user \"progress\" $provider $model $event_meta $event_msg\n"
 "  set acid [agent_save $sid $user \"agent\" \"error\" $provider $model \"\" $reply]\n"
 "  agent_eval $sid $acid $provider $model \"error\" $reply\n"
 "  return \"{\\\"error\\\":[agent_json_quote $reply]}\"\n"
@@ -2558,15 +2630,25 @@ static const char zAgentOrchestrateBuiltin[] =
 "  if {$e != -1} {\n"
 "    set s_end [expr {$s + [string length $start_tag]}]\n"
 "    set thinking [string range $reply $s_end [expr {$e - 1}]]\n"
-"    set pre  [string range $reply 0 [expr {$s - 1}]]\n"
+"    if {$s == 0} {\n"
+"      set pre \"\"\n"
+"    } else {\n"
+"      set pre [string range $reply 0 [expr {$s - 1}]]\n"
+"    }\n"
 "    set post [string range $reply [expr {$e + [string length $end_tag]}] [expr {[string length $reply] - 1}]]\n"
-"    set clean_reply \"$pre$post\"\n"
+"    if {[string length $pre] == 0} {\n"
+"      set clean_reply $post\n"
+"    } elseif {[string length $post] == 0} {\n"
+"      set clean_reply $pre\n"
+"    } else {\n"
+"      set clean_reply \"$pre $post\"\n"
+"    }\n"
 "  }\n"
 "}\n"
 "\n"
-"agent_save_event $sid $user \"progress\" $provider $model \\\n"
-"  \"{\\\"stage\\\":\\\"backend\\\",\\\"status\\\":\\\"ok\\\"}\" \\\n"
-"  \"Backend reply received\"\n"
+"set event_meta \"{\\\"stage\\\":\\\"backend\\\",\\\"status\\\":\\\"ok\\\"}\"\n"
+"set event_msg \"Backend reply received\"\n"
+"agent_save_event $sid $user \"progress\" $provider $model $event_meta $event_msg\n"
 "\n"
 "set meta \"\"\n"
 "if {[string compare $thinking \"\"] != 0} {\n"
@@ -2711,12 +2793,21 @@ static int agent_save_th1(
   const char **argv,
   int *argl
 ){
+  Blob msg = BLOB_INITIALIZER;
   int sid, acid;
-  if( argc!=9 ){
+  int i;
+  if( argc<9 ){
     return Th_WrongNumArgs(interp, "agent_save SID USER ROLE KIND PROVIDER MODEL META MSG");
   }
   sid = atoi(argv[1]);
-  acid = agent_chat_save(sid, argv[2], argv[3], argv[4], argv[5], argv[6], argv[7], argv[8]);
+  for(i=8; i<argc; i++){
+    if( i>8 ) blob_append(&msg, " ", 1);
+    blob_append(&msg, argv[i], argl[i]);
+  }
+  acid = agent_chat_save(
+    sid, argv[2], argv[3], argv[4], argv[5], argv[6], argv[7], blob_str(&msg)
+  );
+  blob_reset(&msg);
   Th_SetResultInt(interp, acid);
   return TH_OK;
 }
@@ -2733,12 +2824,22 @@ static int agent_save_event_th1(
   const char **argv,
   int *argl
 ){
+  Blob msg = BLOB_INITIALIZER;
   int sid;
-  if( argc!=8 ){
+  int i;
+  if( argc<8 ){
     return Th_WrongNumArgs(interp, "agent_save_event SID USER KIND PROVIDER MODEL META MSG");
   }
   sid = atoi(argv[1]);
-  agent_chat_save_event(sid, argv[2], argv[3], argv[4], argv[5], argv[6], argv[7]);
+  for(i=7; i<argc; i++){
+    if( i>7 ) blob_append(&msg, " ", 1);
+    blob_append(&msg, argv[i], argl[i]);
+  }
+  agent_chat_save_event(
+    sid, argv[2], argv[3], argv[4], argv[5], argv[6], blob_str(&msg)
+  );
+  blob_reset(&msg);
+  Th_SetResultInt(interp, db_last_insert_rowid());
   return TH_OK;
 }
 
@@ -2810,6 +2911,126 @@ static int agent_json_quote_th1(
 }
 
 /*
+** TH1 command: pool_list_pending TIER
+**
+** Returns a Tcl list of nids for items that need processing to reach TIER.
+** (e.g. tier 2 gets items currently at tier 1).
+*/
+static int pool_list_pending_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  int targetTier;
+  Stmt q;
+  char *zRes = 0;
+  int nRes = 0;
+  if( argc!=2 ){
+    return Th_WrongNumArgs(interp, "pool_list_pending TIER");
+  }
+  targetTier = atoi(argv[1]);
+  if( targetTier<1 ) targetTier = 1;
+  db_prepare(&q, 
+    "SELECT nid FROM repository.ai_note"
+    " WHERE tier=%d"
+    "   AND duplicate_of IS NULL"
+    "   AND process_level IS NOT NULL",
+    targetTier - 1
+  );
+  while( db_step(&q)==SQLITE_ROW ){
+    char zBuf[32];
+    sqlite3_snprintf(sizeof(zBuf), zBuf, "%d", db_column_int(&q, 0));
+    Th_ListAppend(interp, &zRes, &nRes, zBuf, -1);
+  }
+  db_finalize(&q);
+  Th_SetResult(interp, zRes ? zRes : "", nRes);
+  if( zRes ) fossil_free(zRes);
+  return TH_OK;
+}
+
+/*
+** TH1 command: pool_get NID
+**
+** Returns the text body of an ai_note.
+*/
+static int pool_get_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  int nid;
+  char *zBody;
+  if( argc!=2 ){
+    return Th_WrongNumArgs(interp, "pool_get NID");
+  }
+  nid = atoi(argv[1]);
+  zBody = db_text(0, "SELECT body FROM repository.ai_note WHERE nid=%d", nid);
+  if( zBody ){
+    Th_SetResult(interp, zBody, -1);
+    fossil_free(zBody);
+  }else{
+    Th_SetResult(interp, "", 0);
+  }
+  return TH_OK;
+}
+
+/*
+** TH1 command: pool_put TIER BODY [METADATA]
+**
+** Creates a new AI note at TIER, returning the new NID.
+*/
+static int pool_put_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  int tier;
+  const char *zBody;
+  const char *zMeta = 0;
+  Blob body = BLOB_INITIALIZER;
+  int nid;
+  if( argc!=3 && argc!=4 ){
+    return Th_WrongNumArgs(interp, "pool_put TIER BODY ?METADATA?");
+  }
+  tier = atoi(argv[1]);
+  zBody = argv[2];
+  if( argc==4 ) zMeta = argv[3];
+  blob_append(&body, zBody, argl[2]);
+  nid = ai_note_create(tier, 0, &body, "th1-pool", 0, 0, 0, zMeta);
+  blob_reset(&body);
+  Th_SetResultInt(interp, nid);
+  return TH_OK;
+}
+
+/*
+** TH1 command: pool_link FROM_NID TO_NID LINK_TYPE
+**
+** Creates or bumps a relationship between notes.
+*/
+static int pool_link_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  int fromNid, toNid;
+  if( argc!=4 ){
+    return Th_WrongNumArgs(interp, "pool_link FROM_NID TO_NID LINK_TYPE");
+  }
+  fromNid = atoi(argv[1]);
+  toNid = atoi(argv[2]);
+  ai_note_link_upsert(fromNid, toNid, argv[3], 1.0);
+  return TH_OK;
+}
+
+/*
 ** Register all agent commands with the TH1 interpreter.
 */
 void agent_register_th1(Th_Interp *interp){
@@ -2824,6 +3045,10 @@ void agent_register_th1(Th_Interp *interp){
     {"agent_config",     agent_config_th1},
     {"agent_eval",       agent_eval_th1},
     {"agent_json_quote", agent_json_quote_th1},
+    {"pool_list_pending", pool_list_pending_th1},
+    {"pool_get",          pool_get_th1},
+    {"pool_put",          pool_put_th1},
+    {"pool_link",         pool_link_th1},
     {0, 0}
   };
   int i;

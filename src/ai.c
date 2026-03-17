@@ -72,6 +72,14 @@ void ai_chat_eval_record(
 );
 void ai_chat_eval_feedback(int sid, int acid, const char *zFeedback);
 
+/* Create or bump a relationship between notes */
+void ai_note_link_upsert(
+  int fromNid,
+  int toNid,
+  const char *zLinkType,
+  double rWeight
+);
+
 /* CLI entry point */
 void ai_cmd(void);
 
@@ -204,7 +212,7 @@ static void ai_note_hash(Blob *pBody, Blob *pHashOut){
 /*
 ** Create or bump a link between two notes.
 */
-static void ai_note_link_upsert(
+void ai_note_link_upsert(
   int fromNid,
   int toNid,
   const char *zLinkType,
@@ -385,6 +393,28 @@ void ai_add_sql_func(sqlite3 *db){
   );
 }
 
+/*
+** Return a static authority bonus for notes of the given source type.
+** This is the "strong typing" override from HEAT.md: authoritative artifact
+** classes should surface more reliably than ephemeral chat-like notes.
+*/
+static double ai_artifact_weight_for_source_type(const char *zSourceType){
+  if( zSourceType==0 || zSourceType[0]==0 ) return 0.05;
+  if( fossil_strcmp(zSourceType, "wiki")==0 ) return 0.30;
+  if( fossil_strcmp(zSourceType, "doc")==0 ) return 0.28;
+  if( fossil_strcmp(zSourceType, "summary")==0 ) return 0.24;
+  if( fossil_strcmp(zSourceType, "ticket")==0 ) return 0.20;
+  if( fossil_strcmp(zSourceType, "commit")==0 ) return 0.18;
+  if( fossil_strcmp(zSourceType, "checkin")==0 ) return 0.18;
+  if( fossil_strcmp(zSourceType, "diff")==0 ) return 0.12;
+  if( fossil_strcmp(zSourceType, "reasoning")==0 ) return 0.08;
+  if( fossil_strcmp(zSourceType, "manual")==0 ) return 0.08;
+  if( fossil_strcmp(zSourceType, "th1-pool")==0 ) return 0.08;
+  if( fossil_strcmp(zSourceType, "prompt")==0 ) return 0.02;
+  if( fossil_strcmp(zSourceType, "chat")==0 ) return 0.02;
+  return 0.05;
+}
+
 int ai_is_enabled(void){
   return db_get_boolean("ai-enable", 0);
 }
@@ -410,6 +440,7 @@ void ai_schema_ensure(void){
     "  source_ref TEXT,"
     "  process_level TEXT,"
     "  metadata TEXT,"
+    "  artifact_weight REAL DEFAULT 0.05,"
     "  heat REAL DEFAULT 1.0,"
     "  retrieval_count INTEGER DEFAULT 0,"
     "  last_retrieved_at TEXT,"
@@ -516,6 +547,29 @@ void ai_schema_ensure(void){
   if( !db_table_has_column("repository","ai_note","metadata") ){
     db_multi_exec("ALTER TABLE repository.ai_note ADD COLUMN metadata TEXT;");
   }
+  if( !db_table_has_column("repository","ai_note","artifact_weight") ){
+    db_multi_exec(
+      "ALTER TABLE repository.ai_note ADD COLUMN artifact_weight"
+      " REAL DEFAULT 0.05;"
+    );
+    db_multi_exec(
+      "UPDATE repository.ai_note"
+      "   SET artifact_weight=CASE coalesce(source_type,'')"
+      "     WHEN 'wiki' THEN 0.30"
+      "     WHEN 'doc' THEN 0.28"
+      "     WHEN 'summary' THEN 0.24"
+      "     WHEN 'ticket' THEN 0.20"
+      "     WHEN 'commit' THEN 0.18"
+      "     WHEN 'checkin' THEN 0.18"
+      "     WHEN 'diff' THEN 0.12"
+      "     WHEN 'reasoning' THEN 0.08"
+      "     WHEN 'manual' THEN 0.08"
+      "     WHEN 'th1-pool' THEN 0.08"
+      "     WHEN 'prompt' THEN 0.02"
+      "     WHEN 'chat' THEN 0.02"
+      "     ELSE 0.05 END"
+    );
+  }
   if( !db_table_has_column("repository","ai_note","retrieval_count") ){
     db_multi_exec(
       "ALTER TABLE repository.ai_note ADD COLUMN retrieval_count"
@@ -567,7 +621,7 @@ void ai_schema_ensure(void){
 
   db_multi_exec(
     "CREATE INDEX IF NOT EXISTS repository.ai_note_i1"
-    " ON ai_note(tier, heat DESC, retrieval_count DESC);"
+    " ON ai_note(tier, artifact_weight DESC, heat DESC, retrieval_count DESC);"
     "CREATE INDEX IF NOT EXISTS repository.ai_note_i2"
     " ON ai_note(content_hash);"
     "CREATE INDEX IF NOT EXISTS repository.ai_context_i1"
@@ -607,6 +661,7 @@ int ai_note_create(
   Stmt q;
   char *zDerivedTitle = 0;
   char *zDerivedMeta = 0;
+  double rArtifactWeight;
   int nid;
 
   ai_require_enabled();
@@ -622,6 +677,7 @@ int ai_note_create(
   if( zSourceType==0 || zSourceType[0]==0 ){
     zSourceType = "manual";
   }
+  rArtifactWeight = ai_artifact_weight_for_source_type(zSourceType);
   if( zProcessLevel==0 || zProcessLevel[0]==0 ){
     zProcessLevel = ai_process_level_for_tier(tier);
   }
@@ -640,11 +696,11 @@ int ai_note_create(
   db_prepare(&q,
     "INSERT INTO repository.ai_note("
     "  tier,title,body,source_type,source_id,source_ref,process_level,"
-    "  metadata,heat,retrieval_count,last_retrieved_at,content_hash,"
+    "  metadata,artifact_weight,heat,retrieval_count,last_retrieved_at,content_hash,"
     "  duplicate_of,merged_into,created_at,updated_at"
     ") VALUES("
     "  :tier,:title,:body,:source_type,:source_id,:source_ref,:process_level,"
-    "  :metadata,1.0,0,NULL,:content_hash,NULL,NULL,"
+    "  :metadata,:artifact_weight,1.0,0,NULL,:content_hash,NULL,NULL,"
     "  julianday('now'),julianday('now')"
     ");"
   );
@@ -658,6 +714,7 @@ int ai_note_create(
   else db_bind_null(&q, ":source_ref");
   db_bind_text(&q, ":process_level", zProcessLevel);
   db_bind_text(&q, ":metadata", zMetadata);
+  db_bind_double(&q, ":artifact_weight", rArtifactWeight);
   db_bind_str(&q, ":content_hash", &hash);
   db_step(&q);
   db_finalize(&q);

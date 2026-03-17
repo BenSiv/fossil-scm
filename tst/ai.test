@@ -40,8 +40,8 @@ write_file ai-note-1.txt "Example Note Body\n\nSecond paragraph.\n"
 fossil agent note ai-note-1.txt --title "Example Note" --tier 2 --source-type doc --source-ref doc/test.md
 test ai-note-1 {[normalize_result] eq {Added note: Example Note}}
 
-fossil sql "SELECT tier || '|' || title || '|' || source_type || '|' || source_ref || '|' || process_level || '|' || retrieval_count FROM ai_note ORDER BY nid DESC LIMIT 1"
-test ai-note-2 {[normalize_result] eq {2|Example Note|doc|doc/test.md|curated|0}}
+fossil sql "SELECT tier || '|' || title || '|' || source_type || '|' || source_ref || '|' || process_level || '|' || printf('%.2f',artifact_weight) || '|' || retrieval_count FROM ai_note ORDER BY nid DESC LIMIT 1"
+test ai-note-2 {[normalize_result] eq {2|Example Note|doc|doc/test.md|curated|0.28|0}}
 
 ###############################################################################
 
@@ -51,6 +51,9 @@ test ai-note-3 {[normalize_result] eq {Added note}}
 
 fossil sql "SELECT title || '|' || process_level || '|' || source_type || '|' || source_ref FROM ai_note ORDER BY nid DESC LIMIT 1"
 test ai-note-4 {[normalize_result] eq {Derived Heading|atomic|wiki|wiki/Derived}}
+
+fossil sql "SELECT printf('%.2f',artifact_weight) FROM ai_note WHERE source_ref='wiki/Derived'"
+test ai-note-5 {[normalize_result] eq {0.30}}
 
 ###############################################################################
 
