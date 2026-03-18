@@ -137,6 +137,49 @@ test agent-retrieve-3 {[string first {Embeddings Note} [normalize_result]] < [st
 
 ###############################################################################
 
+fossil agent --agent-config [file join $cfgDir agent.json] verify --json --chat-smoke --embed-smoke
+test agent-verify-1 {[string first "\"source\":\"cli --agent-config: " [normalize_result]]>=0}
+test agent-verify-2 {[string first "\"chat\":\{\"provider\":\"codex\"" [normalize_result]]>=0}
+test agent-verify-3 {[string first "\"embedding\":\{\"provider\":\"ollama\"" [normalize_result]]>=0}
+test agent-verify-4 {[string first "\"smoke_ok\":1" [normalize_result]]>=0}
+test agent-verify-5 {[string first "\"overall_ok\":1" [normalize_result]]>=0}
+
+###############################################################################
+
+fossil agent capabilities
+test agent-capabilities-1 {[string first "agent_context\tbuiltin\twrite=no\tnetwork=no\tconfirm=no" [normalize_result]]>=0}
+test agent-capabilities-2 {[string first "agent_run\tbuiltin\twrite=no\tnetwork=yes\tconfirm=no" [normalize_result]]>=0}
+
+###############################################################################
+
+fossil agent phases
+test agent-phases-1 {[string first "explore\tExplore\tInspect repository state and gather relevant context." [normalize_result]]>=0}
+test agent-phases-2 {[string first "verify\tVerify\tCheck results, run validations, and summarize remaining risks." [normalize_result]]>=0}
+
+###############################################################################
+
+fossil agent recipe list
+test agent-recipe-1 {[string first "summarize-context\tSummarize Repository Context" [normalize_result]]>=0}
+test agent-recipe-2 {[string first "review-change\tReview Pending Changes" [normalize_result]]>=0}
+
+fossil agent recipe show summarize-context
+test agent-recipe-3 {[string first "name: summarize-context" [normalize_result]]>=0}
+test agent-recipe-4 {[string first "phases: explore" [normalize_result]]>=0}
+test agent-recipe-5 {[string first "capabilities: agent_context,agent_run" [normalize_result]]>=0}
+
+fossil agent --agent-config [file join $cfgDir agent.json] recipe run summarize-context retrieval --json
+test agent-recipe-6 {[string first "\"recipe\":\"summarize-context\"" [normalize_result]]>=0}
+test agent-recipe-7 {[string first "\"provider\":\"codex\"" [normalize_result]]>=0}
+test agent-recipe-8 {[string first "REPOSITORY CONTEXT" [normalize_result]]>=0}
+test agent-recipe-9 {[string first "\"reply\":\"test-agent model=test-chat-model" [normalize_result]]>=0}
+test agent-recipe-10 {[string first "\"phase_count\":1" [normalize_result]]>=0 && [string first "\"phases\"" [normalize_result]]>=0}
+test agent-recipe-11 {[string first "\"primary_phase\"" [normalize_result]]>=0 && [string first "\"name\":\"explore\"" [normalize_result]]>=0}
+test agent-recipe-12 {[string first "\"executive_summary\":\"Recipe completed successfully.\"" [normalize_result]]>=0}
+test agent-recipe-13 {[string first {"artifacts":[]} [normalize_result]]>=0 && [string first {"risks":[]} [normalize_result]]>=0}
+test agent-recipe-14 {[string first "\"capabilities\"" [normalize_result]]>=0}
+
+###############################################################################
+
 set RESULT [exec env XDG_CONFIG_HOME=$userCfgRoot $::fossilexe agent embed {user config probe}]
 set CODE 0
 test agent-config-user-1 {[normalize_result] eq {0.125000, 0.250000, 0.500000, 1.000000}}
@@ -174,6 +217,11 @@ test agent-ui-21 {[string first {id="agent-feedback-useful"} $RESULT]>=0}
 test agent-ui-22 {[string first {id="agent-feedback-not-useful"} $RESULT]>=0}
 test agent-ui-23 {[string first {sendFeedback('useful')} $RESULT]>=0}
 test agent-ui-24 {[string first {sendFeedback('not-useful')} $RESULT]>=0}
+test agent-ui-25 {[string first {id="agent-pool-tiers"} $RESULT]>=0}
+test agent-ui-26 {[string first {id="agent-retrieval-history"} $RESULT]>=0}
+test agent-ui-27 {[string first {fetch('agent-pool')} $RESULT]>=0}
+test agent-ui-28 {[string first {fetch('agent-retrieval?qid='+encodeURIComponent(qid))} $RESULT]>=0}
+test agent-ui-29 {[string first {data-retrieval-qid=} $RESULT]>=0}
 
 ###############################################################################
 
@@ -193,6 +241,17 @@ test agent-config-10 {[string first {"chat_provider_known":1} $RESULT]>=0}
 test agent-config-11 {[string first {"embedding_provider_known":1} $RESULT]>=0}
 test agent-config-12 {[string first {"chat_provider_choices":["codex","ollama","custom"]} $RESULT]>=0}
 test agent-config-13 {[string first {"chat_model_suggestions":["auto"]} $RESULT]>=0}
+test agent-config-14 {[string first {"phase_count":10} $RESULT]>=0}
+test agent-config-15 {[string first "\"phases\"" $RESULT]>=0 && [string first "\"name\":\"explore\"" $RESULT]>=0}
+test agent-config-16 {[string first "\"name\":\"verify\"" $RESULT]>=0 && [string first "\"title\":\"Verify\"" $RESULT]>=0}
+test agent-config-17 {[string first {"capability_count":2} $RESULT]>=0}
+test agent-config-18 {[string first "\"capabilities\"" $RESULT]>=0 && [string first "\"name\":\"agent_context\"" $RESULT]>=0}
+test agent-config-19 {[string first "\"name\":\"agent_run\"" $RESULT]>=0 && [string first "\"kind\":\"builtin\"" $RESULT]>=0}
+test agent-config-20 {[string first "\"verification\":\{\"chat_ok\":1" $RESULT]>=0}
+test agent-config-21 {[string first "\"chat_command_ready\":1" $RESULT]>=0}
+test agent-config-22 {[string first "\"embedding_ok\":1" $RESULT]>=0}
+test agent-config-23 {[string first "\"embedding_command_ready\":1" $RESULT]>=0}
+test agent-config-24 {[string first "\"overall_ok\":1" $RESULT]>=0}
 
 ###############################################################################
 
@@ -239,7 +298,11 @@ fossil sql "SELECT meta FROM agentchat WHERE role='system' AND kind='progress' O
 test agent-chat-13 {[normalize_result] eq {{"stage":"backend","status":"ok"}}}
 
 fossil sql "SELECT meta FROM agentchat WHERE role='user' ORDER BY acid ASC LIMIT 1"
-test agent-chat-14 {[normalize_result] eq {{"context":true}}}
+test agent-chat-14 {[string first "\"context\":true,\"retrieval_qid\":" [normalize_result]]>=0}
+
+fossil sql "SELECT max(qid) FROM ai_retrieval"
+set lastQid [normalize_result]
+test agent-chat-14a {$lastQid > 0}
 
 fossil sql "SELECT sid FROM agentchat_session ORDER BY sid DESC LIMIT 1"
 set lastSid [normalize_result]
@@ -258,7 +321,7 @@ test agent-chat-22 {[string first {meta={&quot;tool&quot;:&quot;chat-backend&quo
 test agent-chat-23 {[string first {meta={&quot;stage&quot;:&quot;backend&quot;,&quot;status&quot;:&quot;running&quot;}} $RESULT]>=0}
 test agent-chat-24 {[string first {meta={&quot;stage&quot;:&quot;backend&quot;,&quot;status&quot;:&quot;ok&quot;}} $RESULT]>=0}
 test agent-chat-25 {[string first {{reply}} $RESULT]>=0}
-test agent-chat-26 {[string first {meta={&quot;context&quot;:true}} $RESULT]>=0}
+test agent-chat-26 {[string first {retrieval #} $RESULT]>=0 && [string first {context=pool} $RESULT]>=0}
 
 set response [agent_http_request $repository GET [subst {/agent-config?sid=$lastSid}] {}]
 set RESULT [agent_http_body $response]
@@ -283,7 +346,7 @@ test agent-chat-39 {[string first {"meta":"{\"tool\":\"chat-backend\",\"provider
 test agent-chat-40 {[string first {"meta":"{\"stage\":\"backend\",\"status\":\"running\"}"} $RESULT]>=0}
 test agent-chat-41 {[string first {"meta":"{\"stage\":\"backend\",\"status\":\"ok\"}"} $RESULT]>=0}
 test agent-chat-42 {[string first {"role":"user","kind":"prompt"} $RESULT]>=0}
-test agent-chat-43 {[string first {"meta":"{\"context\":true}"} $RESULT]>=0}
+test agent-chat-43 {[string first {"msg":"say only hi"} $RESULT]>=0}
 test agent-chat-44 {[string first {"role":"agent","kind":"reply"} $RESULT]>=0}
 test agent-chat-44a {[string first {"feedback":""} $RESULT]>=0}
 
@@ -308,6 +371,23 @@ test agent-chat-54 {[string first {"acid":6,"role":"user","kind":"prompt"} $RESU
 test agent-chat-55 {[string first {"acid":7,"role":"system","kind":"progress"} $RESULT]>=0}
 test agent-chat-56 {[string first {"acid":8,"role":"agent","kind":"reply"} $RESULT]>=0}
 test agent-chat-57 {[string first {"acid":1,} $RESULT]<0}
+
+set response [agent_http_request $repository GET /agent-pool {}]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-pool-1 {[agent_http_status $response] eq {200}}
+test agent-pool-2 {[string first {"tiers":[} $RESULT]>=0}
+test agent-pool-3 {[string first {"label":"Tier 0: Raw"} $RESULT]>=0 || [string first {"label":"Tier 1: Working"} $RESULT]>=0}
+test agent-pool-4 {[string first {"retrieval_count":} $RESULT]>=0}
+
+set response [agent_http_request $repository GET [subst {/agent-retrieval?qid=$lastQid}] {}]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-retrieval-1 {[agent_http_status $response] eq {200}}
+test agent-retrieval-2 {[string first [subst {"qid":$lastQid}] $RESULT]>=0}
+test agent-retrieval-3 {[string first {"query_text":"say only hi"} $RESULT]>=0}
+test agent-retrieval-4 {[string first {"notes":[} $RESULT]>=0}
+test agent-retrieval-5 {[string first {"duplication_status":} $RESULT]>=0 && [string first {"atomicity_status":} $RESULT]>=0}
 
 ###############################################################################
 
@@ -335,6 +415,47 @@ test agent-feedback-7 {[string first {"feedback":"useful"} $RESULT]>=0}
 
 fossil agent eval-report
 test agent-feedback-8 {[string first {codex|test-chat-model|final|ok|none|useful|1} [normalize_result]]>=0}
+
+fossil agent diagnostics --json --limit 2
+test agent-diagnostics-1 {[string first "\"source\":\"repo agent-config-path: " [normalize_result]]>=0}
+test agent-diagnostics-2 {[string first "\"verification\"" [normalize_result]]>=0 && [string first "\"overall_ok\":1" [normalize_result]]>=0}
+test agent-diagnostics-3 {[string first "\"runtime\"" [normalize_result]]>=0 && [string first "\"eval_count\":1" [normalize_result]]>=0}
+test agent-diagnostics-4 {[string first "\"recipes\"" [normalize_result]]>=0 && [string first "\"invalid_count\":0" [normalize_result]]>=0}
+test agent-diagnostics-5 {[string first "\"recent_sessions\"" [normalize_result]]>=0 && [string first "\"message_count\":" [normalize_result]]>=0}
+test agent-diagnostics-6 {[string first "\"eval_summary\"" [normalize_result]]>=0 && [string first "\"provider\":\"codex\"" [normalize_result]]>=0}
+
+fossil agent diagnostics --limit 1
+test agent-diagnostics-7 {[string first "verification: overall=ok chat=ok embedding=ok" [normalize_result]]>=0}
+test agent-diagnostics-8 {[string first "recipes: count=2 invalid=0" [normalize_result]]>=0}
+
+fossil agent diagnostics --json --limit 1 --save
+test agent-run-1 {[string first "\"saved_run_id\":" [normalize_result]]>=0}
+test agent-run-2 {[string first "\"diagnostics\"" [normalize_result]]>=0 && [string first "\"overall_ok\":1" [normalize_result]]>=0}
+
+fossil agent run-log --limit 1
+test agent-run-3 {[string first {|diagnostics|diagnostics|ok|diagnostics overall ok} [normalize_result]]>=0}
+
+fossil sql "SELECT max(runid) FROM agentrun"
+set lastRunId [normalize_result]
+
+set RESULT [exec $::fossilexe agent run-show $lastRunId]
+set CODE 0
+test agent-run-4 {[string first "run: $lastRunId" [normalize_result]]>=0}
+test agent-run-5 {[string first "kind: diagnostics" [normalize_result]]>=0}
+test agent-run-6 {[string first "payload:" [normalize_result]]>=0 && [string first "\"overall_ok\":1" [normalize_result]]>=0}
+
+fossil agent verify --json --chat-smoke --embed-smoke --save
+test agent-run-7 {[string first "\"saved_run_id\":" [normalize_result]]>=0}
+test agent-run-8 {[string first "\"verify\"" [normalize_result]]>=0 && [string first "\"overall_ok\":1" [normalize_result]]>=0}
+
+fossil agent recipe run summarize-context retrieval --json --save
+test agent-run-9 {[string first "\"saved_run_id\":" [normalize_result]]>=0}
+test agent-run-10 {[string first "\"recipe_run\"" [normalize_result]]>=0 && [string first "\"recipe\":\"summarize-context\"" [normalize_result]]>=0}
+
+fossil agent run-log --limit 3
+test agent-run-11 {[string first {|recipe|summarize-context|ok|Recipe completed successfully.} [normalize_result]]>=0}
+test agent-run-12 {[string first {|verify|verify|ok|verify overall ok} [normalize_result]]>=0}
+test agent-run-13 {[string first {|diagnostics|diagnostics|ok|diagnostics overall ok} [normalize_result]]>=0}
 
 ###############################################################################
 

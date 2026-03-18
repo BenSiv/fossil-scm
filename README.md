@@ -27,7 +27,11 @@ Canonical documents for this fork live under [`doc/`](doc/):
   [`doc/ai/PROVIDER_MODEL_SPLIT.md`](doc/ai/PROVIDER_MODEL_SPLIT.md) and
   [`doc/ai/IMPLEMENTATION_PLAN.md`](doc/ai/IMPLEMENTATION_PLAN.md), which now
   includes the phased roadmap from config visibility through streaming and
-  conversation evaluation. Tcl test suite recovery is tracked in
+  conversation evaluation. Comparative design notes from reviewing
+  `~/gentle-ai` live in [`doc/ai/GENTLE_AI_LESSONS.md`](doc/ai/GENTLE_AI_LESSONS.md).
+  A combined orchestration roadmap drawing from Goose, `gentle-ai`, and
+  OpenCode lives in [`doc/ai/ORCHESTRATION_IMPLEMENTATION_PLAN.md`](doc/ai/ORCHESTRATION_IMPLEMENTATION_PLAN.md).
+  Tcl test suite recovery is tracked in
   [`doc/ai/TCL_TEST_REVIVAL_PLAN.md`](doc/ai/TCL_TEST_REVIVAL_PLAN.md).
 - Clean local reinstall helper: [`dev/tools/install-fossil-clean.sh`](dev/tools/install-fossil-clean.sh)
 - Tcl test prerequisite helper:

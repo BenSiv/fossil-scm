@@ -65,6 +65,49 @@ static const char *agent_chat_session_model(int sid, const char *zDefault);
 static const char *agent_chat_session_provider(int sid, const char *zDefault);
 static const char *agent_command_template(void);
 static const char *agent_embedding_template(void);
+static int agent_validate_provider_model(
+  const char *zProvider,
+  const char *zModel,
+  Blob *pErr
+);
+static int agent_run_backend(
+  const char *zProvider,
+  const char *zModel,
+  const char *zPrompt,
+  Blob *pReply,
+  Blob *pErr
+);
+static int agent_phase_registry_count(void);
+static void agent_emit_phase_registry_json(void);
+static int agent_capability_registry_count(void);
+static void agent_emit_capability_registry_json(void);
+static void agent_run_create_tables(void);
+
+typedef struct AgentRecipe AgentRecipe;
+typedef struct AgentPhase AgentPhase;
+typedef struct AgentCapability AgentCapability;
+struct AgentRecipe {
+  const char *zName;
+  const char *zTitle;
+  const char *zDescription;
+  const char *zUsage;
+  const char *zPhases;
+  const char *zCapabilities;
+  const char *zScript;
+};
+struct AgentPhase {
+  const char *zName;
+  const char *zTitle;
+  const char *zDescription;
+};
+struct AgentCapability {
+  const char *zName;
+  const char *zKind;
+  const char *zDescription;
+  int requiresWrite;
+  int requiresNetwork;
+  int requiresConfirm;
+};
 
 /*
 ** Repo-local config file for agent integration. When present, this file
@@ -72,6 +115,7 @@ static const char *agent_embedding_template(void);
 */
 static const char zAgentConfigFile[] = "cfg/ai-agent.json";
 static const char *zAgentConfigPath = 0;
+static int agentLastRetrievalQid = 0;
 
 /*
 ** SETTING: agent-command width=60
@@ -480,6 +524,143 @@ static const char *const *agent_model_suggestions(
 }
 
 /*
+** Extract the executable token from a command template, preserving path
+** components but dropping surrounding quotes.
+*/
+static char *agent_command_executable(const char *zCmdTmpl){
+  Blob out = BLOB_INITIALIZER;
+  char chQuote = 0;
+  const char *z = zCmdTmpl;
+  if( z==0 ) return 0;
+  while( fossil_isspace(z[0]) ) z++;
+  while( z[0] && (!fossil_isspace(z[0]) || chQuote) ){
+    if( z[0]=='"' || z[0]=='\'' ){
+      if( chQuote==0 ){
+        chQuote = z[0];
+      }else if( chQuote==z[0] ){
+        chQuote = 0;
+      }else{
+        blob_append(&out, z, 1);
+      }
+    }else{
+      blob_append(&out, z, 1);
+    }
+    z++;
+  }
+  if( blob_size(&out)==0 ){
+    blob_reset(&out);
+    return 0;
+  }
+  return blob_str(&out);
+}
+
+/*
+** Resolve zCmdTmpl to a runnable executable path if possible.
+**
+** On success, returns non-zero and writes a newly allocated resolved path to
+** *pzResolved if non-NULL. On failure, returns 0 and writes a newly allocated
+** explanation to *pzDetail if non-NULL.
+*/
+static int agent_command_is_ready(
+  const char *zCmdTmpl,
+  char **pzResolved,
+  char **pzDetail
+){
+  char *zExec = 0;
+  char *zFull = 0;
+  int rc = 0;
+  if( pzResolved ) *pzResolved = 0;
+  if( pzDetail ) *pzDetail = 0;
+  if( zCmdTmpl==0 || zCmdTmpl[0]==0 ){
+    if( pzDetail ) *pzDetail = mprintf("missing command template");
+    return 0;
+  }
+  zExec = agent_command_executable(zCmdTmpl);
+  if( zExec==0 || zExec[0]==0 ){
+    if( pzDetail ) *pzDetail = mprintf("unable to determine executable");
+    fossil_free(zExec);
+    return 0;
+  }
+  if( file_is_absolute_path(zExec) || strchr(zExec, '/')!=0
+   || strchr(zExec, '\\')!=0
+  ){
+    zFull = mprintf("%s", zExec);
+  }else{
+    zFull = file_fullexename(zExec);
+  }
+  if( zFull && zFull[0] && file_isexe(zFull, ExtFILE) ){
+    if( pzResolved ){
+      *pzResolved = mprintf("%s", zFull);
+    }
+    if( pzDetail ) *pzDetail = mprintf("ok");
+    rc = 1;
+  }else{
+    if( pzResolved && zFull && zFull[0] ){
+      *pzResolved = mprintf("%s", zFull);
+    }
+    if( pzDetail ) *pzDetail = mprintf("executable not found: %s", zExec);
+    rc = 0;
+  }
+  fossil_free(zExec);
+  fossil_free(zFull);
+  return rc;
+}
+
+/*
+** Validate a provider/model pair and return a newly allocated explanation in
+** *pzErr on failure. Returns non-zero if the pair is valid.
+*/
+static int agent_validate_provider_model_ex(
+  const char *zProvider,
+  const char *zModel,
+  char **pzErr
+){
+  Blob err = BLOB_INITIALIZER;
+  int rc;
+  if( pzErr ) *pzErr = 0;
+  rc = agent_validate_provider_model(zProvider, zModel, &err)==0;
+  if( !rc && pzErr ){
+    *pzErr = mprintf("%s", blob_str(&err));
+  }
+  blob_reset(&err);
+  return rc;
+}
+
+/*
+** Return non-zero if the embedding backend is operationally configured, and
+** optionally return the resolved executable path and status detail.
+*/
+static int agent_embedding_backend_ready(
+  const char *zProvider,
+  const char *zModel,
+  const char *zCmdTmpl,
+  char **pzResolved,
+  char **pzDetail
+){
+  if( pzResolved ) *pzResolved = 0;
+  if( pzDetail ) *pzDetail = 0;
+  if( zModel==0 || zModel[0]==0 ){
+    if( pzDetail ) *pzDetail = mprintf("missing embedding model");
+    return 0;
+  }
+  if( zCmdTmpl && zCmdTmpl[0] ){
+    return agent_command_is_ready(zCmdTmpl, pzResolved, pzDetail);
+  }
+  if( zProvider && fossil_stricmp(zProvider, "ollama")==0 ){
+    int rc = agent_command_is_ready("curl", pzResolved, pzDetail);
+    if( rc && pzDetail ){
+      fossil_free(*pzDetail);
+      *pzDetail = mprintf("builtin ollama fallback via curl");
+    }
+    return rc;
+  }
+  if( pzDetail ){
+    *pzDetail = mprintf("no embedding command configured");
+  }
+  return 0;
+}
+
+/*
 ** Emit a JSON string array field.
 */
 static void agent_emit_json_string_array(
@@ -491,6 +672,105 @@ static void agent_emit_json_string_array(
   CX("\"%s\":[", zLabel);
   for(i=0; i<nValue; i++){
     CX("%s%!j", i>0 ? "," : "", azValue[i]);
+  }
+  CX("]");
+}
+
+/*
+** Built-in phase registry for structured orchestration contracts.
+*/
+static const AgentPhase aAgentPhaseBuiltin[] = {
+  {"init", "Initialize", "Resolve effective configuration and establish run context."},
+  {"explore", "Explore", "Inspect repository state and gather relevant context."},
+  {"spec", "Specify", "Convert gathered context into a concrete task specification."},
+  {"design", "Design", "Develop an implementation approach and decision record."},
+  {"tasks", "Tasks", "Break the plan into bounded executable tasks."},
+  {"apply", "Apply", "Execute approved changes against repository state."},
+  {"verify", "Verify", "Check results, run validations, and summarize remaining risks."},
+  {"archive", "Archive", "Persist final artifacts and run summaries."},
+  {"selftest", "Self-Test", "Run agent-focused health or confidence checks."},
+  {"diagnostics", "Diagnostics", "Capture inspectable debugging and environment output."}
+};
+
+/*
+** Return the number of built-in orchestration phases.
+*/
+static int agent_phase_registry_count(void){
+  return (int)count(aAgentPhaseBuiltin);
+}
+
+/*
+** Locate a built-in phase definition by name.
+*/
+static const AgentPhase *agent_phase_find(const char *zName){
+  unsigned int i;
+  for(i=0; i<count(aAgentPhaseBuiltin); i++){
+    if( fossil_strcmp(aAgentPhaseBuiltin[i].zName, zName)==0 ){
+      return &aAgentPhaseBuiltin[i];
+    }
+  }
+  return 0;
+}
+
+/*
+** Emit a JSON array of phase names from a comma-separated list.
+*/
+static void agent_emit_phase_name_array(const char *zList){
+  const char *z = zList ? zList : "";
+  int first = 1;
+  fossil_print("[");
+  while( z[0] ){
+    Blob tok = BLOB_INITIALIZER;
+    while( fossil_isspace(z[0]) || z[0]==',' ) z++;
+    while( z[0] && z[0]!=',' ){
+      blob_append(&tok, z, 1);
+      z++;
+    }
+    blob_trim(&tok);
+    if( blob_size(&tok)>0 ){
+      CX("%s%!j", first ? "" : ",", blob_str(&tok));
+      first = 0;
+    }
+    blob_reset(&tok);
+  }
+  CX("]");
+}
+
+/*
+** Append a JSON array of phase names from a comma-separated list.
+*/
+static void agent_append_phase_name_array(Blob *pOut, const char *zList){
+  const char *z = zList ? zList : "";
+  int first = 1;
+  blob_append(pOut, "[", 1);
+  while( z[0] ){
+    Blob tok = BLOB_INITIALIZER;
+    while( fossil_isspace(z[0]) || z[0]==',' ) z++;
+    while( z[0] && z[0]!=',' ){
+      blob_append(&tok, z, 1);
+      z++;
+    }
+    blob_trim(&tok);
+    if( blob_size(&tok)>0 ){
+      blob_appendf(pOut, "%s%!j", first ? "" : ",", blob_str(&tok));
+      first = 0;
+    }
+    blob_reset(&tok);
+  }
+  blob_append(pOut, "]", 1);
+}
+
+/*
+** Emit the full built-in phase registry as a JSON array.
+*/
+static void agent_emit_phase_registry_json(void){
+  unsigned int i;
+  fossil_print("[");
+  for(i=0; i<count(aAgentPhaseBuiltin); i++){
+    const AgentPhase *p = &aAgentPhaseBuiltin[i];
+    CX("%s{\"name\":%!j,\"title\":%!j,\"description\":%!j}",
+       i ? "," : "",
+       p->zName, p->zTitle, p->zDescription);
   }
   CX("]");
 }
@@ -519,12 +799,44 @@ static void agent_emit_config_json(int sidCurrent){
   int embeddingSupportsModelDiscovery = 0;
   int chatProviderKnown = agent_provider_is_known(zChatProvider);
   int embeddingProviderKnown = agent_provider_is_known(zEmbedProvider);
+  int chatModelValid = 0;
+  int chatCommandReady = 0;
+  int chatOk = 0;
+  int embeddingModelValid = 0;
+  int embeddingCommandReady = 0;
+  int embeddingOk = 0;
+  int overallOk = 0;
+  int nPhase = agent_phase_registry_count();
   int nProviderChoice = 0;
   int nModelChoice = 0;
+  int nCapability = agent_capability_registry_count();
+  char *zChatModelError = 0;
+  char *zChatCommandPath = 0;
+  char *zChatCommandDetail = 0;
+  char *zEmbeddingModelError = 0;
+  char *zEmbeddingCommandPath = 0;
+  char *zEmbeddingCommandDetail = 0;
   const char *const *azProviderChoice = agent_provider_choices(&nProviderChoice);
   const char *const *azModelChoice = agent_model_suggestions(
     zChatProvider, &nModelChoice
   );
+  chatModelValid = agent_validate_provider_model_ex(
+    zChatProvider, zChatModel, &zChatModelError
+  );
+  chatCommandReady = agent_command_is_ready(
+    zCmd, &zChatCommandPath, &zChatCommandDetail
+  );
+  chatOk = chatProviderKnown && chatModelValid && chatCommandReady;
+  embeddingModelValid = agent_validate_provider_model_ex(
+    zEmbedProvider, zEmbedModel, &zEmbeddingModelError
+  );
+  embeddingCommandReady = agent_embedding_backend_ready(
+    zEmbedProvider, zEmbedModel, zEmbedCmd,
+    &zEmbeddingCommandPath, &zEmbeddingCommandDetail
+  );
+  embeddingOk = embeddingProviderKnown && embeddingModelValid
+             && embeddingAvailable && embeddingCommandReady;
+  overallOk = chatOk && embeddingOk;
   CX("{\"sid\":%d,\"source\":%!j,\"chat_provider\":%!j,\"chat_command\":%!j,"
      "\"chat_model\":%!j,\"embedding_provider\":%!j,"
      "\"embedding_command\":%!j,\"embedding_model\":%!j,"
@@ -544,7 +856,40 @@ static void agent_emit_config_json(int sidCurrent){
   agent_emit_json_string_array(
     "chat_model_suggestions", azModelChoice, nModelChoice
   );
+  CX(",\"phase_count\":%d,\"phases\":", nPhase);
+  agent_emit_phase_registry_json();
+  CX(",\"capability_count\":%d,\"capabilities\":", nCapability);
+  agent_emit_capability_registry_json();
+  CX(",\"verification\":{"
+     "\"chat_ok\":%d,"
+     "\"chat_model_valid\":%d,"
+     "\"chat_model_error\":%!j,"
+     "\"chat_command_ready\":%d,"
+     "\"chat_command_path\":%!j,"
+     "\"chat_command_detail\":%!j,"
+     "\"embedding_ok\":%d,"
+     "\"embedding_model_valid\":%d,"
+     "\"embedding_model_error\":%!j,"
+     "\"embedding_command_ready\":%d,"
+     "\"embedding_command_path\":%!j,"
+     "\"embedding_command_detail\":%!j,"
+     "\"overall_ok\":%d}",
+     chatOk, chatModelValid, zChatModelError ? zChatModelError : "",
+     chatCommandReady, zChatCommandPath ? zChatCommandPath : "",
+     zChatCommandDetail ? zChatCommandDetail : "",
+     embeddingOk, embeddingModelValid,
+     zEmbeddingModelError ? zEmbeddingModelError : "",
+     embeddingCommandReady,
+     zEmbeddingCommandPath ? zEmbeddingCommandPath : "",
+     zEmbeddingCommandDetail ? zEmbeddingCommandDetail : "",
+     overallOk);
   CX("}\n");
+  fossil_free(zChatModelError);
+  fossil_free(zChatCommandPath);
+  fossil_free(zChatCommandDetail);
+  fossil_free(zEmbeddingModelError);
+  fossil_free(zEmbeddingCommandPath);
+  fossil_free(zEmbeddingCommandDetail);
   fossil_free(zSource);
 }
 
@@ -610,6 +955,310 @@ static int agent_validate_provider_model(
     }
   }
   return 0;
+}
+
+/*
+** Built-in capability registry for agent-accessible operations.
+*/
+static const AgentCapability aAgentCapabilityBuiltin[] = {
+  {
+    "agent_context",
+    "builtin",
+    "Assemble repository context, including file map, pending changes, and retrieval context.",
+    0, 0, 0
+  },
+  {
+    "agent_run",
+    "builtin",
+    "Invoke the configured chat backend with the selected provider and model.",
+    0, 1, 0
+  }
+};
+
+static int agent_capability_registry_count(void){
+  return count(aAgentCapabilityBuiltin);
+}
+
+/*
+** Locate a built-in capability definition by name.
+*/
+static const AgentCapability *agent_capability_find(const char *zName){
+  unsigned int i;
+  for(i=0; i<count(aAgentCapabilityBuiltin); i++){
+    if( fossil_strcmp(aAgentCapabilityBuiltin[i].zName, zName)==0 ){
+      return &aAgentCapabilityBuiltin[i];
+    }
+  }
+  return 0;
+}
+
+/*
+** Count comma-separated tokens in zList.
+*/
+static int agent_list_count(const char *zList){
+  int n = 0;
+  int inToken = 0;
+  const char *z = zList ? zList : "";
+  while( z[0] ){
+    if( z[0]==',' ){
+      inToken = 0;
+    }else if( !fossil_isspace(z[0]) && !inToken ){
+      inToken = 1;
+      n++;
+    }
+    z++;
+  }
+  return n;
+}
+
+/*
+** Validate that all phase names in zList are declared. Return non-zero if
+** valid, otherwise append a human-readable error to pErr and return 0.
+*/
+static int agent_recipe_phases_valid(const char *zList, Blob *pErr){
+  const char *z = zList ? zList : "";
+  while( z[0] ){
+    Blob tok = BLOB_INITIALIZER;
+    while( fossil_isspace(z[0]) || z[0]==',' ) z++;
+    while( z[0] && z[0]!=',' ){
+      blob_append(&tok, z, 1);
+      z++;
+    }
+    blob_trim(&tok);
+    if( blob_size(&tok)>0 && agent_phase_find(blob_str(&tok))==0 ){
+      blob_appendf(pErr, "unknown phase: %s", blob_str(&tok));
+      blob_reset(&tok);
+      return 0;
+    }
+    blob_reset(&tok);
+  }
+  return 1;
+}
+
+/*
+** Emit a JSON array of capability names from a comma-separated list.
+*/
+static void agent_emit_capability_name_array(const char *zList){
+  const char *z = zList ? zList : "";
+  int first = 1;
+  fossil_print("[");
+  while( z[0] ){
+    Blob tok = BLOB_INITIALIZER;
+    while( fossil_isspace(z[0]) || z[0]==',' ) z++;
+    while( z[0] && z[0]!=',' ){
+      blob_append(&tok, z, 1);
+      z++;
+    }
+    blob_trim(&tok);
+    if( blob_size(&tok)>0 ){
+      CX("%s%!j", first ? "" : ",", blob_str(&tok));
+      first = 0;
+    }
+    blob_reset(&tok);
+  }
+  CX("]");
+}
+
+/*
+** Append a JSON array of capability names from a comma-separated list.
+*/
+static void agent_append_capability_name_array(Blob *pOut, const char *zList){
+  const char *z = zList ? zList : "";
+  int first = 1;
+  blob_append(pOut, "[", 1);
+  while( z[0] ){
+    Blob tok = BLOB_INITIALIZER;
+    while( fossil_isspace(z[0]) || z[0]==',' ) z++;
+    while( z[0] && z[0]!=',' ){
+      blob_append(&tok, z, 1);
+      z++;
+    }
+    blob_trim(&tok);
+    if( blob_size(&tok)>0 ){
+      blob_appendf(pOut, "%s%!j", first ? "" : ",", blob_str(&tok));
+      first = 0;
+    }
+    blob_reset(&tok);
+  }
+  blob_append(pOut, "]", 1);
+}
+
+/*
+** Emit a JSON array describing all built-in capabilities.
+*/
+static void agent_emit_capability_registry_json(void){
+  unsigned int i;
+  fossil_print("[");
+  for(i=0; i<count(aAgentCapabilityBuiltin); i++){
+    const AgentCapability *p = &aAgentCapabilityBuiltin[i];
+    CX("%s{\"name\":%!j,\"kind\":%!j,\"description\":%!j,"
+       "\"requires_write\":%d,\"requires_network\":%d,"
+       "\"requires_confirmation\":%d}",
+       i ? "," : "",
+       p->zName, p->zKind, p->zDescription,
+       p->requiresWrite, p->requiresNetwork, p->requiresConfirm);
+  }
+  CX("]");
+}
+
+/*
+** Validate that all capability names in zList are declared. Return non-zero if
+** valid, otherwise append a human-readable error to pErr and return 0.
+*/
+static int agent_recipe_capabilities_valid(const char *zList, Blob *pErr){
+  const char *z = zList ? zList : "";
+  while( z[0] ){
+    Blob tok = BLOB_INITIALIZER;
+    while( fossil_isspace(z[0]) || z[0]==',' ) z++;
+    while( z[0] && z[0]!=',' ){
+      blob_append(&tok, z, 1);
+      z++;
+    }
+    blob_trim(&tok);
+    if( blob_size(&tok)>0 && agent_capability_find(blob_str(&tok))==0 ){
+      blob_appendf(pErr, "unknown capability: %s", blob_str(&tok));
+      blob_reset(&tok);
+      return 0;
+    }
+    blob_reset(&tok);
+  }
+  return 1;
+}
+
+/*
+** Built-in recipe definitions for repeatable orchestration tasks.
+*/
+static const AgentRecipe aAgentRecipeBuiltin[] = {
+  {
+    "summarize-context",
+    "Summarize Repository Context",
+    "Assemble repository context and ask the configured backend for a concise summary.",
+    "fossil agent recipe run summarize-context ?QUERY? [--json]",
+    "explore",
+    "agent_context,agent_run",
+    "set q $query\n"
+    "if {[string compare $q \"\"] == 0} {set q \"repository summary\"}\n"
+    "set context [agent_context $q $model]\n"
+    "if {[string compare $context \"\"] == 0} {\n"
+    "  return \"No repository context available.\"\n"
+    "}\n"
+    "set prompt \"Summarize this repository context for a developer. Keep it concise and concrete.\\n\\n$context\"\n"
+    "return [agent_run $provider $model $prompt]\n"
+  },
+  {
+    "review-change",
+    "Review Pending Changes",
+    "Assemble repository context and pending changes, then ask the backend for a review focused on risks and test gaps.",
+    "fossil agent recipe run review-change [--json]",
+    "explore,verify",
+    "agent_context,agent_run",
+    "set context [agent_context \"pending changes review\" $model]\n"
+    "if {[string compare $context \"\"] == 0} {\n"
+    "  return \"No repository context available.\"\n"
+    "}\n"
+    "set prompt \"Review the repository context and pending changes. Prioritize bugs, regressions, and missing tests.\\n\\n$context\"\n"
+    "return [agent_run $provider $model $prompt]\n"
+  }
+};
+
+/*
+** Repository storage for persisted agent runs and diagnostics artifacts.
+*/
+static const char zAgentRunSchema[] =
+@ CREATE TABLE repository.agentrun(
+@   runid INTEGER PRIMARY KEY AUTOINCREMENT,
+@   created_at JULIANDAY DEFAULT (julianday('now')),
+@   kind TEXT NOT NULL,
+@   name TEXT,
+@   status TEXT,
+@   summary TEXT,
+@   payload TEXT
+@ );
+;
+
+/*
+** Ensure the repository table used to persist saved agent runs exists.
+*/
+static void agent_run_create_tables(void){
+  if( !db_table_exists("repository","agentrun") ){
+    db_multi_exec(zAgentRunSchema/*works-like:""*/);
+  }
+}
+
+/*
+** Persist a saved run payload and return its row id.
+*/
+static int agent_run_record(
+  const char *zKind,
+  const char *zName,
+  const char *zStatus,
+  const char *zSummary,
+  const char *zPayload
+){
+  agent_run_create_tables();
+  db_multi_exec(
+    "INSERT INTO agentrun(created_at,kind,name,status,summary,payload)"
+    " VALUES(julianday('now'),%Q,%Q,%Q,%Q,%Q)",
+    zKind ? zKind : "",
+    zName ? zName : "",
+    zStatus ? zStatus : "",
+    zSummary ? zSummary : "",
+    zPayload ? zPayload : ""
+  );
+  return db_last_insert_rowid();
+}
+
+/*
+** Locate a built-in recipe definition by name.
+*/
+static const AgentRecipe *agent_recipe_find(const char *zName){
+  unsigned int i;
+  for(i=0; i<count(aAgentRecipeBuiltin); i++){
+    if( fossil_strcmp(aAgentRecipeBuiltin[i].zName, zName)==0 ){
+      return &aAgentRecipeBuiltin[i];
+    }
+  }
+  return 0;
+}
+
+/*
+** Return the first declared phase for a recipe, or NULL if none are declared.
+*/
+static const AgentPhase *agent_recipe_primary_phase(const AgentRecipe *pRecipe){
+  const char *z;
+  char *zName = 0;
+  Blob tok = BLOB_INITIALIZER;
+  if( pRecipe==0 || pRecipe->zPhases==0 ) return 0;
+  z = pRecipe->zPhases;
+  while( fossil_isspace(z[0]) || z[0]==',' ) z++;
+  while( z[0] && z[0]!=',' ){
+    blob_append(&tok, z, 1);
+    z++;
+  }
+  blob_trim(&tok);
+  if( blob_size(&tok)==0 ){
+    blob_reset(&tok);
+    return 0;
+  }
+  zName = mprintf("%s", blob_str(&tok));
+  blob_reset(&tok);
+  {
+    const AgentPhase *pPhase = agent_phase_find(zName);
+    fossil_free(zName);
+    return pPhase;
+  }
+}
+
+/*
+** Return a single string by joining g.argv[iFrom..g.argc) with spaces.
+*/
+static char *agent_join_args(int iFrom){
+  Blob out = BLOB_INITIALIZER;
+  int i;
+  for(i=iFrom; i<g.argc; i++){
+    blob_appendf(&out, "%s%s", i>iFrom ? " " : "", g.argv[i]);
+  }
+  return blob_str(&out);
 }
 
 /*
@@ -922,6 +1571,26 @@ static void agent_chat_render_sessions(const char *zUser, int sidCurrent){
 }
 
 /*
+** Return non-zero if zMeta indicates that pool context was enabled.
+*/
+static int agent_chat_meta_context_enabled(const char *zMeta){
+  return zMeta && strstr(zMeta, "\"context\":true")!=0;
+}
+
+/*
+** Extract retrieval_qid from a small JSON-ish meta string. Returns 0 if absent.
+*/
+static int agent_chat_meta_retrieval_qid(const char *zMeta){
+  const char *z;
+  if( zMeta==0 ) return 0;
+  z = strstr(zMeta, "\"retrieval_qid\":");
+  if( z==0 ) return 0;
+  z += 16;
+  while( fossil_isspace(z[0]) ) z++;
+  return atoi(z);
+}
+
+/*
 ** Emit recent saved agent chat messages for a session into the page log.
 */
 static void agent_chat_render_history(int sidCurrent){
@@ -958,6 +1627,11 @@ static void agent_chat_render_history(int sidCurrent){
     const char *zMeta = db_column_text(&q, 4);
     const char *zMsg = db_column_text(&q, 5);
     const char *zFeedback = db_column_text(&q, 6);
+    int bPromptMeta = zRole && zKind
+      && fossil_strcmp(zRole,"user")==0
+      && fossil_strcmp(zKind,"prompt")==0
+      && agent_chat_meta_context_enabled(zMeta);
+    int retrievalQid = bPromptMeta ? agent_chat_meta_retrieval_qid(zMeta) : 0;
     @ <div style="margin-bottom:0.8em;">
     @ <b>%h(zRoleLabel):</b>
     if( zProvider && zProvider[0] ){
@@ -966,7 +1640,12 @@ static void agent_chat_render_history(int sidCurrent){
     if( zKind && zKind[0] ){
       @ <span class="dimmed">{%h(zKind)}</span>
     }
-    if( zMeta && zMeta[0] ){
+    if( bPromptMeta ){
+      @ <span class="dimmed">[context=pool]</span>
+      if( retrievalQid>0 ){
+        @ <span class="dimmed">[<a href="%R/agentui?sid=%d(sidCurrent)#retrieval-%d(retrievalQid)" data-retrieval-qid="%d(retrievalQid)">retrieval #%d(retrievalQid)</a>]</span>
+      }
+    }else if( zMeta && zMeta[0] ){
       @ <span class="dimmed">meta=%h(zMeta)</span>
     }
     if( zFeedback && zFeedback[0] ){
@@ -1078,6 +1757,141 @@ static void agent_emit_events_json(int sidCurrent, int afterAcid){
     }
     db_finalize(&q);
   }
+  CX("]}\n");
+}
+
+/*
+** Emit a JSON summary of the data pool by processing tier, including a small
+** recent-note sample for each tier and duplicate/merge totals.
+*/
+static void agent_emit_pool_json(void){
+  int tier;
+  int dupCount = db_table_exists("repository","ai_note")
+    ? db_int(0, "SELECT count(*) FROM ai_note WHERE coalesce(duplicate_of,0)!=0")
+    : 0;
+  int mergedCount = db_table_exists("repository","ai_note")
+    ? db_int(0, "SELECT count(*) FROM ai_note WHERE coalesce(merged_into,0)!=0")
+    : 0;
+  int retrievalCount = db_table_exists("repository","ai_retrieval")
+    ? db_int(0, "SELECT count(*) FROM ai_retrieval") : 0;
+  CX("{\"tiers\":[");
+  for(tier=3; tier>=0; tier--){
+    Stmt q;
+    int first = 1;
+    int noteCount = db_table_exists("repository","ai_note")
+      ? db_int(0,
+          "SELECT count(*) FROM ai_note"
+          " WHERE coalesce(tier,0)=%d AND coalesce(merged_into,0)=0",
+          tier
+        ) : 0;
+    CX("%s{\"tier\":%d,\"label\":%!j,\"process_level\":%!j,"
+       "\"note_count\":%d,\"recent_notes\":[",
+       tier<3 ? "," : "",
+       tier,
+       tier==3 ? "Tier 3: Atomic" :
+       tier==2 ? "Tier 2: Curated" :
+       tier==1 ? "Tier 1: Working" : "Tier 0: Raw",
+       tier==3 ? "atomic" :
+       tier==2 ? "curated-draft" :
+       tier==1 ? "working-note" : "raw-capture",
+       noteCount);
+    if( db_table_exists("repository","ai_note") ){
+      db_prepare(&q,
+        "SELECT nid, coalesce(nullif(title,''),'(untitled)'),"
+        "       coalesce(nullif(process_level,''),'(unset)'),"
+        "       coalesce(retrieval_count,0),"
+        "       coalesce(duplicate_of,0),"
+        "       coalesce(merged_into,0)"
+        "  FROM ai_note"
+        " WHERE coalesce(tier,0)=%d"
+        "   AND coalesce(merged_into,0)=0"
+        " ORDER BY updated_at DESC, nid DESC LIMIT 4",
+        tier
+      );
+      while( db_step(&q)==SQLITE_ROW ){
+        CX("%s{\"nid\":%d,\"title\":%!j,\"process_level\":%!j,"
+           "\"retrieval_count\":%d,\"duplicate_of\":%d,\"merged_into\":%d}",
+           first ? "" : ",",
+           db_column_int(&q, 0),
+           db_column_text(&q, 1),
+           db_column_text(&q, 2),
+           db_column_int(&q, 3),
+           db_column_int(&q, 4),
+           db_column_int(&q, 5));
+        first = 0;
+      }
+      db_finalize(&q);
+    }
+    CX("]}");
+  }
+  CX("],\"duplicate_count\":%d,\"merged_count\":%d,\"retrieval_count\":%d}\n",
+     dupCount, mergedCount, retrievalCount);
+}
+
+/*
+** Emit JSON details for a single retrieval history row and its retrieved notes.
+*/
+static void agent_emit_retrieval_json(int qid){
+  Stmt q;
+  int first = 1;
+  const char *zQuery = 0;
+  const char *zCreated = 0;
+  if( qid<=0 || !db_table_exists("repository","ai_retrieval")
+   || !db_exists("SELECT 1 FROM ai_retrieval WHERE qid=%d", qid) ){
+    CX("{\"error\":%!j}\n", "unknown retrieval qid");
+    return;
+  }
+  zQuery = db_text("",
+    "SELECT coalesce(query_text,'') FROM ai_retrieval WHERE qid=%d", qid
+  );
+  zCreated = db_text("",
+    "SELECT datetime(created_at,toLocal()) FROM ai_retrieval WHERE qid=%d", qid
+  );
+  CX("{\"qid\":%d,\"query_text\":%!j,\"created_at\":%!j,\"notes\":[",
+     qid, zQuery, zCreated);
+  db_prepare(&q,
+    "SELECT r.nid, r.rank, r.score, r.tier_weight, r.reinforcement_delta,"
+    "       coalesce(nullif(n.title,''),'(untitled)'),"
+    "       coalesce(n.tier,0),"
+    "       coalesce(nullif(n.process_level,''),'(unset)'),"
+    "       coalesce(n.retrieval_count,0),"
+    "       coalesce(n.duplicate_of,0),"
+    "       coalesce(n.merged_into,0),"
+    "       coalesce(rv.duplication_status,''),"
+    "       coalesce(rv.atomicity_status,''),"
+    "       coalesce(rv.metadata_status,'')"
+    "  FROM ai_retrieval_note AS r"
+    "  JOIN ai_note AS n ON n.nid=r.nid"
+    "  LEFT JOIN ai_review AS rv ON rv.qid=r.qid AND rv.nid=r.nid"
+    " WHERE r.qid=%d"
+    " ORDER BY r.rank ASC, r.nid ASC",
+    qid
+  );
+  while( db_step(&q)==SQLITE_ROW ){
+    CX("%s{\"nid\":%d,\"rank\":%d,\"score\":%.17g,\"tier_weight\":%.17g,"
+       "\"reinforcement_delta\":%.17g,\"title\":%!j,\"tier\":%d,"
+       "\"process_level\":%!j,\"retrieval_count\":%d,"
+       "\"duplicate_of\":%d,\"merged_into\":%d,"
+       "\"duplication_status\":%!j,\"atomicity_status\":%!j,"
+       "\"metadata_status\":%!j}",
+       first ? "" : ",",
+       db_column_int(&q, 0),
+       db_column_int(&q, 1),
+       db_column_double(&q, 2),
+       db_column_double(&q, 3),
+       db_column_double(&q, 4),
+       db_column_text(&q, 5),
+       db_column_int(&q, 6),
+       db_column_text(&q, 7),
+       db_column_int(&q, 8),
+       db_column_int(&q, 9),
+       db_column_int(&q, 10),
+       db_column_text(&q, 11),
+       db_column_text(&q, 12),
+       db_column_text(&q, 13));
+    first = 0;
+  }
+  db_finalize(&q);
   CX("]}\n");
 }
 
@@ -1354,7 +2168,8 @@ static int agent_semantic_search(
   const char *zQuery,
   int nLimit,
   Blob *pOut,
-  int bVerbose
+  int bVerbose,
+  int *pQid
 ){
   Blob vQuery = BLOB_INITIALIZER;
   Stmt q;
@@ -1368,6 +2183,7 @@ static int agent_semantic_search(
   }
   ai_schema_ensure();
   qid = ai_retrieval_begin(0, zQuery);
+  if( pQid ) *pQid = qid;
 
   db_prepare(&q,
     "SELECT s.nid, s.title, s.body, s.tier, s.weighted_score, s.tier_weight"
@@ -1442,7 +2258,8 @@ static int agent_semantic_search(
 static int agent_assemble_context(
   Blob *pOut,
   const char *zModel,
-  const char *zQuery
+  const char *zQuery,
+  int *pRetrievalQid
 ){
   int vid;
   Stmt q;
@@ -1474,7 +2291,7 @@ static int agent_assemble_context(
     if( !nAdded ){
       blob_appendf(pOut, "--- REPOSITORY CONTEXT ---\n");
     }
-    agent_semantic_search(zModel, zQuery, 3, pOut, 0);
+    agent_semantic_search(zModel, zQuery, 3, pOut, 0, pRetrievalQid);
     if( blob_size(pOut)>nBefore ) nAdded = 1;
   }
   if( nAdded ){
@@ -1557,6 +2374,179 @@ static int agent_run_backend(
   blob_reset(&cmd);
   blob_reset(&envCmd);
   return 0;
+}
+
+/*
+** Print or emit a verification summary for the current effective agent
+** configuration. With --json, the output is JSON. Without it, a human-readable
+** summary is emitted. Optional smoke flags execute the configured backend(s).
+*/
+static void agent_verify_cmd(void){
+  const char *zSource = 0;
+  const char *zChatProvider = agent_chat_provider();
+  const char *zChatModel = agent_default_model();
+  const char *zChatCmd = agent_command_template();
+  const char *zEmbedProvider = agent_embedding_provider();
+  const char *zEmbedModel = agent_embedding_model();
+  const char *zEmbedCmd = agent_embedding_template();
+  char *zChatModelError = 0;
+  char *zChatCommandPath = 0;
+  char *zChatCommandDetail = 0;
+  char *zEmbedModelError = 0;
+  char *zEmbedCommandPath = 0;
+  char *zEmbedCommandDetail = 0;
+  Blob smokeReply = BLOB_INITIALIZER;
+  Blob smokeErr = BLOB_INITIALIZER;
+  Blob vSmoke = BLOB_INITIALIZER;
+  Blob json = BLOB_INITIALIZER;
+  int jsonFlag = find_option("json", 0, 0)!=0;
+  int saveFlag = find_option("save", 0, 0)!=0;
+  int chatSmokeFlag = find_option("chat-smoke", 0, 0)!=0;
+  int embedSmokeFlag = find_option("embed-smoke", 0, 0)!=0;
+  int chatProviderKnown = agent_provider_is_known(zChatProvider);
+  int embeddingProviderKnown = agent_provider_is_known(zEmbedProvider);
+  int chatModelValid = agent_validate_provider_model_ex(
+    zChatProvider, zChatModel, &zChatModelError
+  );
+  int chatCommandReady = agent_command_is_ready(
+    zChatCmd, &zChatCommandPath, &zChatCommandDetail
+  );
+  int embeddingAvailable = agent_embedding_is_available();
+  int embeddingModelValid = agent_validate_provider_model_ex(
+    zEmbedProvider, zEmbedModel, &zEmbedModelError
+  );
+  int embeddingCommandReady = agent_embedding_backend_ready(
+    zEmbedProvider, zEmbedModel, zEmbedCmd,
+    &zEmbedCommandPath, &zEmbedCommandDetail
+  );
+  int chatSmokeOk = 0;
+  int embedSmokeOk = 0;
+  const char *zChatSmoke = "skipped";
+  const char *zEmbedSmoke = "skipped";
+  int chatOk = chatProviderKnown && chatModelValid && chatCommandReady;
+  int embeddingOk = embeddingProviderKnown && embeddingModelValid
+                 && embeddingAvailable && embeddingCommandReady;
+  int overallOk;
+
+  verify_all_options();
+  zSource = agent_config_source();
+  if( chatSmokeFlag && chatOk ){
+    chatSmokeOk = agent_run_backend(
+      zChatProvider, zChatModel, "verify", &smokeReply, &smokeErr
+    )==0;
+    zChatSmoke = chatSmokeOk ? "ok" : blob_str(&smokeErr);
+    blob_reset(&smokeReply);
+    blob_reset(&smokeErr);
+  }else if( chatSmokeFlag ){
+    zChatSmoke = "skipped (chat not ready)";
+  }
+  if( embedSmokeFlag && embeddingOk ){
+    embedSmokeOk = agent_generate_embedding(zEmbedModel, "verify", &vSmoke)==0;
+    zEmbedSmoke = embedSmokeOk ? "ok" : "embedding generation failed";
+    blob_reset(&vSmoke);
+  }else if( embedSmokeFlag ){
+    zEmbedSmoke = "skipped (embedding not ready)";
+  }
+  overallOk = chatOk && embeddingOk
+           && (!chatSmokeFlag || chatSmokeOk)
+           && (!embedSmokeFlag || embedSmokeOk);
+  blob_appendf(&json, "{\"source\":%!j,"
+               "\"chat\":{\"provider\":%!j,\"model\":%!j,"
+               "\"provider_known\":%d,\"model_valid\":%d,"
+               "\"model_error\":%!j,\"command_ready\":%d,"
+               "\"command_path\":%!j,\"command_detail\":%!j,"
+               "\"ok\":%d,\"smoke_requested\":%d,\"smoke_ok\":%d,"
+               "\"smoke_detail\":%!j},"
+               "\"embedding\":{\"provider\":%!j,\"model\":%!j,"
+               "\"provider_known\":%d,\"model_valid\":%d,"
+               "\"model_error\":%!j,\"available\":%d,"
+               "\"command_ready\":%d,\"command_path\":%!j,"
+               "\"command_detail\":%!j,\"ok\":%d,"
+               "\"smoke_requested\":%d,\"smoke_ok\":%d,"
+               "\"smoke_detail\":%!j},"
+               "\"overall_ok\":%d}",
+    zSource,
+    zChatProvider, zChatModel,
+    chatProviderKnown, chatModelValid,
+    zChatModelError ? zChatModelError : "",
+    chatCommandReady,
+    zChatCommandPath ? zChatCommandPath : "",
+    zChatCommandDetail ? zChatCommandDetail : "",
+    chatOk, chatSmokeFlag, chatSmokeOk, zChatSmoke,
+    zEmbedProvider, zEmbedModel,
+    embeddingProviderKnown, embeddingModelValid,
+    zEmbedModelError ? zEmbedModelError : "",
+    embeddingAvailable,
+    embeddingCommandReady,
+    zEmbedCommandPath ? zEmbedCommandPath : "",
+    zEmbedCommandDetail ? zEmbedCommandDetail : "",
+    embeddingOk, embedSmokeFlag, embedSmokeOk, zEmbedSmoke,
+    overallOk
+  );
+  if( jsonFlag ){
+    if( saveFlag ){
+      int runid = agent_run_record(
+        "verify", "verify",
+        overallOk ? "ok" : "not-ok",
+        overallOk ? "verify overall ok" : "verify reported failures",
+        blob_str(&json)
+      );
+      fossil_print("{\"saved_run_id\":%d,\"verify\":%s}\n", runid, blob_str(&json));
+    }else{
+      fossil_print("%s\n", blob_str(&json));
+    }
+  }else{
+    fossil_print("source: %s\n", zSource);
+    fossil_print("chat:\n");
+    fossil_print("  provider: %s\n", zChatProvider && zChatProvider[0] ? zChatProvider : "(unset)");
+    fossil_print("  model: %s\n", zChatModel && zChatModel[0] ? zChatModel : "(unset)");
+    fossil_print("  provider-known: %s\n", chatProviderKnown ? "yes" : "no");
+    fossil_print("  model-valid: %s\n", chatModelValid ? "yes" : "no");
+    if( zChatModelError && zChatModelError[0] ){
+      fossil_print("  model-error: %s\n", zChatModelError);
+    }
+    fossil_print("  command-ready: %s\n", chatCommandReady ? "yes" : "no");
+    fossil_print("  command-path: %s\n",
+                 zChatCommandPath && zChatCommandPath[0] ? zChatCommandPath : "(unresolved)");
+    fossil_print("  command-detail: %s\n",
+                 zChatCommandDetail && zChatCommandDetail[0] ? zChatCommandDetail : "(none)");
+    fossil_print("  smoke: %s\n", zChatSmoke);
+    fossil_print("  ok: %s\n", chatOk ? "yes" : "no");
+    fossil_print("embedding:\n");
+    fossil_print("  provider: %s\n", zEmbedProvider && zEmbedProvider[0] ? zEmbedProvider : "(unset)");
+    fossil_print("  model: %s\n", zEmbedModel && zEmbedModel[0] ? zEmbedModel : "(unset)");
+    fossil_print("  provider-known: %s\n", embeddingProviderKnown ? "yes" : "no");
+    fossil_print("  model-valid: %s\n", embeddingModelValid ? "yes" : "no");
+    if( zEmbedModelError && zEmbedModelError[0] ){
+      fossil_print("  model-error: %s\n", zEmbedModelError);
+    }
+    fossil_print("  available: %s\n", embeddingAvailable ? "yes" : "no");
+    fossil_print("  command-ready: %s\n", embeddingCommandReady ? "yes" : "no");
+    fossil_print("  command-path: %s\n",
+                 zEmbedCommandPath && zEmbedCommandPath[0] ? zEmbedCommandPath : "(unresolved)");
+    fossil_print("  command-detail: %s\n",
+                 zEmbedCommandDetail && zEmbedCommandDetail[0] ? zEmbedCommandDetail : "(none)");
+    fossil_print("  smoke: %s\n", zEmbedSmoke);
+    fossil_print("  ok: %s\n", embeddingOk ? "yes" : "no");
+    fossil_print("overall: %s\n", overallOk ? "ok" : "fail");
+    if( saveFlag ){
+      int runid = agent_run_record(
+        "verify", "verify",
+        overallOk ? "ok" : "not-ok",
+        overallOk ? "verify overall ok" : "verify reported failures",
+        blob_str(&json)
+      );
+      fossil_print("saved-run: %d\n", runid);
+    }
+  }
+  blob_reset(&json);
+  fossil_free((char*)zSource);
+  fossil_free(zChatModelError);
+  fossil_free(zChatCommandPath);
+  fossil_free(zChatCommandDetail);
+  fossil_free(zEmbedModelError);
+  fossil_free(zEmbedCommandPath);
+  fossil_free(zEmbedCommandDetail);
 }
 
 /*
@@ -1834,7 +2824,7 @@ static void agent_retrieve_cmd(void){
   }
   if( nLimit<=0 ) nLimit = 5;
   ai_require_enabled();
-  if( agent_semantic_search(zModel, g.argv[3], nLimit, &out, 1)==0 ){
+  if( agent_semantic_search(zModel, g.argv[3], nLimit, &out, 1, 0)==0 ){
     fossil_print("No notes matched.\n");
   }else{
     fossil_print("%s", blob_str(&out));
@@ -1876,6 +2866,446 @@ static void agent_eval_report_cmd(void){
       db_column_int(&q, 6)
     );
   }
+  db_finalize(&q);
+}
+
+/*
+** Append a JSON array summarizing built-in recipes and whether their phase and
+** capability declarations validate against the current registries.
+*/
+static void agent_append_recipe_registry_json(Blob *pOut){
+  unsigned int i;
+  blob_append(pOut, "[", 1);
+  for(i=0; i<count(aAgentRecipeBuiltin); i++){
+    const AgentRecipe *p = &aAgentRecipeBuiltin[i];
+    const AgentPhase *pPrimary = agent_recipe_primary_phase(p);
+    Blob err = BLOB_INITIALIZER;
+    int ok = agent_recipe_phases_valid(p->zPhases, &err);
+    if( ok ){
+      blob_reset(&err);
+      ok = agent_recipe_capabilities_valid(p->zCapabilities, &err);
+    }
+    blob_appendf(pOut,
+      "%s{\"name\":%!j,\"title\":%!j,\"phase_count\":%d,"
+      "\"capability_count\":%d,\"primary_phase\":%!j,"
+      "\"valid\":%d,\"error\":%!j}",
+      i ? "," : "",
+      p->zName, p->zTitle,
+      agent_list_count(p->zPhases),
+      agent_list_count(p->zCapabilities),
+      pPrimary ? pPrimary->zName : "",
+      ok,
+      ok ? "" : blob_str(&err)
+    );
+    blob_reset(&err);
+  }
+  blob_append(pOut, "]", 1);
+}
+
+/*
+** Append a JSON array summarizing recent chat sessions for zUser.
+*/
+static void agent_append_recent_sessions_json(
+  Blob *pOut,
+  const char *zUser,
+  int nLimit
+){
+  Stmt q;
+  int first = 1;
+  blob_append(pOut, "[", 1);
+  if( nLimit>0 && db_table_exists("repository","agentchat_session") ){
+    db_prepare(&q,
+      "SELECT s.sid,"
+      "       coalesce(nullif(s.title,''),'New Chat'),"
+      "       coalesce(nullif(s.provider,''),'?'),"
+      "       coalesce(nullif(s.model,''),''),"
+      "       (SELECT count(*) FROM agentchat AS c WHERE c.sid=s.sid),"
+      "       coalesce((SELECT kind FROM agentchat AS c"
+      "                  WHERE c.sid=s.sid ORDER BY acid DESC LIMIT 1),'')"
+      "  FROM agentchat_session AS s"
+      " WHERE s.xfrom=%Q OR (%Q='' AND s.xfrom='')"
+      " ORDER BY s.mtime DESC, s.sid DESC LIMIT %d",
+      zUser ? zUser : "", zUser ? zUser : "", nLimit
+    );
+    while( db_step(&q)==SQLITE_ROW ){
+      int sid = db_column_int(&q, 0);
+      blob_appendf(pOut,
+        "%s{\"sid\":%d,\"title\":%!j,\"provider\":%!j,\"model\":%!j,"
+        "\"message_count\":%d,\"state\":%!j}",
+        first ? "" : ",",
+        sid,
+        db_column_text(&q, 1),
+        db_column_text(&q, 2),
+        db_column_text(&q, 3),
+        db_column_int(&q, 4),
+        agent_chat_session_state(sid)
+      );
+      first = 0;
+    }
+    db_finalize(&q);
+  }
+  blob_append(pOut, "]", 1);
+}
+
+/*
+** Append a JSON array summarizing grouped evaluation rows, limited to nLimit
+** groups in stable order.
+*/
+static void agent_append_eval_summary_json(Blob *pOut, int nLimit){
+  Stmt q;
+  int first = 1;
+  blob_append(pOut, "[", 1);
+  if( nLimit>0 && db_table_exists("repository","ai_chat_eval") ){
+    db_prepare(&q,
+      "SELECT coalesce(nullif(provider,''),'(unset)'),"
+      "       coalesce(nullif(model,''),'(unset)'),"
+      "       coalesce(nullif(reply_kind,''),'(unset)'),"
+      "       coalesce(nullif(quality_status,''),'(unset)'),"
+      "       coalesce(nullif(reasoning_status,''),'(unset)'),"
+      "       coalesce(nullif(user_feedback,''),'(none)'),"
+      "       count(*)"
+      "  FROM ai_chat_eval"
+      " GROUP BY provider, model, reply_kind, quality_status,"
+      "          reasoning_status, user_feedback"
+      " ORDER BY count(*) DESC, provider, model, reply_kind, quality_status,"
+      "          reasoning_status, user_feedback"
+      " LIMIT %d",
+      nLimit
+    );
+    while( db_step(&q)==SQLITE_ROW ){
+      blob_appendf(pOut,
+        "%s{\"provider\":%!j,\"model\":%!j,\"reply_kind\":%!j,"
+        "\"quality_status\":%!j,\"reasoning_status\":%!j,"
+        "\"user_feedback\":%!j,\"count\":%d}",
+        first ? "" : "",
+        db_column_text(&q, 0),
+        db_column_text(&q, 1),
+        db_column_text(&q, 2),
+        db_column_text(&q, 3),
+        db_column_text(&q, 4),
+        db_column_text(&q, 5),
+        db_column_int(&q, 6)
+      );
+      first = 0;
+    }
+    db_finalize(&q);
+  }
+  blob_append(pOut, "]", 1);
+}
+
+/*
+** CLI command: fossil agent diagnostics [--json] [--limit N]
+**
+** Print a compact diagnostics bundle for the effective agent configuration,
+** recent runtime state, recipe registry sanity, and evaluation summaries.
+*/
+static void agent_diagnostics_cmd(void){
+  const char *zSource = 0;
+  const char *zChatProvider = agent_chat_provider();
+  const char *zChatModel = agent_default_model();
+  const char *zChatCmd = agent_command_template();
+  const char *zEmbedProvider = agent_embedding_provider();
+  const char *zEmbedModel = agent_embedding_model();
+  const char *zEmbedCmd = agent_embedding_template();
+  char *zChatModelError = 0;
+  char *zChatCommandPath = 0;
+  char *zChatCommandDetail = 0;
+  char *zEmbedModelError = 0;
+  char *zEmbedCommandPath = 0;
+  char *zEmbedCommandDetail = 0;
+  Blob json = BLOB_INITIALIZER;
+  int jsonFlag = find_option("json", 0, 0)!=0;
+  int saveFlag = find_option("save", 0, 0)!=0;
+  const char *zLimit = find_option("limit", 0, 1);
+  int nLimit = zLimit ? atoi(zLimit) : 5;
+  int chatProviderKnown = agent_provider_is_known(zChatProvider);
+  int embeddingProviderKnown = agent_provider_is_known(zEmbedProvider);
+  int chatModelValid = agent_validate_provider_model_ex(
+    zChatProvider, zChatModel, &zChatModelError
+  );
+  int chatCommandReady = agent_command_is_ready(
+    zChatCmd, &zChatCommandPath, &zChatCommandDetail
+  );
+  int embeddingAvailable = agent_embedding_is_available();
+  int embeddingModelValid = agent_validate_provider_model_ex(
+    zEmbedProvider, zEmbedModel, &zEmbedModelError
+  );
+  int embeddingCommandReady = agent_embedding_backend_ready(
+    zEmbedProvider, zEmbedModel, zEmbedCmd,
+    &zEmbedCommandPath, &zEmbedCommandDetail
+  );
+  int chatOk = chatProviderKnown && chatModelValid && chatCommandReady;
+  int embeddingOk = embeddingProviderKnown && embeddingModelValid
+                 && embeddingAvailable && embeddingCommandReady;
+  int overallOk = chatOk && embeddingOk;
+  int noteCount;
+  int vectorCount;
+  int sessionCount;
+  int messageCount;
+  int evalCount;
+  int latestSid;
+  unsigned int i;
+  int nRecipe = (int)count(aAgentRecipeBuiltin);
+  int nInvalidRecipe = 0;
+  const char *zUser = g.zLogin ? g.zLogin : "";
+
+  verify_all_options();
+  if( nLimit<=0 ) nLimit = 5;
+  zSource = agent_config_source();
+  noteCount = db_table_exists("repository","ai_note")
+    ? db_int(0, "SELECT count(*) FROM ai_note") : 0;
+  vectorCount = db_table_exists("repository","ai_vector")
+    ? db_int(0, "SELECT count(*) FROM ai_vector") : 0;
+  sessionCount = db_table_exists("repository","agentchat_session")
+    ? db_int(0, "SELECT count(*) FROM agentchat_session") : 0;
+  messageCount = db_table_exists("repository","agentchat")
+    ? db_int(0, "SELECT count(*) FROM agentchat") : 0;
+  evalCount = db_table_exists("repository","ai_chat_eval")
+    ? db_int(0, "SELECT count(*) FROM ai_chat_eval") : 0;
+  latestSid = agent_chat_latest_session(zUser);
+  for(i=0; i<count(aAgentRecipeBuiltin); i++){
+    Blob err = BLOB_INITIALIZER;
+    if( !agent_recipe_phases_valid(aAgentRecipeBuiltin[i].zPhases, &err)
+     || !agent_recipe_capabilities_valid(aAgentRecipeBuiltin[i].zCapabilities, &err) ){
+      nInvalidRecipe++;
+    }
+    blob_reset(&err);
+  }
+
+  if( jsonFlag ){
+    int runid = 0;
+    blob_appendf(&json, "{\"source\":%!j,", zSource);
+    blob_appendf(&json, "\"platform\":{\"manifest_version\":%!j},", MANIFEST_VERSION);
+    blob_appendf(&json, "\"config\":{\"chat_provider\":%!j,\"chat_model\":%!j,"
+                 "\"chat_command_path\":%!j,\"chat_command_detail\":%!j,"
+                 "\"embedding_provider\":%!j,\"embedding_model\":%!j,"
+                 "\"embedding_command_path\":%!j,\"embedding_command_detail\":%!j},",
+       zChatProvider, zChatModel,
+       zChatCommandPath ? zChatCommandPath : "",
+       zChatCommandDetail ? zChatCommandDetail : "",
+       zEmbedProvider, zEmbedModel,
+       zEmbedCommandPath ? zEmbedCommandPath : "",
+       zEmbedCommandDetail ? zEmbedCommandDetail : "");
+    blob_appendf(&json, "\"verification\":{\"chat_ok\":%d,\"chat_provider_known\":%d,"
+                 "\"chat_model_valid\":%d,\"chat_model_error\":%!j,"
+                 "\"embedding_ok\":%d,\"embedding_provider_known\":%d,"
+                 "\"embedding_model_valid\":%d,\"embedding_model_error\":%!j,"
+                 "\"overall_ok\":%d},",
+       chatOk, chatProviderKnown, chatModelValid,
+       zChatModelError ? zChatModelError : "",
+       embeddingOk, embeddingProviderKnown, embeddingModelValid,
+       zEmbedModelError ? zEmbedModelError : "",
+       overallOk);
+    blob_appendf(&json, "\"runtime\":{\"note_count\":%d,\"vector_count\":%d,"
+                 "\"session_count\":%d,\"message_count\":%d,"
+                 "\"eval_count\":%d,\"latest_session\":%d},",
+       noteCount, vectorCount, sessionCount, messageCount, evalCount, latestSid);
+    blob_appendf(&json, "\"recipes\":{\"count\":%d,\"invalid_count\":%d,\"items\":",
+       nRecipe, nInvalidRecipe);
+    agent_append_recipe_registry_json(&json);
+    blob_append(&json, "},\"recent_sessions\":", -1);
+    agent_append_recent_sessions_json(&json, zUser, nLimit);
+    blob_append(&json, ",\"eval_summary\":", -1);
+    agent_append_eval_summary_json(&json, nLimit);
+    blob_append(&json, "}", 1);
+    if( saveFlag ){
+      runid = agent_run_record(
+        "diagnostics", "diagnostics",
+        overallOk ? "ok" : "not-ok",
+        overallOk ? "diagnostics overall ok" : "diagnostics reported failures",
+        blob_str(&json)
+      );
+      fossil_print("{\"saved_run_id\":%d,\"diagnostics\":%s}\n",
+        runid, blob_str(&json)
+      );
+    }else{
+      fossil_print("%s\n", blob_str(&json));
+    }
+  }else{
+    int runid = 0;
+    fossil_print("source: %s\n", zSource);
+    fossil_print("verification: overall=%s chat=%s embedding=%s\n",
+      overallOk ? "ok" : "not-ok",
+      chatOk ? "ok" : "not-ok",
+      embeddingOk ? "ok" : "not-ok");
+    fossil_print("chat: provider=%s model=%s command=%s\n",
+      zChatProvider, zChatModel,
+      zChatCommandPath ? zChatCommandPath : "(not ready)");
+    fossil_print("embedding: provider=%s model=%s command=%s\n",
+      zEmbedProvider, zEmbedModel,
+      zEmbedCommandPath ? zEmbedCommandPath : "(not ready)");
+    fossil_print("runtime: notes=%d vectors=%d sessions=%d messages=%d evals=%d latest-session=%d\n",
+      noteCount, vectorCount, sessionCount, messageCount, evalCount, latestSid);
+    fossil_print("recipes: count=%d invalid=%d\n", nRecipe, nInvalidRecipe);
+    for(i=0; i<count(aAgentRecipeBuiltin); i++){
+      const AgentRecipe *p = &aAgentRecipeBuiltin[i];
+      const AgentPhase *pPrimary = agent_recipe_primary_phase(p);
+      fossil_print("recipe %s: phases=%d capabilities=%d primary=%s\n",
+        p->zName,
+        agent_list_count(p->zPhases),
+        agent_list_count(p->zCapabilities),
+        pPrimary ? pPrimary->zName : "(none)");
+    }
+    if( sessionCount>0 ){
+      Stmt q;
+      fossil_print("recent sessions:\n");
+      db_prepare(&q,
+        "SELECT s.sid,"
+        "       coalesce(nullif(s.title,''),'New Chat'),"
+        "       coalesce(nullif(s.provider,''),'?'),"
+        "       coalesce(nullif(s.model,''),''),"
+        "       (SELECT count(*) FROM agentchat AS c WHERE c.sid=s.sid)"
+        "  FROM agentchat_session AS s"
+        " WHERE s.xfrom=%Q OR (%Q='' AND s.xfrom='')"
+        " ORDER BY s.mtime DESC, s.sid DESC LIMIT %d",
+        zUser, zUser, nLimit
+      );
+      while( db_step(&q)==SQLITE_ROW ){
+        int sid = db_column_int(&q, 0);
+        fossil_print("  %d|%s|%s|%s|messages=%d|state=%s\n",
+          sid,
+          db_column_text(&q, 1),
+          db_column_text(&q, 2),
+          db_column_text(&q, 3),
+          db_column_int(&q, 4),
+          agent_chat_session_state(sid)
+        );
+      }
+      db_finalize(&q);
+    }
+    if( evalCount>0 ){
+      Stmt q;
+      fossil_print("eval summary:\n");
+      db_prepare(&q,
+        "SELECT coalesce(nullif(provider,''),'(unset)'),"
+        "       coalesce(nullif(model,''),'(unset)'),"
+        "       coalesce(nullif(reply_kind,''),'(unset)'),"
+        "       coalesce(nullif(quality_status,''),'(unset)'),"
+        "       coalesce(nullif(reasoning_status,''),'(unset)'),"
+        "       coalesce(nullif(user_feedback,''),'(none)'),"
+        "       count(*)"
+        "  FROM ai_chat_eval"
+        " GROUP BY provider, model, reply_kind, quality_status,"
+        "          reasoning_status, user_feedback"
+        " ORDER BY count(*) DESC, provider, model, reply_kind, quality_status,"
+        "          reasoning_status, user_feedback"
+        " LIMIT %d",
+        nLimit
+      );
+      while( db_step(&q)==SQLITE_ROW ){
+        fossil_print("  %s|%s|%s|%s|%s|%s|%d\n",
+          db_column_text(&q, 0),
+          db_column_text(&q, 1),
+          db_column_text(&q, 2),
+          db_column_text(&q, 3),
+          db_column_text(&q, 4),
+          db_column_text(&q, 5),
+          db_column_int(&q, 6)
+        );
+      }
+      db_finalize(&q);
+    }
+    if( saveFlag ){
+      blob_appendf(&json, "{\"source\":%!j,", zSource);
+      blob_appendf(&json, "\"platform\":{\"manifest_version\":%!j},", MANIFEST_VERSION);
+      blob_appendf(&json, "\"verification\":{\"chat_ok\":%d,\"embedding_ok\":%d,"
+                        "\"overall_ok\":%d},",
+        chatOk, embeddingOk, overallOk
+      );
+      blob_appendf(&json, "\"runtime\":{\"note_count\":%d,\"vector_count\":%d,"
+                        "\"session_count\":%d,\"message_count\":%d,"
+                        "\"eval_count\":%d,\"latest_session\":%d}}",
+        noteCount, vectorCount, sessionCount, messageCount, evalCount, latestSid
+      );
+      runid = agent_run_record(
+        "diagnostics", "diagnostics",
+        overallOk ? "ok" : "not-ok",
+        overallOk ? "diagnostics overall ok" : "diagnostics reported failures",
+        blob_str(&json)
+      );
+      fossil_print("saved-run: %d\n", runid);
+    }
+  }
+  blob_reset(&json);
+  fossil_free((char*)zSource);
+  fossil_free(zChatModelError);
+  fossil_free(zChatCommandPath);
+  fossil_free(zChatCommandDetail);
+  fossil_free(zEmbedModelError);
+  fossil_free(zEmbedCommandPath);
+  fossil_free(zEmbedCommandDetail);
+}
+
+/*
+** CLI command: fossil agent run-log [--limit N]
+**
+** List persisted agent runs in reverse chronological order.
+*/
+static void agent_run_log_cmd(void){
+  Stmt q;
+  const char *zLimit = find_option("limit", 0, 1);
+  int nLimit = zLimit ? atoi(zLimit) : 10;
+  verify_all_options();
+  if( nLimit<=0 ) nLimit = 10;
+  agent_run_create_tables();
+  db_prepare(&q,
+    "SELECT runid,"
+    "       datetime(created_at,toLocal()),"
+    "       coalesce(nullif(kind,''),'(unset)'),"
+    "       coalesce(nullif(name,''),'(unset)'),"
+    "       coalesce(nullif(status,''),'(unset)'),"
+    "       coalesce(nullif(summary,''),'')"
+    "  FROM agentrun"
+    " ORDER BY runid DESC LIMIT %d",
+    nLimit
+  );
+  while( db_step(&q)==SQLITE_ROW ){
+    fossil_print("%d|%s|%s|%s|%s|%s\n",
+      db_column_int(&q, 0),
+      db_column_text(&q, 1),
+      db_column_text(&q, 2),
+      db_column_text(&q, 3),
+      db_column_text(&q, 4),
+      db_column_text(&q, 5)
+    );
+  }
+  db_finalize(&q);
+}
+
+/*
+** CLI command: fossil agent run-show ID
+**
+** Show a persisted agent run payload and metadata.
+*/
+static void agent_run_show_cmd(void){
+  Stmt q;
+  int runid;
+  if( g.argc!=4 ){
+    usage("run-show ID");
+  }
+  runid = atoi(g.argv[3]);
+  agent_run_create_tables();
+  db_prepare(&q,
+    "SELECT datetime(created_at,toLocal()),"
+    "       coalesce(nullif(kind,''),'(unset)'),"
+    "       coalesce(nullif(name,''),'(unset)'),"
+    "       coalesce(nullif(status,''),'(unset)'),"
+    "       coalesce(nullif(summary,''),''),"
+    "       coalesce(payload,'')"
+    "  FROM agentrun WHERE runid=%d",
+    runid
+  );
+  if( db_step(&q)!=SQLITE_ROW ){
+    db_finalize(&q);
+    fossil_fatal("unknown run id: %d", runid);
+  }
+  fossil_print("run: %d\n", runid);
+  fossil_print("created: %s\n", db_column_text(&q, 0));
+  fossil_print("kind: %s\n", db_column_text(&q, 1));
+  fossil_print("name: %s\n", db_column_text(&q, 2));
+  fossil_print("status: %s\n", db_column_text(&q, 3));
+  fossil_print("summary: %s\n", db_column_text(&q, 4));
+  fossil_print("payload:\n%s\n", db_column_text(&q, 5));
   db_finalize(&q);
 }
 
@@ -1945,6 +3375,223 @@ static void agent_pool_process_cmd(void){
 }
 
 /*
+** CLI command: fossil agent recipe list
+*/
+static void agent_recipe_list_cmd(void){
+  unsigned int i;
+  for(i=0; i<count(aAgentRecipeBuiltin); i++){
+    fossil_print("%s\t%s\n",
+      aAgentRecipeBuiltin[i].zName,
+      aAgentRecipeBuiltin[i].zTitle
+    );
+  }
+}
+
+/*
+** CLI command: fossil agent recipe show NAME
+*/
+static void agent_recipe_show_cmd(void){
+  const AgentRecipe *pRecipe;
+  const AgentPhase *pPrimary;
+  Blob err = BLOB_INITIALIZER;
+  if( g.argc!=5 ){
+    usage("recipe show NAME");
+  }
+  pRecipe = agent_recipe_find(g.argv[4]);
+  if( pRecipe==0 ){
+    fossil_fatal("unknown recipe: %s", g.argv[4]);
+  }
+  if( !agent_recipe_phases_valid(pRecipe->zPhases, &err) ){
+    fossil_fatal("%s", blob_str(&err));
+  }
+  blob_reset(&err);
+  if( !agent_recipe_capabilities_valid(pRecipe->zCapabilities, &err) ){
+    fossil_fatal("%s", blob_str(&err));
+  }
+  pPrimary = agent_recipe_primary_phase(pRecipe);
+  fossil_print("name: %s\n", pRecipe->zName);
+  fossil_print("title: %s\n", pRecipe->zTitle);
+  fossil_print("description: %s\n", pRecipe->zDescription);
+  fossil_print("usage: %s\n", pRecipe->zUsage);
+  fossil_print("phases: %s\n", pRecipe->zPhases);
+  if( pPrimary ){
+    fossil_print("primary-phase: %s\n", pPrimary->zName);
+  }
+  fossil_print("phase-count: %d\n", agent_list_count(pRecipe->zPhases));
+  fossil_print("capabilities: %s\n", pRecipe->zCapabilities);
+  fossil_print("capability-count: %d\n", agent_list_count(pRecipe->zCapabilities));
+}
+
+/*
+** CLI command: fossil agent recipe run NAME ?QUERY...? [--json]
+*/
+static void agent_recipe_run_cmd(void){
+  const AgentRecipe *pRecipe;
+  const AgentPhase *pPrimary;
+  const char *zProvider;
+  const char *zModel;
+  char *zQuery;
+  const char *zReply;
+  int jsonFlag;
+  int saveFlag;
+  int nReply = 0;
+  Blob err = BLOB_INITIALIZER;
+  Blob json = BLOB_INITIALIZER;
+  const char *zSummary = "Recipe completed successfully.";
+  const char *zNext = "Review the detailed report and decide whether to run verify or continue with a more specific recipe.";
+
+  jsonFlag = find_option("json", 0, 0)!=0;
+  saveFlag = find_option("save", 0, 0)!=0;
+  verify_all_options();
+  if( g.argc<5 ){
+    usage("recipe run NAME ?QUERY...? [--json]");
+  }
+  pRecipe = agent_recipe_find(g.argv[4]);
+  if( pRecipe==0 ){
+    fossil_fatal("unknown recipe: %s", g.argv[4]);
+  }
+  if( !agent_recipe_phases_valid(pRecipe->zPhases, &err) ){
+    fossil_fatal("%s", blob_str(&err));
+  }
+  blob_reset(&err);
+  if( !agent_recipe_capabilities_valid(pRecipe->zCapabilities, &err) ){
+    fossil_fatal("%s", blob_str(&err));
+  }
+  pPrimary = agent_recipe_primary_phase(pRecipe);
+  zQuery = agent_join_args(5);
+  zProvider = agent_chat_provider();
+  zModel = agent_default_model();
+  if( agent_validate_provider_model(zProvider, zModel, &err) ){
+    fossil_fatal("%s", blob_str(&err));
+  }
+  blob_reset(&err);
+  Th_FossilInit(TH_INIT_DEFAULT);
+  Th_SetVar(g.interp, "provider", 8, zProvider, (int)strlen(zProvider));
+  Th_SetVar(g.interp, "model", 5, zModel, (int)strlen(zModel));
+  Th_SetVar(g.interp, "query", 5, zQuery ? zQuery : "", (int)strlen(zQuery ? zQuery : ""));
+  if( Th_Eval(g.interp, 0, pRecipe->zScript, -1)==TH_ERROR ){
+    const char *zResult = Th_GetResult(g.interp, &nReply);
+    fossil_fatal("recipe TH1 error: %.*s", nReply, zResult ? zResult : "");
+  }
+  zReply = Th_GetResult(g.interp, &nReply);
+  blob_appendf(&json, "{\"status\":\"ok\",\"recipe\":%!j,\"title\":%!j,"
+               "\"provider\":%!j,\"model\":%!j,\"query\":%!j,"
+               "\"phase_count\":%d,\"phases\":",
+    pRecipe->zName, pRecipe->zTitle, zProvider, zModel,
+    zQuery ? zQuery : "", agent_list_count(pRecipe->zPhases)
+  );
+  agent_append_phase_name_array(&json, pRecipe->zPhases);
+  blob_append(&json, ",\"primary_phase\":", -1);
+  if( pPrimary ){
+    blob_appendf(&json, "{\"name\":%!j,\"title\":%!j,\"description\":%!j}",
+      pPrimary->zName, pPrimary->zTitle, pPrimary->zDescription
+    );
+  }else{
+    blob_append(&json, "null", -1);
+  }
+  blob_appendf(&json, ",\"capability_count\":%d,\"capabilities\":",
+    agent_list_count(pRecipe->zCapabilities)
+  );
+  agent_append_capability_name_array(&json, pRecipe->zCapabilities);
+  blob_appendf(&json, ",\"executive_summary\":%!j,"
+               "\"detailed_report\":%!j,"
+               "\"artifacts\":[],"
+               "\"risks\":[],"
+               "\"next_recommended\":%!j,"
+               "\"reply\":%!j}",
+    zSummary,
+    zReply ? zReply : "",
+    zNext,
+    zReply ? zReply : ""
+  );
+  if( jsonFlag ){
+    if( saveFlag ){
+      int runid = agent_run_record(
+        "recipe", pRecipe->zName, "ok",
+        zSummary, blob_str(&json)
+      );
+      fossil_print("{\"saved_run_id\":%d,\"recipe_run\":%s}\n",
+        runid, blob_str(&json)
+      );
+    }else{
+      fossil_print("%s\n", blob_str(&json));
+    }
+  }else{
+    fossil_print("recipe: %s\n", pRecipe->zName);
+    fossil_print("provider: %s\n", zProvider);
+    fossil_print("model: %s\n", zModel);
+    fossil_print("phases: %s\n", pRecipe->zPhases);
+    if( pPrimary ){
+      fossil_print("primary-phase: %s\n", pPrimary->zName);
+    }
+    if( zQuery && zQuery[0] ){
+      fossil_print("query: %s\n", zQuery);
+    }
+    fossil_print("summary: %s\n", zSummary);
+    fossil_print("report:\n%.*s\n", nReply, zReply ? zReply : "");
+    fossil_print("next: %s\n", zNext);
+    if( saveFlag ){
+      int runid = agent_run_record(
+        "recipe", pRecipe->zName, "ok",
+        zSummary, blob_str(&json)
+      );
+      fossil_print("saved-run: %d\n", runid);
+    }
+  }
+  blob_reset(&json);
+  fossil_free(zQuery);
+}
+
+/*
+** Dispatch fossil agent recipe ...
+*/
+static void agent_recipe_cmd(void){
+  const char *zSub;
+  if( g.argc<4 ){
+    usage("recipe SUBCOMMAND ...");
+  }
+  zSub = g.argv[3];
+  if( fossil_strcmp(zSub, "list")==0 ){
+    agent_recipe_list_cmd();
+  }else if( fossil_strcmp(zSub, "show")==0 ){
+    agent_recipe_show_cmd();
+  }else if( fossil_strcmp(zSub, "run")==0 ){
+    agent_recipe_run_cmd();
+  }else{
+    fossil_fatal("unknown recipe subcommand: %s", zSub);
+  }
+}
+
+/*
+** CLI command: fossil agent phases
+*/
+static void agent_phases_cmd(void){
+  unsigned int i;
+  for(i=0; i<count(aAgentPhaseBuiltin); i++){
+    const AgentPhase *p = &aAgentPhaseBuiltin[i];
+    fossil_print("%s\t%s\t%s\n", p->zName, p->zTitle, p->zDescription);
+  }
+}
+
+/*
+** CLI command: fossil agent capabilities
+*/
+static void agent_capabilities_cmd(void){
+  unsigned int i;
+  for(i=0; i<count(aAgentCapabilityBuiltin); i++){
+    const AgentCapability *p = &aAgentCapabilityBuiltin[i];
+    fossil_print("%s\t%s\twrite=%s\tnetwork=%s\tconfirm=%s\t%s\n",
+      p->zName,
+      p->zKind,
+      p->requiresWrite ? "yes" : "no",
+      p->requiresNetwork ? "yes" : "no",
+      p->requiresConfirm ? "yes" : "no",
+      p->zDescription
+    );
+  }
+}
+
+/*
 ** COMMAND: agent
 **
 ** Usage: %fossil agent SUBCOMMAND ...
@@ -1968,6 +3615,30 @@ static void agent_pool_process_cmd(void){
 **
 **    fossil agent eval-report
 **       Print grouped `ai_chat_eval` summary rows.
+**
+**    fossil agent diagnostics [--json] [--limit N]
+**       Print a compact diagnostics bundle covering config, verification,
+**       runtime counts, recipe registry sanity, recent sessions, and evals.
+**       With --save, persist the diagnostics payload in repository storage.
+**
+**    fossil agent capabilities
+**       List the built-in capability registry for recipe and agent use.
+**
+**    fossil agent phases
+**       List the built-in orchestration phase registry.
+**
+**    fossil agent recipe list
+**    fossil agent recipe show NAME
+**    fossil agent recipe run NAME ?QUERY...? [--json] [--save]
+**       List, inspect, and execute built-in agent recipes.
+**
+**    fossil agent run-log [--limit N]
+**    fossil agent run-show ID
+**       Inspect saved agent runs such as persisted diagnostics payloads.
+**
+**    fossil agent verify [--json] [--chat-smoke] [--embed-smoke] [--save]
+**       Verify the effective chat and embedding configuration. Smoke flags
+**       execute the configured backend(s). With --save, persist the result.
 **
 **    fossil agent semantic-index
 **       Generate embeddings for all notes and store them in ai_vector.
@@ -2019,8 +3690,22 @@ void agent_cmd(void){
       fossil_fatal("failed to generate embedding");
     }
     blob_reset(&v);
+  }else if( fossil_strcmp(zCmd, "diagnostics")==0 ){
+    agent_diagnostics_cmd();
+  }else if( fossil_strcmp(zCmd, "run-log")==0 ){
+    agent_run_log_cmd();
+  }else if( fossil_strcmp(zCmd, "run-show")==0 ){
+    agent_run_show_cmd();
   }else if( fossil_strcmp(zCmd, "eval-report")==0 ){
     agent_eval_report_cmd();
+  }else if( fossil_strcmp(zCmd, "phases")==0 ){
+    agent_phases_cmd();
+  }else if( fossil_strcmp(zCmd, "capabilities")==0 ){
+    agent_capabilities_cmd();
+  }else if( fossil_strcmp(zCmd, "recipe")==0 ){
+    agent_recipe_cmd();
+  }else if( fossil_strcmp(zCmd, "verify")==0 ){
+    agent_verify_cmd();
   }else if( fossil_strcmp(zCmd, "semantic-index")==0 ){
     agent_semantic_index_cmd();
   }else if( fossil_strcmp(zCmd, "wiki-sync")==0 ){
@@ -2069,10 +3754,12 @@ void agentui_page(void){
   zConfigSource = agent_config_source();
   chatProviderLocked = agent_chat_provider_locked();
   style_set_current_feature("agent");
-  style_header("Agent Chat");
-  @ <div class="fossil-doc" data-title="Agent Chat">
-  @ <p>This page sends prompts to the AI backend configured by the repository
-  @ settings.</p>
+  style_header("Agent Pool");
+  @ <div class="fossil-doc" data-title="Agent Pool">
+  @ <p>This page shows the repository knowledge pool as a processing system.
+  @ Raw notes stay in the pool, each retrieval run is observable, and duplicate
+  @ cleanup happens through the processing loop instead of by deleting source
+  @ material.</p>
   @ <div style="border:1px solid #888;padding:0.6em;margin:0 0 1em 0;background:rgba(127,127,127,0.05);">
   @ <b>Effective config</b><br>
   @ source: <span id="agent-config-source">%h(zConfigSource)</span><br>
@@ -2091,6 +3778,11 @@ void agentui_page(void){
   @ <div>
   @ <div style="margin-bottom:0.7em;"><a class="btn" href="%R/agentui?new=1">New Chat</a></div>
   @ <div style="border:1px solid #888;padding:0.6em;background:rgba(127,127,127,0.05);">
+  @ <div style="font-weight:bold;margin-bottom:0.4em;">Processing Tiers</div>
+  @ <div class="dimmed" style="margin-bottom:0.5em;">Everything stays in the pool and moves through review tiers.</div>
+  @ <div id="agent-pool-tiers">Loading pool summary...</div>
+  @ </div>
+  @ <div style="border:1px solid #888;padding:0.6em;background:rgba(127,127,127,0.05);margin-top:0.8em;">
   @ <div style="font-weight:bold;margin-bottom:0.4em;">Sessions</div>
   agent_chat_render_sessions(zUser, sidCurrent);
   @ </div>
@@ -2144,6 +3836,11 @@ void agentui_page(void){
   @ <input type="button" class="btn" id="agent-feedback-not-useful" value="Not Useful" disabled>
   @ <span class="dimmed" id="agent-feedback-status">No reply selected</span>
   @ </div>
+  @ <div style="border:1px solid #888;padding:0.6em;background:rgba(127,127,127,0.05);margin-top:1em;">
+  @ <div style="font-weight:bold;margin-bottom:0.4em;">Retrieval History</div>
+  @ <div class="dimmed" style="margin-bottom:0.5em;">Each context-aware run links to the retrieval set that shaped it.</div>
+  @ <div id="agent-retrieval-history">No retrieval selected.</div>
+  @ </div>
   @ <script nonce="%h(style_nonce())">
   @ (function(){
   @   var sid = %d(sidCurrent);
@@ -2169,6 +3866,9 @@ void agentui_page(void){
   @   var cfgEmbedCommand = document.getElementById('agent-config-embedding-command');
   @   var cfgEmbedModel = document.getElementById('agent-config-embedding-model');
   @   var cfgCapabilities = document.getElementById('agent-config-capabilities');
+  @   var poolTiers = document.getElementById('agent-pool-tiers');
+  @   var retrievalHistory = document.getElementById('agent-retrieval-history');
+  @   var latestRetrievalQid = 0;
   @   function esc(text){
   @     return (text || '').replace(/[&<>]/g, function(c){
   @       return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];
@@ -2255,6 +3955,123 @@ void agentui_page(void){
   @         + ', embeddings=' + yesNo(data.embedding_available);
   @     }
   @   }
+  @   function renderPool(data){
+  @     var i, j, tier, note, html;
+  @     if(!poolTiers) return;
+  @     if(!data || !data.tiers){
+  @       poolTiers.textContent = 'Pool summary unavailable.';
+  @       return;
+  @     }
+  @     html = '';
+  @     for(i=0; i<data.tiers.length; i++){
+  @       tier = data.tiers[i];
+  @       html += '<div style="margin-bottom:0.7em;">'
+  @            + '<div><b>' + esc(tier.label || ('Tier ' + tier.tier)) + '</b>'
+  @            + ' <span class="dimmed">(' + esc(tier.process_level || '') + ', '
+  @            + (tier.note_count || 0) + ' notes)</span></div>';
+  @       if(tier.recent_notes && tier.recent_notes.length){
+  @         html += '<div style="margin-top:0.25em;">';
+  @         for(j=0; j<tier.recent_notes.length; j++){
+  @           note = tier.recent_notes[j];
+  @           html += '<div style="margin:0.15em 0 0.15em 0.6em;">'
+  @                + esc(note.title || ('note #' + note.nid))
+  @                + ' <span class="dimmed">retrievals=' + (note.retrieval_count || 0) + '</span>';
+  @           if(note.duplicate_of){
+  @             html += ' <span class="dimmed">dup->' + note.duplicate_of + '</span>';
+  @           }
+  @           if(note.merged_into){
+  @             html += ' <span class="dimmed">merged->' + note.merged_into + '</span>';
+  @           }
+  @           html += '</div>';
+  @         }
+  @         html += '</div>';
+  @       }else{
+  @         html += '<div class="dimmed" style="margin-left:0.6em;">No notes yet.</div>';
+  @       }
+  @       html += '</div>';
+  @     }
+  @     html += '<div class="dimmed" style="border-top:1px solid rgba(0,0,0,0.12);padding-top:0.5em;">'
+  @          + 'retrievals=' + (data.retrieval_count || 0)
+  @          + ', duplicates=' + (data.duplicate_count || 0)
+  @          + ', merged=' + (data.merged_count || 0)
+  @          + '</div>';
+  @     poolTiers.innerHTML = html;
+  @   }
+  @   function refreshPool(){
+  @     return fetch('agent-pool').then(function(r){
+  @       return r.json();
+  @     }).then(function(data){
+  @       renderPool(data);
+  @       return data;
+  @     }).catch(function(){
+  @       if(poolTiers) poolTiers.textContent = 'Pool summary unavailable.';
+  @     });
+  @   }
+  @   function renderRetrieval(data){
+  @     var i, note, html;
+  @     if(!retrievalHistory) return;
+  @     if(!data || !data.qid){
+  @       retrievalHistory.textContent = 'No retrieval selected.';
+  @       return;
+  @     }
+  @     html = '<div><b>Retrieval #' + data.qid + '</b></div>'
+  @          + '<div class="dimmed" style="margin-bottom:0.4em;">'
+  @          + esc(data.created_at || '')
+  @          + '</div>'
+  @          + '<div style="margin-bottom:0.5em;"><b>Query:</b> '
+  @          + esc(data.query_text || '')
+  @          + '</div>';
+  @     if(data.notes && data.notes.length){
+  @       for(i=0; i<data.notes.length; i++){
+  @         note = data.notes[i];
+  @         html += '<div style="margin-bottom:0.5em;padding-top:0.35em;border-top:1px solid rgba(0,0,0,0.08);">'
+  @              + '<div><b>#' + note.rank + '</b> ' + esc(note.title || ('note #' + note.nid)) + '</div>'
+  @              + '<div class="dimmed">tier=' + (note.tier || 0)
+  @              + ' (' + esc(note.process_level || '') + ')'
+  @              + ', score=' + esc(String(note.score || 0))
+  @              + ', delta=' + esc(String(note.reinforcement_delta || 0))
+  @              + ', retrievals=' + (note.retrieval_count || 0)
+  @              + '</div>';
+  @         if(note.duplicate_of || note.merged_into){
+  @           html += '<div class="dimmed">';
+  @           if(note.duplicate_of){
+  @             html += 'duplicate_of=' + note.duplicate_of + ' ';
+  @           }
+  @           if(note.merged_into){
+  @             html += 'merged_into=' + note.merged_into;
+  @           }
+  @           html += '</div>';
+  @         }
+  @         html += '<div class="dimmed">duplication=' + esc(note.duplication_status || 'unknown')
+  @              + ', atomicity=' + esc(note.atomicity_status || 'unknown')
+  @              + ', metadata=' + esc(note.metadata_status || 'unknown')
+  @              + '</div></div>';
+  @       }
+  @     }else{
+  @       html += '<div class="dimmed">This retrieval did not return any notes.</div>';
+  @     }
+  @     retrievalHistory.innerHTML = html;
+  @   }
+  @   function loadRetrieval(qid){
+  @     if(!qid){
+  @       renderRetrieval(null);
+  @       return Promise.resolve();
+  @     }
+  @     latestRetrievalQid = qid;
+  @     if(retrievalHistory){
+  @       retrievalHistory.textContent = 'Loading retrieval #' + qid + '...';
+  @     }
+  @     return fetch('agent-retrieval?qid='+encodeURIComponent(qid)).then(function(r){
+  @       return r.json();
+  @     }).then(function(data){
+  @       renderRetrieval(data);
+  @       return data;
+  @     }).catch(function(){
+  @       if(retrievalHistory){
+  @         retrievalHistory.textContent = 'Retrieval history unavailable.';
+  @       }
+  @     });
+  @   }
   @   function renderHistory(data){
   @     var i, msg, div, html;
   @     log.innerHTML = '';
@@ -2270,8 +4087,11 @@ void agentui_page(void){
   @   }
   @   function appendEvent(msg){
   @     var meta;
+  @     var showMeta = !!msg.meta;
+  @     var retrievalQid = 0;
   @     try{ meta = msg.meta ? JSON.parse(msg.meta) : {}; }catch(e){ meta = {}; }
   @     if(meta.hidden || msg.kind==='context') return;
+  @     if(meta.retrieval_qid) retrievalQid = meta.retrieval_qid;
   @     var div = document.createElement('div');
   @     var html;
   @     div.style.marginBottom = '0.8em';
@@ -2289,7 +4109,15 @@ void agentui_page(void){
   @            + '<pre style="white-space:pre-wrap;margin:0.5em 0;padding:0.5em;border-left:3px solid #ccc;background:rgba(0,0,0,0.02)">'
   @            + esc(meta.thinking) + '</pre></details>';
   @     }
-  @     if(msg.meta && !meta.thinking){
+  @     if(msg.role==='user' && msg.kind==='prompt' && meta.context!==undefined){
+  @       showMeta = 0;
+  @       html += ' <span class="dimmed">[context=' + (meta.context ? 'pool' : 'off') + ']</span>';
+  @       if(retrievalQid>0){
+  @         latestRetrievalQid = retrievalQid;
+  @         html += ' <span class="dimmed">[<a href="#" data-retrieval-qid="' + retrievalQid + '">retrieval #' + retrievalQid + '</a>]</span>';
+  @       }
+  @     }
+  @     if(showMeta && !meta.thinking){
   @       html += ' <span class="dimmed">meta=' + esc(msg.meta) + '</span>';
   @     }
   @     if(msg.feedback){
@@ -2344,6 +4172,9 @@ void agentui_page(void){
   @       return r.json();
   @     }).then(function(data){
   @       renderHistory(data);
+  @       if(latestRetrievalQid>0){
+  @         loadRetrieval(latestRetrievalQid).catch(function(){});
+  @       }
   @       return data;
   @     });
   @   }
@@ -2384,9 +4215,19 @@ void agentui_page(void){
   @   }).then(function(data){
   @     applyConfig(data);
   @   }).catch(function(){});
+  @   refreshPool();
   @   refreshHistory().then(function(){
   @     restartPolling();
   @   }).catch(function(){});
+  @   log.addEventListener('click', function(e){
+  @     var target = e.target;
+  @     var qid;
+  @     if(!target || !target.getAttribute) return;
+  @     qid = target.getAttribute('data-retrieval-qid');
+  @     if(!qid) return;
+  @     e.preventDefault();
+  @     loadRetrieval(qid);
+  @   });
   @   send.addEventListener('click', function(){
   @     var msg = input.value.trim();
   @     if(!msg) return;
@@ -2416,7 +4257,9 @@ void agentui_page(void){
   @         applyConfig({chat_provider: data.provider, chat_model: data.model});
   @       }
   @       restartPolling();
-  @       return refreshEvents().catch(function(){
+  @       return refreshEvents().then(function(result){
+  @         return refreshPool().then(function(){ return result; });
+  @       }).catch(function(){
   @         addMsg('Agent', data.reply || data.error || '(no reply)');
   @       });
   @     }).catch(function(err){
@@ -2516,6 +4359,44 @@ void agent_events_page(void){
 }
 
 /*
+** WEBPAGE: agent-pool
+**
+** JSON summary of the current note pool grouped by processing tier.
+*/
+void agent_pool_page(void){
+  login_check_credentials();
+  if( !g.perm.Read ){
+    cgi_set_content_type("application/json");
+    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
+    return;
+  }
+  cgi_set_content_type("application/json");
+  agent_emit_pool_json();
+}
+
+/*
+** WEBPAGE: agent-retrieval
+**
+** JSON description of one retrieval run and its retrieved notes.
+**
+** Query parameters:
+**
+**    qid=QID
+*/
+void agent_retrieval_page(void){
+  int qid;
+  login_check_credentials();
+  if( !g.perm.Read ){
+    cgi_set_content_type("application/json");
+    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
+    return;
+  }
+  qid = atoi(PD("qid","0"));
+  cgi_set_content_type("application/json");
+  agent_emit_retrieval_json(qid);
+}
+
+/*
 ** WEBPAGE: agent-feedback
 **
 ** JSON endpoint to record user feedback for the latest terminal agent reply
@@ -2581,14 +4462,20 @@ static const char zAgentOrchestrateBuiltin[] =
 "\n"
 "set full_prompt $msg\n"
 "set context \"\"\n"
+"set retrieval_qid 0\n"
 "\n"
 "if {$context_enabled} {\n"
 "  set event_meta \"{\\\"stage\\\":\\\"context\\\",\\\"status\\\":\\\"running\\\"}\"\n"
 "  set event_msg \"Assembling repository context...\"\n"
 "  agent_save_event $sid $user \"progress\" $provider $model $event_meta $event_msg\n"
 "  set context [agent_context $msg $model]\n"
+"  set retrieval_qid [agent_last_retrieval_qid]\n"
 "  if {[string compare $context \"\"] != 0} {\n"
-"    set event_meta \"{\\\"stage\\\":\\\"context\\\",\\\"hidden\\\":true}\"\n"
+"    if {$retrieval_qid > 0} {\n"
+"      set event_meta \"{\\\"stage\\\":\\\"context\\\",\\\"hidden\\\":true,\\\"retrieval_qid\\\":$retrieval_qid}\"\n"
+"    } else {\n"
+"      set event_meta \"{\\\"stage\\\":\\\"context\\\",\\\"hidden\\\":true}\"\n"
+"    }\n"
 "    agent_save_event $sid $user \"context\" $provider $model $event_meta $context\n"
 "    set full_prompt \"Context:\\n$context\\n\\nUser request:\\n$msg\"\n"
 "  }\n"
@@ -2605,7 +4492,11 @@ static const char zAgentOrchestrateBuiltin[] =
 "agent_save_event $sid $user \"progress\" $provider $model $event_meta $event_msg\n"
 "\n"
 "if {[string compare $context \"\"] != 0} {\n"
-"  set prompt_meta \"{\\\"context\\\":true}\"\n"
+"  if {$retrieval_qid > 0} {\n"
+"    set prompt_meta \"{\\\"context\\\":true,\\\"retrieval_qid\\\":$retrieval_qid}\"\n"
+"  } else {\n"
+"    set prompt_meta \"{\\\"context\\\":true}\"\n"
+"  }\n"
 "} else {\n"
 "  set prompt_meta \"{\\\"context\\\":false}\"\n"
 "}\n"
@@ -2739,15 +4630,38 @@ static int agent_context_th1(
   int *argl
 ){
   Blob out = BLOB_INITIALIZER;
+  int qid = 0;
   if( argc!=2 && argc!=3 ){
     return Th_WrongNumArgs(interp, "agent_context MESSAGE ?MODEL?");
   }
-  if( agent_assemble_context(&out, argc==3 ? argv[2] : 0, argv[1]) ){
+  agentLastRetrievalQid = 0;
+  if( agent_assemble_context(&out, argc==3 ? argv[2] : 0, argv[1], &qid) ){
+    agentLastRetrievalQid = qid;
     Th_SetResult(interp, blob_str(&out), blob_size(&out));
   }else{
     Th_SetResult(interp, "", 0);
   }
   blob_reset(&out);
+  return TH_OK;
+}
+
+/*
+** TH1 command: agent_last_retrieval_qid
+**
+** Returns the most recent retrieval qid assembled by agent_context in the
+** current interpreter flow, or 0 if none was recorded.
+*/
+static int agent_last_retrieval_qid_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  if( argc!=1 ){
+    return Th_WrongNumArgs(interp, "agent_last_retrieval_qid");
+  }
+  Th_SetResultInt(interp, agentLastRetrievalQid);
   return TH_OK;
 }
 
@@ -3039,6 +4953,7 @@ void agent_register_th1(Th_Interp *interp){
     Th_CommandProc xProc;
   } aCmd[] = {
     {"agent_context",    agent_context_th1},
+    {"agent_last_retrieval_qid", agent_last_retrieval_qid_th1},
     {"agent_run",        agent_run_th1},
     {"agent_save",       agent_save_th1},
     {"agent_save_event", agent_save_event_th1},
