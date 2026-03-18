@@ -661,18 +661,10 @@ const char *get_default_header(){
 */
 static const char zDfltMainMenu[] =
 @ Home      /home        *              {}
-@ Timeline  /timeline    {o r j}        {}
-@ Files     /dir?ci=tip  oh             desktoponly
-@ Branches  /brlist      o              wideonly
-@ Tags      /taglist     o              wideonly
-@ Forum     /forum       {@2 3 4 5 6}   wideonly
-@ Chat      /chat        C              wideonly
+@ Software  /software    {o r j}        wideonly
+@ Knowledge /knowledge   r              wideonly
 @ Agent     /agentui     r              wideonly
-@ Tickets   /ticket      r              wideonly
-@ Wiki      /wiki        j              wideonly
-@ Admin     /setup       {a s}          desktoponly
-@ Logout    /logout      L              wideonly
-@ Login     /login       !L             wideonly
+@ System    /system      {}             wideonly
 ;
 
 /*

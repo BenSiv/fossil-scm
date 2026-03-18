@@ -1658,6 +1658,316 @@ static void agent_chat_render_history(int sidCurrent){
 }
 
 /*
+** Add common submenu entries for the software management surfaces.
+*/
+static void agent_software_submenu(void){
+  style_submenu_element("Overview", "%R/software");
+  style_submenu_element("Timeline", "%R/timeline");
+  style_submenu_element("Files", "%R/dir?ci=tip");
+  style_submenu_element("Branches", "%R/brlist");
+  style_submenu_element("Tags", "%R/taglist");
+  style_submenu_element("Forum", "%R/forum");
+  style_submenu_element("Chat", "%R/chat");
+}
+
+/*
+** Add common submenu entries for the knowledge/data management surfaces.
+*/
+static void agent_knowledge_submenu(void){
+  style_submenu_element("Overview", "%R/knowledge");
+  style_submenu_element("Tickets", "%R/ticket");
+  style_submenu_element("Wiki", "%R/wiki");
+  style_submenu_element("Runs", "%R/knowledge#recent-runs");
+}
+
+/*
+** Add common submenu entries for the interactive agent surfaces.
+*/
+static void agent_console_submenu(int sidCurrent){
+  style_submenu_element("Agent", "%R/agentui");
+  if( sidCurrent>0 ){
+    style_submenu_element("Session", "%R/agentui?sid=%d", sidCurrent);
+  }
+  style_submenu_element("Knowledge", "%R/knowledge");
+  style_submenu_element("Software", "%R/software");
+  style_submenu_element("System", "%R/system");
+}
+
+/*
+** Add common submenu entries for the repository/system control surfaces.
+*/
+static void agent_system_submenu(void){
+  style_submenu_element("Overview", "%R/system");
+  style_submenu_element("Admin", "%R/setup");
+  if( login_is_individual() ){
+    style_submenu_element("Logout", "%R/logout");
+  }else{
+    style_submenu_element("Login", "%R/login");
+  }
+}
+
+/*
+** Render a compact HTML summary of the note pool by processing tier.
+*/
+static void agent_render_pool_html(void){
+  int tier;
+  for(tier=3; tier>=0; tier--){
+    Stmt q;
+    char *zProcess;
+    int nNote;
+    const char *zLabel =
+      tier==3 ? "Tier 3: Atomic Records" :
+      tier==2 ? "Tier 2: Curated Drafts" :
+      tier==1 ? "Tier 1: Working Set" : "Tier 0: Raw Intake";
+    zProcess = db_text("unknown",
+      "SELECT coalesce(max(process_level),'unknown') FROM ai_note WHERE tier=%d",
+      tier
+    );
+    nNote = db_int(0, "SELECT count(*) FROM ai_note WHERE tier=%d", tier);
+    @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);">
+    @ <div><b>%s(zLabel)</b></div>
+    @ <div class="dimmed" style="margin:0.2em 0 0.5em 0;">%d(nNote) notes, process level %h(zProcess)</div>
+    db_prepare(&q,
+      "SELECT nid, coalesce(nullif(title,''), printf('note #%%d',nid)),"
+      "       retrieval_count, coalesce(duplicate_of,0), coalesce(merged_into,0)"
+      "  FROM ai_note"
+      " WHERE tier=%d"
+      " ORDER BY updated_at DESC, nid DESC"
+      " LIMIT 4",
+      tier
+    );
+    if( db_step(&q)==SQLITE_ROW ){
+      do{
+        int nid = db_column_int(&q, 0);
+        const char *zTitle = db_column_text(&q, 1);
+        int nRetrieve = db_column_int(&q, 2);
+        int duplicateOf = db_column_int(&q, 3);
+        int mergedInto = db_column_int(&q, 4);
+        @ <div style="margin:0.2em 0 0.2em 0.5em;">
+        @ %h(zTitle)
+        @ <span class="dimmed">[#%d(nid), retrievals=%d(nRetrieve)</span>
+        if( duplicateOf>0 ){
+          @ <span class="dimmed">, duplicate_of=%d(duplicateOf)</span>
+        }
+        if( mergedInto>0 ){
+          @ <span class="dimmed">, merged_into=%d(mergedInto)</span>
+        }
+        @ <span class="dimmed">]</span>
+        @ </div>
+      }while( db_step(&q)==SQLITE_ROW );
+    }else{
+      @ <div class="dimmed">No records in this tier yet.</div>
+    }
+    db_finalize(&q);
+    fossil_free(zProcess);
+    @ </div>
+  }
+}
+
+/*
+** Render recent persisted runs for the knowledge landing page.
+*/
+static void agent_render_recent_runs_html(int nLimit){
+  Stmt q;
+  if( nLimit<=0 ) nLimit = 5;
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);">
+  @ <div style="font-weight:bold;margin-bottom:0.4em;">Recent Runs</div>
+  if( !db_table_exists("repository","agentrun") ){
+    @ <div class="dimmed">No persisted run ledger yet.</div>
+    @ </div>
+    return;
+  }
+  db_prepare(&q,
+    "SELECT runid, kind, name, status, coalesce(summary,''), mtime"
+    "  FROM agentrun"
+    " ORDER BY runid DESC"
+    " LIMIT %d",
+    nLimit
+  );
+  if( db_step(&q)==SQLITE_ROW ){
+    do{
+      @ <div style="margin:0.35em 0;">
+      @ <b>#%d(db_column_int(&q,0))</b> %h(db_column_text(&q,1))
+      @ <span class="dimmed">[%h(db_column_text(&q,2)) | %h(db_column_text(&q,3))]</span><br>
+      @ <span class="dimmed">%h(db_column_text(&q,4))</span>
+      @ </div>
+    }while( db_step(&q)==SQLITE_ROW );
+  }else{
+    @ <div class="dimmed">No saved runs yet.</div>
+  }
+  db_finalize(&q);
+  @ </div>
+}
+
+/*
+** Render recent retrievals for the knowledge landing page.
+*/
+static void agent_render_recent_retrievals_html(int nLimit){
+  Stmt q;
+  if( nLimit<=0 ) nLimit = 5;
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);">
+  @ <div style="font-weight:bold;margin-bottom:0.4em;">Recent Retrievals</div>
+  if( !db_table_exists("repository","ai_retrieval") ){
+    @ <div class="dimmed">No retrieval history yet.</div>
+    @ </div>
+    return;
+  }
+  db_prepare(&q,
+    "SELECT qid, query_text, created_at,"
+    "       (SELECT count(*) FROM ai_retrieval_note rn WHERE rn.qid=r.qid)"
+    "  FROM ai_retrieval r"
+    " ORDER BY qid DESC"
+    " LIMIT %d",
+    nLimit
+  );
+  if( db_step(&q)==SQLITE_ROW ){
+    do{
+      @ <div style="margin:0.35em 0;">
+      @ <b>#%d(db_column_int(&q,0))</b> %h(db_column_text(&q,1))
+      @ <span class="dimmed">[%h(db_column_text(&q,2)), %d(db_column_int(&q,3)) notes]</span>
+      @ </div>
+    }while( db_step(&q)==SQLITE_ROW );
+  }else{
+    @ <div class="dimmed">No retrievals yet.</div>
+  }
+  db_finalize(&q);
+  @ </div>
+}
+
+/*
+** WEBPAGE: software
+**
+** High-level landing page for SCM and collaboration interfaces.
+*/
+void software_page(void){
+  login_check_credentials();
+  if( !g.perm.Read ){
+    login_needed(g.anon.Read);
+    return;
+  }
+  style_set_current_feature("software");
+  agent_software_submenu();
+  style_header("Software Management");
+  @ <div class="fossil-doc" data-title="Software Management">
+  @ <p>This path groups the repository's software management interfaces:
+  @ history, source browsing, branch and tag navigation, discussion, and
+  @ project collaboration workflows.</p>
+  @ <div style="display:grid;grid-template-columns:repeat(3,minmax(16em,1fr));gap:0.8em;">
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);"><b><a href="%R/timeline">Timeline</a></b><br><span class="dimmed">repository history and check-in flow</span></div>
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);"><b><a href="%R/dir?ci=tip">Files</a></b><br><span class="dimmed">browse current source tree state</span></div>
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);"><b><a href="%R/brlist">Branches</a></b><br><span class="dimmed">active and historical branch structure</span></div>
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);"><b><a href="%R/taglist">Tags</a></b><br><span class="dimmed">release and metadata tag navigation</span></div>
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);"><b><a href="%R/forum">Forum</a></b><br><span class="dimmed">human discussion and coordination</span></div>
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);"><b><a href="%R/chat">Chat</a></b><br><span class="dimmed">project chat and lightweight coordination</span></div>
+  @ </div>
+  style_finish_page();
+}
+
+/*
+** WEBPAGE: system
+**
+** High-level landing page for repository administration and session control.
+*/
+void system_page(void){
+  login_check_credentials();
+  style_set_current_feature("system");
+  agent_system_submenu();
+  style_header("System Control");
+  @ <div class="fossil-doc" data-title="System Control">
+  @ <p>This path groups repository administration and authentication controls
+  @ under one top-level tab.</p>
+  @ <div style="display:grid;grid-template-columns:repeat(3,minmax(16em,1fr));gap:0.8em;">
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);">
+  @ <b><a href="%R/setup">Admin</a></b><br>
+  @ <span class="dimmed">repository setup, policy, users, and skin configuration</span>
+  @ </div>
+  if( login_is_individual() ){
+    @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);">
+    @ <b><a href="%R/logout">Logout</a></b><br>
+    @ <span class="dimmed">end the current authenticated session</span>
+    @ </div>
+  }else{
+    @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);">
+    @ <b><a href="%R/login">Login</a></b><br>
+    @ <span class="dimmed">authenticate and enter the control surface</span>
+    @ </div>
+  }
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);">
+  @ <b><a href="%R/software">Software</a></b><br>
+  @ <span class="dimmed">return to source and collaboration interfaces</span>
+  @ </div>
+  @ </div>
+  @ </div>
+  style_finish_page();
+}
+
+/*
+** WEBPAGE: knowledge
+**
+** High-level landing page for the repository knowledge processing system.
+*/
+void knowledge_page(void){
+  int totalNotes;
+  int totalRetrievals;
+  int totalRuns;
+  int totalSessions;
+
+  login_check_credentials();
+  if( !g.perm.Read ){
+    login_needed(g.anon.Read);
+    return;
+  }
+  style_set_current_feature("knowledge");
+  agent_knowledge_submenu();
+  style_header("Knowledge System");
+  totalNotes = db_table_exists("repository","ai_note")
+             ? db_int(0, "SELECT count(*) FROM ai_note") : 0;
+  totalRetrievals = db_table_exists("repository","ai_retrieval")
+                  ? db_int(0, "SELECT count(*) FROM ai_retrieval") : 0;
+  totalRuns = db_table_exists("repository","agentrun")
+            ? db_int(0, "SELECT count(*) FROM agentrun") : 0;
+  totalSessions = db_table_exists("repository","agentchat_session")
+               ? db_int(0, "SELECT count(*) FROM agentchat_session") : 0;
+  @ <div class="fossil-doc" data-title="Knowledge System">
+  @ <p>This is the repository knowledge system. Inputs from chat, tickets, wiki,
+  @ and other records stay in the pool, move through processing tiers, and are
+  @ evaluated through retrieval and review instead of being treated as separate
+  @ primary silos.</p>
+  @ <div style="display:grid;grid-template-columns:repeat(4,minmax(10em,1fr));gap:0.8em;margin:0 0 1em 0;">
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);"><b>%d(totalNotes)</b><br><span class="dimmed">pool records</span></div>
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);"><b>%d(totalRetrievals)</b><br><span class="dimmed">retrieval runs</span></div>
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);"><b>%d(totalRuns)</b><br><span class="dimmed">saved orchestration runs</span></div>
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);"><b>%d(totalSessions)</b><br><span class="dimmed">interactive sessions</span></div>
+  @ </div>
+  @ <div style="display:grid;grid-template-columns:2fr 1fr;gap:1em;">
+  @ <div>
+  @ <div style="font-weight:bold;margin-bottom:0.5em;">Processing Tiers</div>
+  @ <div style="display:grid;grid-template-columns:repeat(2,minmax(16em,1fr));gap:0.8em;">
+  agent_render_pool_html();
+  @ </div>
+  @ </div>
+  @ <div>
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);margin-bottom:1em;">
+  @ <div style="font-weight:bold;margin-bottom:0.4em;">Data Management Interfaces</div>
+  @ <div><a href="%R/ticket">Tickets</a> <span class="dimmed">structured issue and source records entering the pool</span></div>
+  @ <div><a href="%R/wiki">Wiki</a> <span class="dimmed">curated narrative and knowledge pages</span></div>
+  @ <div><a href="%R/agent-pool">Pool JSON</a> <span class="dimmed">machine-readable tier summary</span></div>
+  @ </div>
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);margin-bottom:1em;">
+  @ <div style="font-weight:bold;margin-bottom:0.4em;">Adjacent Paths</div>
+  @ <div><a href="%R/software">Software Management</a> <span class="dimmed">SCM and collaboration surfaces</span></div>
+  @ <div><a href="%R/agentui">Agent Console</a> <span class="dimmed">interactive retrieval and processing path</span></div>
+  @ </div>
+  agent_render_recent_retrievals_html(6);
+  @ <div id="recent-runs" style="height:1em;"></div>
+  agent_render_recent_runs_html(6);
+  @ </div>
+  @ </div>
+  @ </div>
+  style_finish_page();
+}
+
+/*
 ** Emit a JSON object describing a chat session and its stored messages.
 */
 static void agent_emit_history_json(int sidCurrent){
@@ -3720,7 +4030,7 @@ void agent_cmd(void){
 /*
 ** WEBPAGE: agentui
 **
-** Minimal manager-facing chat UI for local agent testing.
+** Knowledge console for interactive orchestration and retrieval tracing.
 */
 void agentui_page(void){
   const char *zModel;
@@ -3754,12 +4064,12 @@ void agentui_page(void){
   zConfigSource = agent_config_source();
   chatProviderLocked = agent_chat_provider_locked();
   style_set_current_feature("agent");
-  style_header("Agent Pool");
-  @ <div class="fossil-doc" data-title="Agent Pool">
-  @ <p>This page shows the repository knowledge pool as a processing system.
-  @ Raw notes stay in the pool, each retrieval run is observable, and duplicate
-  @ cleanup happens through the processing loop instead of by deleting source
-  @ material.</p>
+  agent_console_submenu(sidCurrent);
+  style_header("Agent Console");
+  @ <div class="fossil-doc" data-title="Agent Console">
+  @ <p>This is the interactive AI retrieval and processing path. Use it to run
+  @ chat-driven orchestration, inspect retrieval influence, and work against
+  @ the repository knowledge pool in real time.</p>
   @ <div style="border:1px solid #888;padding:0.6em;margin:0 0 1em 0;background:rgba(127,127,127,0.05);">
   @ <b>Effective config</b><br>
   @ source: <span id="agent-config-source">%h(zConfigSource)</span><br>

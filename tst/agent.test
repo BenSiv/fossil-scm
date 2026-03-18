@@ -194,6 +194,7 @@ set response [agent_http_request $repository GET /agentui {}]
 set RESULT $response
 set CODE 0
 test agent-ui-1 {[agent_http_status $RESULT] eq {200}}
+test agent-ui-1a {[string first {Agent} $RESULT]>=0 && [string first {/agentui} $RESULT]>=0}
 test agent-ui-2 {[string first {id="agent-config-source"} $RESULT]>=0 && [string first [subst {repo agent-config-path: [file join $cfgDir agent.json]}] $RESULT]>=0}
 test agent-ui-3 {[string first {id="agent-config-chat-provider"} $RESULT]>=0 && [string first {>codex<} $RESULT]>=0}
 test agent-ui-4 {[string first {id="agent-config-chat-model"} $RESULT]>=0 && [string first {>test-chat-model<} $RESULT]>=0}
@@ -222,6 +223,29 @@ test agent-ui-26 {[string first {id="agent-retrieval-history"} $RESULT]>=0}
 test agent-ui-27 {[string first {fetch('agent-pool')} $RESULT]>=0}
 test agent-ui-28 {[string first {fetch('agent-retrieval?qid='+encodeURIComponent(qid))} $RESULT]>=0}
 test agent-ui-29 {[string first {data-retrieval-qid=} $RESULT]>=0}
+
+###############################################################################
+
+set response [agent_http_request $repository GET /software {}]
+set RESULT $response
+set CODE 0
+test software-ui-1 {[agent_http_status $RESULT] eq {200}}
+test software-ui-2 {[string first {Software Management} $RESULT]>=0}
+test software-ui-3 {[string first {/timeline} $RESULT]>=0 && [string first {/dir?ci=tip} $RESULT]>=0}
+test software-ui-4 {[string first {/brlist} $RESULT]>=0 && [string first {/taglist} $RESULT]>=0}
+test software-ui-5 {[string first {/forum} $RESULT]>=0 && [string first {/chat} $RESULT]>=0}
+
+###############################################################################
+
+set response [agent_http_request $repository GET /knowledge {}]
+set RESULT $response
+set CODE 0
+test knowledge-ui-1 {[agent_http_status $RESULT] eq {200}}
+test knowledge-ui-2 {[string first {Knowledge System} $RESULT]>=0}
+test knowledge-ui-3 {[string first {Processing Tiers} $RESULT]>=0}
+test knowledge-ui-4 {[string first {Agent Console} $RESULT]>=0 && [string first {/agentui} $RESULT]>=0}
+test knowledge-ui-5 {[string first {/ticket} $RESULT]>=0 && [string first {/wiki} $RESULT]>=0}
+test knowledge-ui-6 {[string first {Tier 0: Raw Intake} $RESULT]>=0 || [string first {Tier 1: Working Set} $RESULT]>=0}
 
 ###############################################################################
 
