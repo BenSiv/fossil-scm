@@ -247,6 +247,16 @@ test knowledge-ui-4 {[string first {Agent Console} $RESULT]>=0 && [string first 
 test knowledge-ui-5 {[string first {/ticket} $RESULT]>=0 && [string first {/wiki} $RESULT]>=0}
 test knowledge-ui-6 {[string first {Tier 0: Raw Intake} $RESULT]>=0 || [string first {Tier 1: Working Set} $RESULT]>=0}
 
+set emptyRepo [file normalize [file join [pwd] knowledge-empty.fossil]]
+catch {file delete $emptyRepo}
+fossil new $emptyRepo
+set response [agent_http_request $emptyRepo GET /knowledge {}]
+set RESULT $response
+set CODE 0
+test knowledge-ui-empty-1 {[agent_http_status $RESULT] eq {200}}
+test knowledge-ui-empty-2 {[string first {Knowledge System} $RESULT]>=0}
+test knowledge-ui-empty-3 {[string first {AI pool tables are not initialized for this repository yet.} $RESULT]>=0}
+
 ###############################################################################
 
 set response [agent_http_request $repository GET /agent-config {}]

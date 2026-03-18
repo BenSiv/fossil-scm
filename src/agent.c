@@ -1690,7 +1690,7 @@ static void agent_console_submenu(int sidCurrent){
   }
   style_submenu_element("Knowledge", "%R/knowledge");
   style_submenu_element("Software", "%R/software");
-  style_submenu_element("System", "%R/system");
+  style_submenu_element("Admin", "%R/system");
 }
 
 /*
@@ -1711,6 +1711,12 @@ static void agent_system_submenu(void){
 */
 static void agent_render_pool_html(void){
   int tier;
+  if( !db_table_exists("repository","ai_note") ){
+    @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);">
+    @ <div class="dimmed">AI pool tables are not initialized for this repository yet.</div>
+    @ </div>
+    return;
+  }
   for(tier=3; tier>=0; tier--){
     Stmt q;
     char *zProcess;
@@ -1872,8 +1878,8 @@ void system_page(void){
   login_check_credentials();
   style_set_current_feature("system");
   agent_system_submenu();
-  style_header("System Control");
-  @ <div class="fossil-doc" data-title="System Control">
+  style_header("Admin Control");
+  @ <div class="fossil-doc" data-title="Admin Control">
   @ <p>This path groups repository administration and authentication controls
   @ under one top-level tab.</p>
   @ <div style="display:grid;grid-template-columns:repeat(3,minmax(16em,1fr));gap:0.8em;">

@@ -1,1 +1,11 @@
+.git
+.fslckout
+.fslckout-*
+_FOSSIL_
+.fossil-repo
+manifest
+manifest.uuid
+bin
+out
+log
 dep/vendor
