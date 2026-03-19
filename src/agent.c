@@ -1431,7 +1431,7 @@ static const AgentRecipe aAgentRecipeBuiltin[] = {
     "Summarize Repository Context",
     "Assemble repository context and ask the configured backend for a concise summary.",
     "fossil agent recipe run summarize-context ?QUERY? [--json]",
-    "knowledge/guidance/summarize-context.md",
+    "doc/ai/guidance/summarize-context.md",
     "explore",
     "agent_context,agent_run",
     "set q $query\n"
@@ -1452,7 +1452,7 @@ static const AgentRecipe aAgentRecipeBuiltin[] = {
     "Review Pending Changes",
     "Assemble repository context and pending changes, then ask the backend for a review focused on risks and test gaps.",
     "fossil agent recipe run review-change [--json]",
-    "knowledge/guidance/review-change.md",
+    "doc/ai/guidance/review-change.md",
     "explore,verify",
     "agent_context,agent_run",
     "set context [agent_context \"pending changes review\" $model]\n"

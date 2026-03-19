@@ -234,7 +234,7 @@ Expected outcome:
 
 Define a conventional location for durable AI guidance artifacts, for example:
 
-- `knowledge/guidance/`
+- `doc/ai/guidance/`
 - `knowledge/recipes/`
 - `knowledge/evals/`
 

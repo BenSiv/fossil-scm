@@ -164,10 +164,11 @@ write_file [file join $userCfgDir ai-agent.json] [subst -nocommands {
 
 fossil ai init
 
-file mkdir knowledge
-file mkdir [file join knowledge guidance]
-write_file [file join knowledge guidance summarize-context.md] "Anchor the summary in repository-specific facts instead of generic SCM advice.\n"
-write_file [file join knowledge guidance review-change.md] "Review pending changes with a code-review mindset.\n"
+file mkdir doc
+file mkdir [file join doc ai]
+file mkdir [file join doc ai guidance]
+write_file [file join doc ai guidance summarize-context.md] "Anchor the summary in repository-specific facts instead of generic SCM advice.\n"
+write_file [file join doc ai guidance review-change.md] "Review pending changes with a code-review mindset.\n"
 
 write_file agent-note.txt "Embeddings let retrieval find this note.\n"
 fossil agent --agent-config [file join $cfgDir agent.json] note agent-note.txt --title "Embeddings Note"
@@ -250,7 +251,7 @@ fossil agent recipe show summarize-context
 test agent-recipe-3 {[string first "name: summarize-context" [normalize_result]]>=0}
 test agent-recipe-4 {[string first "phases: explore" [normalize_result]]>=0}
 test agent-recipe-5 {[string first "capabilities: agent_context,agent_run" [normalize_result]]>=0}
-test agent-recipe-5a {[string first "guidance-refs: knowledge/guidance/summarize-context.md" [normalize_result]]>=0}
+test agent-recipe-5a {[string first "guidance-refs: doc/ai/guidance/summarize-context.md" [normalize_result]]>=0}
 test agent-recipe-5b {[string first "guidance-ref-count: 1" [normalize_result]]>=0}
 
 fossil agent --agent-config [file join $cfgDir agent.json] recipe run summarize-context retrieval --json
@@ -265,7 +266,7 @@ test agent-recipe-12 {[string first "\"executive_summary\":\"Recipe completed su
 test agent-recipe-13 {[string first {"artifacts":[]} [normalize_result]]>=0 && [string first {"risks":[]} [normalize_result]]>=0}
 test agent-recipe-14 {[string first "\"capabilities\"" [normalize_result]]>=0}
 test agent-recipe-14a {[string first "\"guidance_ref_count\":1" [normalize_result]]>=0}
-test agent-recipe-14b {[string first "knowledge/guidance/summarize-context.md" [normalize_result]]>=0}
+test agent-recipe-14b {[string first "doc/ai/guidance/summarize-context.md" [normalize_result]]>=0}
 
 ###############################################################################
 
@@ -643,7 +644,7 @@ test agent-run-8 {[string first "\"verify\"" [normalize_result]]>=0 && [string f
 fossil agent recipe run summarize-context retrieval --json --save
 test agent-run-9 {[string first "\"saved_run_id\":" [normalize_result]]>=0}
 test agent-run-10 {[string first "\"recipe_run\"" [normalize_result]]>=0 && [string first "\"recipe\":\"summarize-context\"" [normalize_result]]>=0}
-test agent-run-10a {[string first "knowledge/guidance/summarize-context.md" [normalize_result]]>=0}
+test agent-run-10a {[string first "doc/ai/guidance/summarize-context.md" [normalize_result]]>=0}
 
 fossil agent run-log --limit 3
 test agent-run-11 {[string first {|recipe|summarize-context|ok|Recipe completed successfully.} [normalize_result]]>=0}
@@ -662,7 +663,7 @@ set response [agent_http_request $repository GET [subst "/knowledge-run?runid=$l
 set body [agent_http_body $response]
 test agent-runs-ui-4 {[agent_http_status $response] eq {200}}
 test agent-runs-ui-5 {[string first [subst {Run #$latestRecipeRun}] $body]>=0 && [string first {Payload} $body]>=0}
-test agent-runs-ui-6 {[string first {knowledge/guidance/summarize-context.md} $body]>=0 && [string first {test-chat-model} $body]>=0}
+test agent-runs-ui-6 {[string first {doc/ai/guidance/summarize-context.md} $body]>=0 && [string first {test-chat-model} $body]>=0}
 
 ###############################################################################
 

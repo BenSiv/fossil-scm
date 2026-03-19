@@ -455,7 +455,7 @@ Suggested sources:
 - versioned guidance file such as `.fossil-agent.md`
 - wiki-backed guidance page
 - repo-local recipe files
-- guidance artifacts under `knowledge/guidance/` or similar
+- guidance artifacts under `doc/ai/guidance/` or similar
 - built-in safety policy
 
 Precedence should be explicit:
