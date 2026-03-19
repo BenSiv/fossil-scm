@@ -1,7 +1,7 @@
 {
-  "provider": "codex",
+  "provider": "claude",
   "model": "auto",
-  "command": "./dev/agents/fossil-codex-agent.sh",
+  "command": "./dev/agents/fossil-claude-agent.sh",
   "embedding_provider": "ollama",
   "embedding_model": "mxbai-embed-large",
   "embedding_command": ""

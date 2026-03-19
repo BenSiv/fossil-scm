@@ -81,6 +81,65 @@ set userCfgDir [file join $userCfgRoot fossil]
 file mkdir $cfgDir
 file mkdir $userCfgDir
 
+write_file [file join $cfgDir ai-agent.json] [subst -nocommands {
+{
+  "provider": "ollama",
+  "model": "test-base-model",
+  "command": "$backend",
+  "embedding_provider": "ollama",
+  "embedding_model": "test-base-embed-model",
+  "embedding_command": "$backend",
+  "chat_provider_locked": 1,
+  "providers": [
+    {
+      "name": "claude",
+      "command": "./dev/agents/fossil-claude-agent.sh",
+      "accepts_auto": 1,
+      "rejects_ollama_models": 1,
+      "supports_streaming": 0,
+      "supports_model_discovery": 0,
+      "model_suggestions": ["auto", "sonnet", "opus"]
+    },
+    {
+      "name": "codex",
+      "command": "$backend",
+      "accepts_auto": 1,
+      "rejects_ollama_models": 1,
+      "supports_streaming": 0,
+      "supports_model_discovery": 0,
+      "model_suggestions": ["auto"]
+    },
+    {
+      "name": "gemini",
+      "command": "./dev/agents/fossil-gemini-agent.sh",
+      "accepts_auto": 1,
+      "rejects_ollama_models": 1,
+      "supports_streaming": 0,
+      "supports_model_discovery": 0,
+      "model_suggestions": ["auto", "gemini-2.5-pro", "gemini-2.5-flash"]
+    },
+    {
+      "name": "ollama",
+      "command": "$backend",
+      "accepts_auto": 0,
+      "rejects_ollama_models": 0,
+      "supports_streaming": 0,
+      "supports_model_discovery": 0,
+      "builtin_embedding_fallback": "curl",
+      "model_suggestions": ["qwen3.5:0.8b", "llama3.2", "gemma3"]
+    },
+    {
+      "name": "custom",
+      "accepts_auto": 0,
+      "rejects_ollama_models": 0,
+      "supports_streaming": 0,
+      "supports_model_discovery": 0,
+      "model_suggestions": []
+    }
+  ]
+}
+}]
+
 write_file [file join $cfgDir agent.json] [subst -nocommands {
 {
   "provider": "codex",
@@ -323,7 +382,7 @@ test agent-config-8 {[string first {"chat_supports_model_discovery":0} $RESULT]>
 test agent-config-9 {[string first {"embedding_available":1} $RESULT]>=0}
 test agent-config-10 {[string first {"chat_provider_known":1} $RESULT]>=0}
 test agent-config-11 {[string first {"embedding_provider_known":1} $RESULT]>=0}
-test agent-config-12 {[string first {"chat_provider_choices":["codex","ollama","custom"]} $RESULT]>=0}
+test agent-config-12 {[string first {"chat_provider_choices":["claude","codex","gemini","ollama","custom"]} $RESULT]>=0}
 test agent-config-13 {[string first {"chat_model_suggestions":["auto"]} $RESULT]>=0}
 test agent-config-14 {[string first {"phase_count":10} $RESULT]>=0}
 test agent-config-15 {[string first "\"phases\"" $RESULT]>=0 && [string first "\"name\":\"explore\"" $RESULT]>=0}

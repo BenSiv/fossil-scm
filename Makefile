@@ -128,9 +128,9 @@ Makefile: ./bld/Makefile.in $(SRCDIR)/main.mk /home/bensiv/fossil-scm/dep/vendor
 	touch /home/bensiv/fossil-scm/Makefile
 
 # Container stuff
-SRCTB := src-6ea30fb3cd36.tar.gz
-IMGVER := fossil:6ea30fb3cd36
-CNTVER := fossil-6ea30fb3cd36
+SRCTB := src-17f98784c2d6.tar.gz
+IMGVER := fossil:17f98784c2d6
+CNTVER := fossil-17f98784c2d6
 CENGINE := docker
 container:
 	$(CENGINE) image inspect $(IMGVER) > /dev/null 2>&1 || \
@@ -156,7 +156,7 @@ container-clean:
 	-$(CENGINE) image     rm   $(IMGVER)
 
 container-image:
-	$(APPNAME) tarball --name src 6ea30fb3cd36 $(SRCTB)
+	$(APPNAME) tarball --name src 17f98784c2d6 $(SRCTB)
 	$(CENGINE) buildx build \
 		--load \
 		--tag $(IMGVER) \

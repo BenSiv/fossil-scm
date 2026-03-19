@@ -611,21 +611,31 @@ install:	all
 		fsl_cfg_root="$${XDG_CONFIG_HOME:-$$fsl_user_home/.config}/fossil"; \
 		fsl_agent_dir="$$fsl_cfg_root/agents"; \
 		mkdir -p "$$fsl_agent_dir"; \
+		cp $(TOPDIR)/dev/agents/fossil-claude-agent.sh "$$fsl_agent_dir/"; \
 		cp $(TOPDIR)/dev/agents/fossil-codex-agent.sh "$$fsl_agent_dir/"; \
+		cp $(TOPDIR)/dev/agents/fossil-gemini-agent.sh "$$fsl_agent_dir/"; \
 		cp $(TOPDIR)/dev/agents/fossil-ollama-agent.sh "$$fsl_agent_dir/"; \
-		chmod 755 "$$fsl_agent_dir"/fossil-codex-agent.sh "$$fsl_agent_dir"/fossil-ollama-agent.sh; \
+		chmod 755 "$$fsl_agent_dir"/fossil-claude-agent.sh "$$fsl_agent_dir"/fossil-codex-agent.sh "$$fsl_agent_dir"/fossil-gemini-agent.sh "$$fsl_agent_dir"/fossil-ollama-agent.sh; \
 		sed "s#\\.\\/dev\\/agents#$$fsl_agent_dir#g" $(TOPDIR)/cfg/ai-agent.json \
 		  > "$$fsl_cfg_root/ai-agent.json"; \
 		sed "s#\\.\\/dev\\/agents#$$fsl_agent_dir#g" $(TOPDIR)/cfg/ai-agent.json \
 		  > "$$fsl_agent_dir/ai-agent.json"; \
+		sed "s#\\.\\/dev\\/agents#$$fsl_agent_dir#g" $(TOPDIR)/cfg/ai-agent-claude.json \
+		  > "$$fsl_agent_dir/ai-agent-claude.json"; \
 		sed "s#\\.\\/dev\\/agents#$$fsl_agent_dir#g" $(TOPDIR)/cfg/ai-agent-codex.json \
 		  > "$$fsl_agent_dir/ai-agent-codex.json"; \
+		sed "s#\\.\\/dev\\/agents#$$fsl_agent_dir#g" $(TOPDIR)/cfg/ai-agent-gemini.json \
+		  > "$$fsl_agent_dir/ai-agent-gemini.json"; \
 		if test -n "$$fsl_user_name"; then \
 			chown "$$fsl_user_name" "$$fsl_cfg_root/ai-agent.json" \
+			  "$$fsl_agent_dir/fossil-claude-agent.sh" \
 			  "$$fsl_agent_dir/fossil-codex-agent.sh" \
+			  "$$fsl_agent_dir/fossil-gemini-agent.sh" \
 			  "$$fsl_agent_dir/fossil-ollama-agent.sh" \
+			  "$$fsl_agent_dir/ai-agent-claude.json" \
 			  "$$fsl_agent_dir/ai-agent.json" \
-			  "$$fsl_agent_dir/ai-agent-codex.json"; \
+			  "$$fsl_agent_dir/ai-agent-codex.json" \
+			  "$$fsl_agent_dir/ai-agent-gemini.json"; \
 		fi; \
 	fi
 

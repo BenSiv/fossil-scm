@@ -70,6 +70,26 @@ static const char *agent_chat_session_model(int sid, const char *zDefault);
 static const char *agent_chat_session_provider(int sid, const char *zDefault);
 static const char *agent_command_template(void);
 static const char *agent_embedding_template(void);
+static char *agent_command_executable(const char *zCmdTmpl);
+#ifdef FOSSIL_ENABLE_JSON
+static cson_object *agent_config_parse_object(cson_value **ppRoot, Blob *pJson);
+static cson_object *agent_config_parse_object_path(
+  const char *zPath,
+  cson_value **ppRoot,
+  Blob *pJson
+);
+static const char *agent_json_cstr(cson_object *pObj, const char *zKey);
+static cson_array *agent_provider_array(cson_object *pRootObj);
+static cson_object *agent_metadata_parse_object(
+  cson_value **ppRoot,
+  Blob *pJson
+);
+static int agent_provider_match_command(
+  cson_object *pProvider,
+  const char *zCmd,
+  const char *zCmdExec
+);
+#endif
 static int agent_validate_provider_model(
   const char *zProvider,
   const char *zModel,
@@ -284,19 +304,37 @@ static char *agent_config_source(void){
 #endif
 
 static const char *agent_infer_provider(const char *zCmd){
+#ifdef FOSSIL_ENABLE_JSON
+  cson_value *pRoot = 0;
+  Blob json = BLOB_INITIALIZER;
+  cson_object *pRootObj = 0;
+  cson_array *pProviders = 0;
+  char *zCmdExec = 0;
+  unsigned int i, n = 0;
+  static char *zCached = 0;
+#endif
   if( zCmd==0 || zCmd[0]==0 ) return "unset";
-  if( strstr(zCmd, "fossil-codex-agent.sh")!=0
-   || strstr(zCmd, " codex")!=0
-   || fossil_strncmp(zCmd, "codex", 5)==0
-  ){
-    return "codex";
+#ifdef FOSSIL_ENABLE_JSON
+  pRootObj = agent_metadata_parse_object(&pRoot, &json);
+  pProviders = agent_provider_array(pRootObj);
+  zCmdExec = agent_command_executable(zCmd);
+  n = pProviders ? cson_array_length_get(pProviders) : 0;
+  fossil_free(zCached);
+  for(i=0; i<n; i++){
+    cson_value *pVal = cson_array_get(pProviders, i);
+    cson_object *pProvider = cson_value_is_object(pVal)
+      ? cson_value_get_object(pVal) : 0;
+    const char *zName = agent_json_cstr(pProvider, "name");
+    if( zName && agent_provider_match_command(pProvider, zCmd, zCmdExec) ){
+      zCached = mprintf("%s", zName);
+      break;
+    }
   }
-  if( strstr(zCmd, "fossil-ollama-agent.sh")!=0
-   || strstr(zCmd, " ollama")!=0
-   || fossil_strncmp(zCmd, "ollama", 6)==0
-  ){
-    return "ollama";
-  }
+  fossil_free(zCmdExec);
+  cson_value_free(pRoot);
+  blob_reset(&json);
+  if( zCached ) return zCached;
+#endif
   return "custom";
 }
 
@@ -317,6 +355,223 @@ static int agent_model_looks_ollama(const char *zModel){
   return 0;
 }
 
+#ifdef FOSSIL_ENABLE_JSON
+/*
+** Parse the config file at zPath and return the JSON root object on success.
+** The caller must free *ppRoot and reset pJson when done.
+*/
+static cson_object *agent_config_parse_object_path(
+  const char *zPath,
+  cson_value **ppRoot,
+  Blob *pJson
+){
+  cson_parse_info pinfo = cson_parse_info_empty;
+  cson_value *pRoot = 0;
+  cson_object *pObj = 0;
+  if( ppRoot ) *ppRoot = 0;
+  blob_zero(pJson);
+  if( zPath==0 ) return 0;
+  if( file_size(zPath, ExtFILE)<0 ){
+    return 0;
+  }
+  if( blob_read_from_file(pJson, zPath, ExtFILE)<0 ){
+    blob_reset(pJson);
+    return 0;
+  }
+  pRoot = cson_parse_Blob(pJson, &pinfo);
+  if( pRoot==0 || !cson_value_is_object(pRoot) ){
+    cson_value_free(pRoot);
+    blob_reset(pJson);
+    return 0;
+  }
+  pObj = cson_value_get_object(pRoot);
+  if( ppRoot ) *ppRoot = pRoot;
+  return pObj;
+}
+
+/*
+** Parse the current agent config file and return the JSON root object on
+** success. The caller must free *ppRoot and reset pJson when done.
+*/
+static cson_object *agent_config_parse_object(
+  cson_value **ppRoot,
+  Blob *pJson
+){
+  char *zPath = agent_config_path();
+  cson_object *pObj = agent_config_parse_object_path(zPath, ppRoot, pJson);
+  fossil_free(zPath);
+  return pObj;
+}
+
+/*
+** Return the path to the shared provider-metadata config. If the active
+** config is itself ai-agent.json, return it. Otherwise, prefer a sibling
+** ai-agent.json and fall back to the active config path.
+*/
+static char *agent_metadata_config_path(void){
+  char *zConfig = agent_config_path();
+  char *zMeta = 0;
+  char *zDir = 0;
+  const char *zBase = 0;
+  if( zConfig==0 ) return 0;
+  zBase = file_tail(zConfig);
+  if( fossil_strcmp(zBase, "ai-agent.json")==0 ){
+    return zConfig;
+  }
+  zDir = file_dirname(zConfig);
+  zMeta = mprintf("%s/ai-agent.json", zDir);
+  fossil_free(zDir);
+  if( file_size(zMeta, ExtFILE)>=0 ){
+    fossil_free(zConfig);
+    return zMeta;
+  }
+  fossil_free(zMeta);
+  return zConfig;
+}
+
+/*
+** Parse the shared provider-metadata config when available.
+*/
+static cson_object *agent_metadata_parse_object(
+  cson_value **ppRoot,
+  Blob *pJson
+){
+  char *zPath = agent_metadata_config_path();
+  cson_object *pObj = agent_config_parse_object_path(zPath, ppRoot, pJson);
+  fossil_free(zPath);
+  return pObj;
+}
+
+static const char *agent_json_cstr(cson_object *pObj, const char *zKey){
+  cson_value *pVal = pObj ? cson_object_get(pObj, zKey) : 0;
+  return pVal ? cson_value_get_cstr(pVal) : 0;
+}
+
+static int agent_json_bool(cson_object *pObj, const char *zKey, int dflt){
+  cson_value *pVal = pObj ? cson_object_get(pObj, zKey) : 0;
+  if( pVal==0 ) return dflt;
+  return cson_value_get_bool(pVal) ? 1 : (cson_value_get_integer(pVal)!=0);
+}
+
+static cson_array *agent_provider_array(cson_object *pRootObj){
+  cson_value *pVal = pRootObj ? cson_object_get(pRootObj, "providers") : 0;
+  return (pVal && cson_value_is_array(pVal)) ? cson_value_get_array(pVal) : 0;
+}
+
+static cson_object *agent_provider_object_from_array(
+  cson_array *pProviders,
+  const char *zProvider
+){
+  unsigned int i, n;
+  if( pProviders==0 || zProvider==0 || zProvider[0]==0 ) return 0;
+  n = cson_array_length_get(pProviders);
+  for(i=0; i<n; i++){
+    cson_value *pVal = cson_array_get(pProviders, i);
+    cson_object *pObj = cson_value_is_object(pVal) ? cson_value_get_object(pVal) : 0;
+    const char *zName = agent_json_cstr(pObj, "name");
+    if( zName && fossil_strcmp(zName, zProvider)==0 ){
+      return pObj;
+    }
+  }
+  return 0;
+}
+
+static cson_object *agent_provider_object(
+  cson_object *pRootObj,
+  const char *zProvider
+){
+  return agent_provider_object_from_array(agent_provider_array(pRootObj), zProvider);
+}
+
+static int agent_provider_match_command(
+  cson_object *pProvider,
+  const char *zCmd,
+  const char *zCmdExec
+){
+  const char *zName = agent_json_cstr(pProvider, "name");
+  const char *zProviderCmd = agent_json_cstr(pProvider, "command");
+  char *zProviderExec = 0;
+  int rc = 0;
+  if( zCmd==0 || zCmd[0]==0 ) return 0;
+  if( zName && zName[0] ){
+    Blob needle = BLOB_INITIALIZER;
+    blob_appendf(&needle, " %s", zName);
+    if( strstr(zCmd, blob_str(&needle))!=0
+     || fossil_strncmp(zCmd, zName, (int)strlen(zName))==0
+    ){
+      blob_reset(&needle);
+      return 1;
+    }
+    blob_reset(&needle);
+  }
+  if( zProviderCmd==0 || zProviderCmd[0]==0 ) return 0;
+  zProviderExec = agent_command_executable(zProviderCmd);
+  if( zProviderExec && zCmdExec
+   && fossil_strcmp(file_tail(zProviderExec), file_tail(zCmdExec))==0
+  ){
+    rc = 1;
+  }
+  fossil_free(zProviderExec);
+  return rc;
+}
+
+static int agent_provider_array_count(cson_object *pRootObj){
+  cson_array *pProviders = agent_provider_array(pRootObj);
+  return pProviders ? (int)cson_array_length_get(pProviders) : 0;
+}
+
+static const char *agent_provider_string_property(
+  const char *zProvider,
+  const char *zKey
+){
+  cson_value *pRoot = 0;
+  Blob json = BLOB_INITIALIZER;
+  cson_object *pRootObj = agent_metadata_parse_object(&pRoot, &json);
+  cson_object *pProvider = agent_provider_object(pRootObj, zProvider);
+  const char *zVal = agent_json_cstr(pProvider, zKey);
+  static char *zCached = 0;
+  fossil_free(zCached);
+  zCached = zVal && zVal[0] ? mprintf("%s", zVal) : 0;
+  cson_value_free(pRoot);
+  blob_reset(&json);
+  return zCached;
+}
+
+static int agent_provider_bool_property(
+  const char *zProvider,
+  const char *zKey,
+  int dflt
+){
+  cson_value *pRoot = 0;
+  Blob json = BLOB_INITIALIZER;
+  cson_object *pRootObj = agent_metadata_parse_object(&pRoot, &json);
+  cson_object *pProvider = agent_provider_object(pRootObj, zProvider);
+  int rc = agent_json_bool(pProvider, zKey, dflt);
+  cson_value_free(pRoot);
+  blob_reset(&json);
+  return rc;
+}
+#else
+static const char *agent_provider_string_property(
+  const char *zProvider,
+  const char *zKey
+){
+  (void)zProvider;
+  (void)zKey;
+  return 0;
+}
+
+static int agent_provider_bool_property(
+  const char *zProvider,
+  const char *zKey,
+  int dflt
+){
+  (void)zProvider;
+  (void)zKey;
+  return dflt;
+}
+#endif
+
 /*
 ** Look up a string value in cfg/ai-agent.json. Returns a newly allocated
 ** string on success or NULL if the config file/key is missing or invalid.
@@ -324,34 +579,14 @@ static int agent_model_looks_ollama(const char *zModel){
 */
 static char *agent_config_get(const char *zKey){
 #ifdef FOSSIL_ENABLE_JSON
-  char *zPath = 0;
   Blob json = BLOB_INITIALIZER;
-  cson_parse_info pinfo = cson_parse_info_empty;
   cson_value *pRoot = 0;
   cson_object *pObj = 0;
   cson_value *pVal = 0;
   const char *zVal = 0;
   char *zOut = 0;
-
-  zPath = agent_config_path();
-  if( zPath==0 ) return 0;
-  if( file_size(zPath, ExtFILE)<0 ){
-    fossil_free(zPath);
-    return 0;
-  }
-  if( blob_read_from_file(&json, zPath, ExtFILE)<0 ){
-    blob_reset(&json);
-    fossil_free(zPath);
-    return 0;
-  }
-  pRoot = cson_parse_Blob(&json, &pinfo);
-  if( pRoot==0 || !cson_value_is_object(pRoot) ){
-    cson_value_free(pRoot);
-    blob_reset(&json);
-    fossil_free(zPath);
-    return 0;
-  }
-  pObj = cson_value_get_object(pRoot);
+  pObj = agent_config_parse_object(&pRoot, &json);
+  if( pObj==0 ) return 0;
   pVal = cson_object_get(pObj, zKey);
   zVal = pVal ? cson_value_get_cstr(pVal) : 0;
   if( zVal && zVal[0] ){
@@ -359,7 +594,6 @@ static char *agent_config_get(const char *zKey){
   }
   cson_value_free(pRoot);
   blob_reset(&json);
-  fossil_free(zPath);
   return zOut;
 #else
   (void)zKey;
@@ -391,7 +625,7 @@ static const char *agent_chat_provider(void){
   zCached = db_get("agent-provider", 0);
   if( zCached ) return zCached;
   zCmd = agent_config_get("command");
-  if( zCmd==0 ) zCmd = db_get("agent-command", "ollama run %m");
+  if( zCmd==0 ) zCmd = db_get("agent-command", "");
   zCached = mprintf("%s", agent_infer_provider(zCmd));
   fossil_free(zCmd);
   return zCached;
@@ -425,7 +659,7 @@ static const char *agent_embedding_provider(void){
   if( zCmd[0] ){
     zCached = mprintf("%s", agent_infer_provider(zCmd));
   }else{
-    zCached = mprintf("ollama");
+    zCached = mprintf("%s", agent_chat_provider());
   }
   fossil_free(zCmd);
   return zCached;
@@ -438,7 +672,7 @@ static const char *agent_command_template(void){
   static char *zCached = 0;
   fossil_free(zCached);
   zCached = agent_config_get("command");
-  return zCached ? zCached : db_get("agent-command", "ollama run %m");
+  return zCached ? zCached : db_get("agent-command", "");
 }
 
 /*
@@ -461,18 +695,45 @@ static int agent_embedding_is_available(void){
   const char *zCmd = agent_embedding_template();
   if( zModel==0 || zModel[0]==0 ) return 0;
   if( zCmd && zCmd[0] ) return 1;
-  return zProvider && fossil_strcmp(zProvider, "ollama")==0;
+  return agent_provider_string_property(zProvider, "builtin_embedding_fallback")
+      != 0;
+}
+
+static int agent_provider_is_known(const char *zProvider){
+  cson_value *pRoot = 0;
+  Blob json = BLOB_INITIALIZER;
+  cson_object *pRootObj = 0;
+  int rc = 0;
+  if( zProvider==0 || zProvider[0]==0 ) return 0;
+#ifdef FOSSIL_ENABLE_JSON
+  pRootObj = agent_metadata_parse_object(&pRoot, &json);
+  if( agent_provider_array_count(pRootObj)>0 ){
+    rc = agent_provider_object(pRootObj, zProvider)!=0;
+  }else{
+    rc = 1;
+  }
+  cson_value_free(pRoot);
+  blob_reset(&json);
+  return rc;
+#else
+  return 1;
+#endif
 }
 
 /*
-** Return non-zero if the provider name is one of Fossil's built-in
-** compatibility backends.
+** Return non-zero if zProvider may use "auto" to defer model selection to
+** an external CLI.
 */
-static int agent_provider_is_known(const char *zProvider){
-  return zProvider
-      && (fossil_strcmp(zProvider, "codex")==0
-       || fossil_strcmp(zProvider, "ollama")==0
-       || fossil_strcmp(zProvider, "custom")==0);
+static int agent_provider_accepts_auto(const char *zProvider){
+  return agent_provider_bool_property(zProvider, "accepts_auto", 0);
+}
+
+/*
+** Return non-zero if zProvider should reject obvious Ollama-style model names
+** before backend launch.
+*/
+static int agent_provider_rejects_ollama_models(const char *zProvider){
+  return agent_provider_bool_property(zProvider, "rejects_ollama_models", 0);
 }
 
 /*
@@ -481,52 +742,85 @@ static int agent_provider_is_known(const char *zProvider){
 ** implementation.
 */
 static int agent_chat_provider_locked(void){
-  return 1;
+  cson_value *pRoot = 0;
+  Blob json = BLOB_INITIALIZER;
+  cson_object *pRootObj = 0;
+  int rc = 1;
+#ifdef FOSSIL_ENABLE_JSON
+  pRootObj = agent_metadata_parse_object(&pRoot, &json);
+  rc = agent_json_bool(pRootObj, "chat_provider_locked", 1);
+  cson_value_free(pRoot);
+  blob_reset(&json);
+#endif
+  return rc;
 }
 
 /*
-** Return a static list of known provider names.
+** Emit the configured provider choice names. Falls back to the current
+** provider when no explicit catalog is present.
 */
-static const char *const *agent_provider_choices(int *pnChoice){
-  static const char *const azChoice[] = {
-    "codex",
-    "ollama",
-    "custom"
-  };
-  if( pnChoice ) *pnChoice = count(azChoice);
-  return azChoice;
+static void agent_emit_provider_choices_json(const char *zCurrentProvider){
+#ifdef FOSSIL_ENABLE_JSON
+  cson_value *pRoot = 0;
+  Blob json = BLOB_INITIALIZER;
+  cson_object *pRootObj = agent_metadata_parse_object(&pRoot, &json);
+  cson_array *pProviders = agent_provider_array(pRootObj);
+  unsigned int i, n = pProviders ? cson_array_length_get(pProviders) : 0;
+  if( n>0 ){
+    fossil_print("[");
+    for(i=0; i<n; i++){
+      cson_value *pVal = cson_array_get(pProviders, i);
+      cson_object *pProvider = cson_value_is_object(pVal)
+        ? cson_value_get_object(pVal) : 0;
+      const char *zName = agent_json_cstr(pProvider, "name");
+      if( zName && zName[0] ){
+        CX("%s%!j", i ? "," : "", zName);
+      }
+    }
+    fossil_print("]");
+    cson_value_free(pRoot);
+    blob_reset(&json);
+    return;
+  }
+  cson_value_free(pRoot);
+  blob_reset(&json);
+#endif
+  fossil_print("[");
+  if( zCurrentProvider && zCurrentProvider[0] ){
+    CX("%!j", zCurrentProvider);
+  }
+  fossil_print("]");
 }
 
 /*
-** Return a static list of model suggestions for zProvider. The current model
-** is emitted separately by agent_emit_config_json(), so these are only hints.
+** Emit the configured model suggestions for zProvider. The current model is
+** emitted separately by agent_emit_config_json(), so these are only hints.
 */
-static const char *const *agent_model_suggestions(
-  const char *zProvider,
-  int *pnChoice
-){
-  static const char *const azCodex[] = {
-    "auto"
-  };
-  static const char *const azOllama[] = {
-    "qwen3.5:0.8b",
-    "llama3.2",
-    "gemma3"
-  };
-  static const char *const azCustom[] = {
-    "auto"
-  };
-  if( zProvider==0 ) zProvider = "";
-  if( fossil_strcmp(zProvider, "codex")==0 ){
-    if( pnChoice ) *pnChoice = count(azCodex);
-    return azCodex;
+static void agent_emit_model_suggestions_json(const char *zProvider){
+#ifdef FOSSIL_ENABLE_JSON
+  cson_value *pRoot = 0;
+  Blob json = BLOB_INITIALIZER;
+  cson_object *pRootObj = agent_metadata_parse_object(&pRoot, &json);
+  cson_object *pProvider = agent_provider_object(pRootObj, zProvider);
+  cson_value *pVal = pProvider ? cson_object_get(pProvider, "model_suggestions") : 0;
+  cson_array *pModels = (pVal && cson_value_is_array(pVal))
+    ? cson_value_get_array(pVal) : 0;
+  unsigned int i, n = pModels ? cson_array_length_get(pModels) : 0;
+  fossil_print("[");
+  for(i=0; i<n; i++){
+    cson_value *pModel = cson_array_get(pModels, i);
+    const char *zName = pModel ? cson_value_get_cstr(pModel) : 0;
+    if( zName && zName[0] ){
+      CX("%s%!j", i ? "," : "", zName);
+    }
   }
-  if( fossil_strcmp(zProvider, "ollama")==0 ){
-    if( pnChoice ) *pnChoice = count(azOllama);
-    return azOllama;
-  }
-  if( pnChoice ) *pnChoice = count(azCustom);
-  return azCustom;
+  fossil_print("]");
+  cson_value_free(pRoot);
+  blob_reset(&json);
+#else
+  (void)zProvider;
+  fossil_print("[]");
+#endif
 }
 
 /*
@@ -643,6 +937,7 @@ static int agent_embedding_backend_ready(
   char **pzResolved,
   char **pzDetail
 ){
+  const char *zFallback = 0;
   if( pzResolved ) *pzResolved = 0;
   if( pzDetail ) *pzDetail = 0;
   if( zModel==0 || zModel[0]==0 ){
@@ -652,11 +947,12 @@ static int agent_embedding_backend_ready(
   if( zCmdTmpl && zCmdTmpl[0] ){
     return agent_command_is_ready(zCmdTmpl, pzResolved, pzDetail);
   }
-  if( zProvider && fossil_stricmp(zProvider, "ollama")==0 ){
-    int rc = agent_command_is_ready("curl", pzResolved, pzDetail);
+  zFallback = agent_provider_string_property(zProvider, "builtin_embedding_fallback");
+  if( zFallback && zFallback[0] ){
+    int rc = agent_command_is_ready(zFallback, pzResolved, pzDetail);
     if( rc && pzDetail ){
       fossil_free(*pzDetail);
-      *pzDetail = mprintf("builtin ollama fallback via curl");
+      *pzDetail = mprintf("builtin %s fallback via %s", zProvider, zFallback);
     }
     return rc;
   }
@@ -664,22 +960,6 @@ static int agent_embedding_backend_ready(
     *pzDetail = mprintf("no embedding command configured");
   }
   return 0;
-}
-
-/*
-** Emit a JSON string array field.
-*/
-static void agent_emit_json_string_array(
-  const char *zLabel,
-  const char *const *azValue,
-  int nValue
-){
-  int i;
-  CX("\"%s\":[", zLabel);
-  for(i=0; i<nValue; i++){
-    CX("%s%!j", i>0 ? "," : "", azValue[i]);
-  }
-  CX("]");
 }
 
 /*
@@ -787,16 +1067,16 @@ static void agent_emit_phase_registry_json(void){
 ** reflect that session rather than the current default.
 */
 static void agent_emit_config_json(int sidCurrent){
-  const char *zChatProvider = agent_chat_session_provider(
+  char *zChatProvider = mprintf("%s", agent_chat_session_provider(
     sidCurrent, agent_chat_provider()
-  );
-  const char *zChatModel = agent_chat_session_model(
+  ));
+  char *zChatModel = mprintf("%s", agent_chat_session_model(
     sidCurrent, agent_default_model()
-  );
-  const char *zEmbedProvider = agent_embedding_provider();
-  const char *zEmbedModel = agent_embedding_model();
-  const char *zCmd = agent_command_template();
-  const char *zEmbedCmd = agent_embedding_template();
+  ));
+  char *zEmbedProvider = mprintf("%s", agent_embedding_provider());
+  char *zEmbedModel = mprintf("%s", agent_embedding_model());
+  char *zCmd = mprintf("%s", agent_command_template());
+  char *zEmbedCmd = mprintf("%s", agent_embedding_template());
   char *zSource = agent_config_source();
   int chatProviderLocked = agent_chat_provider_locked();
   int chatSupportsStreaming = 0;
@@ -822,9 +1102,16 @@ static void agent_emit_config_json(int sidCurrent){
   char *zEmbeddingModelError = 0;
   char *zEmbeddingCommandPath = 0;
   char *zEmbeddingCommandDetail = 0;
-  const char *const *azProviderChoice = agent_provider_choices(&nProviderChoice);
-  const char *const *azModelChoice = agent_model_suggestions(
-    zChatProvider, &nModelChoice
+  (void)nProviderChoice;
+  (void)nModelChoice;
+  chatSupportsStreaming = agent_provider_bool_property(
+    zChatProvider, "supports_streaming", 0
+  );
+  chatSupportsModelDiscovery = agent_provider_bool_property(
+    zChatProvider, "supports_model_discovery", 0
+  );
+  embeddingSupportsModelDiscovery = agent_provider_bool_property(
+    zEmbedProvider, "supports_model_discovery", 0
   );
   chatModelValid = agent_validate_provider_model_ex(
     zChatProvider, zChatModel, &zChatModelError
@@ -855,13 +1142,11 @@ static void agent_emit_config_json(int sidCurrent){
      chatProviderLocked, chatSupportsStreaming, chatSupportsModelDiscovery,
      embeddingAvailable, embeddingSupportsModelDiscovery,
      chatProviderKnown, embeddingProviderKnown);
-  agent_emit_json_string_array(
-    "chat_provider_choices", azProviderChoice, nProviderChoice
-  );
+  CX("\"chat_provider_choices\":");
+  agent_emit_provider_choices_json(zChatProvider);
   CX(",");
-  agent_emit_json_string_array(
-    "chat_model_suggestions", azModelChoice, nModelChoice
-  );
+  CX("\"chat_model_suggestions\":");
+  agent_emit_model_suggestions_json(zChatProvider);
   CX(",\"phase_count\":%d,\"phases\":", nPhase);
   agent_emit_phase_registry_json();
   CX(",\"capability_count\":%d,\"capabilities\":", nCapability);
@@ -897,6 +1182,12 @@ static void agent_emit_config_json(int sidCurrent){
   fossil_free(zEmbeddingCommandPath);
   fossil_free(zEmbeddingCommandDetail);
   fossil_free(zSource);
+  fossil_free(zChatProvider);
+  fossil_free(zChatModel);
+  fossil_free(zEmbedProvider);
+  fossil_free(zEmbedModel);
+  fossil_free(zCmd);
+  fossil_free(zEmbedCmd);
 }
 
 /*
@@ -943,19 +1234,19 @@ static int agent_validate_provider_model(
     return 1;
   }
   if( zProvider==0 || zProvider[0]==0 ) return 0;
-  if( fossil_stricmp(zProvider, "codex")==0 ){
-    if( fossil_stricmp(zModel, "auto")==0 ) return 0;
-    if( agent_model_looks_ollama(zModel) ){
+  if( fossil_stricmp(zModel, "auto")==0 && !agent_provider_accepts_auto(zProvider) ){
+    blob_appendf(pErr,
+      "model \"auto\" is not valid for provider %s", zProvider
+    );
+    return 1;
+  }
+  if( agent_provider_accepts_auto(zProvider) ){
+    if( agent_provider_rejects_ollama_models(zProvider)
+     && agent_model_looks_ollama(zModel)
+    ){
       blob_appendf(pErr,
-        "model \"%s\" looks like an Ollama model but provider is codex", zModel
-      );
-      return 1;
-    }
-  }else if( fossil_stricmp(zProvider, "ollama")==0
-         || fossil_stricmp(zProvider, "ollama-http")==0 ){
-    if( fossil_stricmp(zModel, "auto")==0 ){
-      blob_appendf(pErr,
-        "model \"auto\" is not valid for provider %s", zProvider
+        "model \"%s\" looks like an Ollama model but provider is %s",
+        zModel, zProvider
       );
       return 1;
     }
@@ -3317,12 +3608,12 @@ static int agent_run_backend(
 */
 static void agent_verify_cmd(void){
   const char *zSource = 0;
-  const char *zChatProvider = agent_chat_provider();
-  const char *zChatModel = agent_default_model();
-  const char *zChatCmd = agent_command_template();
-  const char *zEmbedProvider = agent_embedding_provider();
-  const char *zEmbedModel = agent_embedding_model();
-  const char *zEmbedCmd = agent_embedding_template();
+  char *zChatProvider = mprintf("%s", agent_chat_provider());
+  char *zChatModel = mprintf("%s", agent_default_model());
+  char *zChatCmd = mprintf("%s", agent_command_template());
+  char *zEmbedProvider = mprintf("%s", agent_embedding_provider());
+  char *zEmbedModel = mprintf("%s", agent_embedding_model());
+  char *zEmbedCmd = mprintf("%s", agent_embedding_template());
   char *zChatModelError = 0;
   char *zChatCommandPath = 0;
   char *zChatCommandDetail = 0;
@@ -3481,6 +3772,12 @@ static void agent_verify_cmd(void){
   fossil_free(zEmbedModelError);
   fossil_free(zEmbedCommandPath);
   fossil_free(zEmbedCommandDetail);
+  fossil_free(zChatProvider);
+  fossil_free(zChatModel);
+  fossil_free(zChatCmd);
+  fossil_free(zEmbedProvider);
+  fossil_free(zEmbedModel);
+  fossil_free(zEmbedCmd);
 }
 
 /*
@@ -3956,12 +4253,12 @@ static void agent_append_eval_summary_json(Blob *pOut, int nLimit){
 */
 static void agent_diagnostics_cmd(void){
   const char *zSource = 0;
-  const char *zChatProvider = agent_chat_provider();
-  const char *zChatModel = agent_default_model();
-  const char *zChatCmd = agent_command_template();
-  const char *zEmbedProvider = agent_embedding_provider();
-  const char *zEmbedModel = agent_embedding_model();
-  const char *zEmbedCmd = agent_embedding_template();
+  char *zChatProvider = mprintf("%s", agent_chat_provider());
+  char *zChatModel = mprintf("%s", agent_default_model());
+  char *zChatCmd = mprintf("%s", agent_command_template());
+  char *zEmbedProvider = mprintf("%s", agent_embedding_provider());
+  char *zEmbedModel = mprintf("%s", agent_embedding_model());
+  char *zEmbedCmd = mprintf("%s", agent_embedding_template());
   char *zChatModelError = 0;
   char *zChatCommandPath = 0;
   char *zChatCommandDetail = 0;
@@ -4189,6 +4486,12 @@ static void agent_diagnostics_cmd(void){
   fossil_free(zEmbedModelError);
   fossil_free(zEmbedCommandPath);
   fossil_free(zEmbedCommandDetail);
+  fossil_free(zChatProvider);
+  fossil_free(zChatModel);
+  fossil_free(zChatCmd);
+  fossil_free(zEmbedProvider);
+  fossil_free(zEmbedModel);
+  fossil_free(zEmbedCmd);
 }
 
 /*
@@ -4699,13 +5002,13 @@ void agent_cmd(void){
 ** Knowledge console for interactive orchestration and retrieval tracing.
 */
 void agentui_page(void){
-  const char *zModel;
-  const char *zSessionProvider;
-  const char *zCmd;
-  const char *zEmbedModel;
-  const char *zEmbedCmd;
-  const char *zProvider;
-  const char *zEmbedProvider;
+  char *zModel;
+  char *zSessionProvider;
+  char *zCmd;
+  char *zEmbedModel;
+  char *zEmbedCmd;
+  char *zProvider;
+  char *zEmbedProvider;
   const char *zUser;
   char *zConfigSource;
   int chatProviderLocked;
@@ -4720,13 +5023,17 @@ void agentui_page(void){
   zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
   sidRequested = atoi(PD("sid","0"));
   sidCurrent = agent_chat_session_exists(sidRequested) ? sidRequested : 0;
-  zSessionProvider = agent_chat_session_provider(sidCurrent, agent_chat_provider());
-  zModel = agent_chat_session_model(sidCurrent, agent_default_model());
-  zCmd = agent_command_template();
-  zEmbedModel = agent_embedding_model();
-  zEmbedCmd = agent_embedding_template();
-  zProvider = zSessionProvider;
-  zEmbedProvider = agent_embedding_provider();
+  zSessionProvider = mprintf("%s",
+    agent_chat_session_provider(sidCurrent, agent_chat_provider())
+  );
+  zModel = mprintf("%s",
+    agent_chat_session_model(sidCurrent, agent_default_model())
+  );
+  zCmd = mprintf("%s", agent_command_template());
+  zEmbedModel = mprintf("%s", agent_embedding_model());
+  zEmbedCmd = mprintf("%s", agent_embedding_template());
+  zProvider = mprintf("%s", zSessionProvider);
+  zEmbedProvider = mprintf("%s", agent_embedding_provider());
   zConfigSource = agent_config_source();
   chatProviderLocked = agent_chat_provider_locked();
   style_set_current_feature("agent");
@@ -5258,6 +5565,13 @@ void agentui_page(void){
   @ </script>
   @ </div>
   @ </div>
+  fossil_free(zModel);
+  fossil_free(zSessionProvider);
+  fossil_free(zCmd);
+  fossil_free(zEmbedModel);
+  fossil_free(zEmbedCmd);
+  fossil_free(zProvider);
+  fossil_free(zEmbedProvider);
   fossil_free(zConfigSource);
   style_finish_page();
 }
