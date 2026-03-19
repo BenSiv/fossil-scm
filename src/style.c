@@ -664,7 +664,7 @@ static const char zDfltMainMenu[] =
 @ Software  /software    {o r j}        wideonly
 @ Knowledge /knowledge   r              wideonly
 @ Agent     /agentui     r              wideonly
-@ Admin     /system      {}             wideonly
+@ System    /system      *              wideonly
 ;
 
 /*

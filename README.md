@@ -29,8 +29,17 @@ Canonical documents for this fork live under [`doc/`](doc/):
   includes the phased roadmap from config visibility through streaming and
   conversation evaluation. Comparative design notes from reviewing
   `~/gentle-ai` live in [`doc/ai/GENTLE_AI_LESSONS.md`](doc/ai/GENTLE_AI_LESSONS.md).
+  Comparative design notes from reviewing `~/openclaw` live in
+  [`doc/ai/OPENCLAW_LESSONS.md`](doc/ai/OPENCLAW_LESSONS.md).
+  Comparative design notes from reviewing `~/Fabric` live in
+  [`doc/ai/FABRIC_LESSONS.md`](doc/ai/FABRIC_LESSONS.md).
   A combined orchestration roadmap drawing from Goose, `gentle-ai`, and
   OpenCode lives in [`doc/ai/ORCHESTRATION_IMPLEMENTATION_PLAN.md`](doc/ai/ORCHESTRATION_IMPLEMENTATION_PLAN.md).
+  Knowledge storage direction is defined in
+  [`doc/ai/STORAGE_MODEL.md`](doc/ai/STORAGE_MODEL.md), which clarifies the
+  split between SQLite runtime/index state and artifact-backed durable text.
+  The concrete browser and materialization sequence lives in
+  [`doc/ai/KNOWLEDGE_BROWSER_IMPLEMENTATION_PLAN.md`](doc/ai/KNOWLEDGE_BROWSER_IMPLEMENTATION_PLAN.md).
   Tcl test suite recovery is tracked in
   [`doc/ai/TCL_TEST_REVIVAL_PLAN.md`](doc/ai/TCL_TEST_REVIVAL_PLAN.md).
 - Clean local reinstall helper: [`dev/tools/install-fossil-clean.sh`](dev/tools/install-fossil-clean.sh)

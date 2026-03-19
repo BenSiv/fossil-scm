@@ -5,6 +5,7 @@
 
 ## Concept velocity
 - Rate of promotions from Tier 0/1 to Tier 3.
+- Automatic promotion decisions should be attributable to retrieval usage and review-loop outcomes.
 
 ## Alignment score
 - Percentage of micro-commits that reference constitution/steering.

@@ -42,10 +42,15 @@ This document specifies an AI-optimized software management system built on Foss
 4. Tier 3: Atomic Concepts
 
 ### Storage Mapping
-- Tier 0: Technotes tagged `ai-raw`.
-- Tier 1: Technotes or `ai_context` records.
-- Tier 2: Wiki pages under namespace `draft/`.
-- Tier 3: Wiki pages in the main namespace.
+- Tier 0: SQL-backed pool records, with optional technotes tagged `ai-raw`
+  when reviewability matters.
+- Tier 1: SQL-backed pool records plus linked working summaries.
+- Tier 2: Draft wiki pages or versioned files under a knowledge tree.
+- Tier 3: Stable wiki pages or versioned files representing durable concepts.
+
+SQLite remains the metadata, retrieval, and audit layer. Durable textual
+knowledge should increasingly live as repository artifacts rather than only as
+opaque database text fields.
 
 ### Required Metadata Tables
 - `ai_context` for prompt/rationale/model/token data.
@@ -174,6 +179,7 @@ This document specifies an AI-optimized software management system built on Foss
 
 ### Primary Interfaces
 - Chat interface.
+- Knowledge browser over all indexed knowledge elements.
 - Wiki interface.
 - Change log with micro-commit stream.
 - Task management view.
@@ -232,11 +238,13 @@ This document specifies an AI-optimized software management system built on Foss
 1. All primary workflows are accessible via the web UI.
 2. User can view micro-commit stream and rationale.
 3. User can inspect context selection and its rationale.
+4. User can browse all indexed knowledge elements and reach their artifact form.
 
 ### Data and Knowledge
 1. All four tiers are represented and discoverable.
 2. Vector map references resolve to Fossil artifacts.
 3. Promotions and demotions are recorded with rationale.
+4. Durable textual knowledge is not trapped only in SQL rows.
 
 ### Automation
 1. Micro-commit creation occurs within configured window after changes.

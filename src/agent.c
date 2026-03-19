@@ -35,7 +35,12 @@ int ai_note_create(
   int sourceId,
   const char *zSourceRef,
   const char *zProcessLevel,
-  const char *zMetadata
+  const char *zMetadata,
+  const char *zArtifactKind,
+  const char *zArtifactRef,
+  int artifactRid,
+  const char *zArtifactPath,
+  const char *zArtifactStatus
 );
 int ai_retrieval_begin(int contextId, const char *zQuery);
 double ai_note_record_retrieval(
@@ -91,6 +96,7 @@ struct AgentRecipe {
   const char *zTitle;
   const char *zDescription;
   const char *zUsage;
+  const char *zGuidanceRefs;
   const char *zPhases;
   const char *zCapabilities;
   const char *zScript;
@@ -1134,6 +1140,7 @@ static const AgentRecipe aAgentRecipeBuiltin[] = {
     "Summarize Repository Context",
     "Assemble repository context and ask the configured backend for a concise summary.",
     "fossil agent recipe run summarize-context ?QUERY? [--json]",
+    "knowledge/guidance/summarize-context.md",
     "explore",
     "agent_context,agent_run",
     "set q $query\n"
@@ -1142,7 +1149,11 @@ static const AgentRecipe aAgentRecipeBuiltin[] = {
     "if {[string compare $context \"\"] == 0} {\n"
     "  return \"No repository context available.\"\n"
     "}\n"
-    "set prompt \"Summarize this repository context for a developer. Keep it concise and concrete.\\n\\n$context\"\n"
+    "if {[string compare $guidance \"\"] != 0} {\n"
+    "  set prompt \"Repository guidance:\\n$guidance\\n\\nSummarize this repository context for a developer. Keep it concise and concrete.\\n\\n$context\"\n"
+    "} else {\n"
+    "  set prompt \"Summarize this repository context for a developer. Keep it concise and concrete.\\n\\n$context\"\n"
+    "}\n"
     "return [agent_run $provider $model $prompt]\n"
   },
   {
@@ -1150,13 +1161,18 @@ static const AgentRecipe aAgentRecipeBuiltin[] = {
     "Review Pending Changes",
     "Assemble repository context and pending changes, then ask the backend for a review focused on risks and test gaps.",
     "fossil agent recipe run review-change [--json]",
+    "knowledge/guidance/review-change.md",
     "explore,verify",
     "agent_context,agent_run",
     "set context [agent_context \"pending changes review\" $model]\n"
     "if {[string compare $context \"\"] == 0} {\n"
     "  return \"No repository context available.\"\n"
     "}\n"
-    "set prompt \"Review the repository context and pending changes. Prioritize bugs, regressions, and missing tests.\\n\\n$context\"\n"
+    "if {[string compare $guidance \"\"] != 0} {\n"
+    "  set prompt \"Repository guidance:\\n$guidance\\n\\nReview the repository context and pending changes. Prioritize bugs, regressions, and missing tests.\\n\\n$context\"\n"
+    "} else {\n"
+    "  set prompt \"Review the repository context and pending changes. Prioritize bugs, regressions, and missing tests.\\n\\n$context\"\n"
+    "}\n"
     "return [agent_run $provider $model $prompt]\n"
   }
 };
@@ -1259,6 +1275,82 @@ static char *agent_join_args(int iFrom){
     blob_appendf(&out, "%s%s", i>iFrom ? " " : "", g.argv[i]);
   }
   return blob_str(&out);
+}
+
+/*
+** Return non-zero if zRef is a relative checkout path suitable for loading as
+** a repository guidance artifact.
+*/
+static int agent_guidance_ref_is_safe(const char *zRef){
+  if( zRef==0 || zRef[0]==0 ) return 0;
+  if( zRef[0]=='/' || zRef[0]=='\\' ) return 0;
+  if( strstr(zRef, "..")!=0 ) return 0;
+  return 1;
+}
+
+/*
+** Load all guidance refs from zList, appending concatenated text to pText and
+** a JSON array of resolved artifact metadata to pJson. Return non-zero on
+** success; otherwise append a human-readable error to pErr and return 0.
+*/
+static int agent_guidance_load(
+  const char *zList,
+  Blob *pText,
+  Blob *pJson,
+  Blob *pErr
+){
+  const char *z = zList ? zList : "";
+  int first = 1;
+  if( pJson ) blob_append(pJson, "[", 1);
+  while( z[0] ){
+    Blob tok = BLOB_INITIALIZER;
+    Blob content = BLOB_INITIALIZER;
+    char *zPath = 0;
+    while( fossil_isspace(z[0]) || z[0]==',' ) z++;
+    while( z[0] && z[0]!=',' ){
+      blob_append(&tok, z, 1);
+      z++;
+    }
+    blob_trim(&tok);
+    if( blob_size(&tok)==0 ){
+      blob_reset(&tok);
+      continue;
+    }
+    if( !agent_guidance_ref_is_safe(blob_str(&tok)) ){
+      blob_appendf(pErr, "unsafe guidance ref: %s", blob_str(&tok));
+      blob_reset(&tok);
+      if( pJson ) blob_append(pJson, "]", 1);
+      return 0;
+    }
+    if( g.zLocalRoot==0 || g.zLocalRoot[0]==0 ){
+      blob_appendf(pErr, "guidance requires a checkout-local root: %s",
+                   blob_str(&tok));
+      blob_reset(&tok);
+      if( pJson ) blob_append(pJson, "]", 1);
+      return 0;
+    }
+    zPath = mprintf("%s%s", g.zLocalRoot, blob_str(&tok));
+    if( file_size(zPath, ExtFILE)<0 ){
+      blob_appendf(pErr, "missing guidance artifact: %s", blob_str(&tok));
+      fossil_free(zPath);
+      blob_reset(&tok);
+      if( pJson ) blob_append(pJson, "]", 1);
+      return 0;
+    }
+    blob_read_from_file(&content, zPath, ExtFILE);
+    if( blob_size(pText)>0 ) blob_append(pText, "\n\n", 2);
+    blob_appendf(pText, "[%s]\n%s", blob_str(&tok), blob_str(&content));
+    if( pJson ){
+      blob_appendf(pJson, "%s{\"ref\":%!j,\"bytes\":%d}",
+                   first ? "" : ",", blob_str(&tok), blob_size(&content));
+      first = 0;
+    }
+    fossil_free(zPath);
+    blob_reset(&content);
+    blob_reset(&tok);
+  }
+  if( pJson ) blob_append(pJson, "]", 1);
+  return 1;
 }
 
 /*
@@ -1675,9 +1767,10 @@ static void agent_software_submenu(void){
 */
 static void agent_knowledge_submenu(void){
   style_submenu_element("Overview", "%R/knowledge");
+  style_submenu_element("Browse", "%R/knowledge-browser");
+  style_submenu_element("Runs", "%R/knowledge-runs");
   style_submenu_element("Tickets", "%R/ticket");
   style_submenu_element("Wiki", "%R/wiki");
-  style_submenu_element("Runs", "%R/knowledge#recent-runs");
 }
 
 /*
@@ -1690,7 +1783,6 @@ static void agent_console_submenu(int sidCurrent){
   }
   style_submenu_element("Knowledge", "%R/knowledge");
   style_submenu_element("Software", "%R/software");
-  style_submenu_element("Admin", "%R/system");
 }
 
 /*
@@ -1777,7 +1869,7 @@ static void agent_render_recent_runs_html(int nLimit){
   Stmt q;
   if( nLimit<=0 ) nLimit = 5;
   @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);">
-  @ <div style="font-weight:bold;margin-bottom:0.4em;">Recent Runs</div>
+  @ <div style="font-weight:bold;margin-bottom:0.4em;">Recent Runs <span class="dimmed" style="font-weight:normal;">[<a href="%R/knowledge-runs">browse all</a>]</span></div>
   if( !db_table_exists("repository","agentrun") ){
     @ <div class="dimmed">No persisted run ledger yet.</div>
     @ </div>
@@ -1792,8 +1884,9 @@ static void agent_render_recent_runs_html(int nLimit){
   );
   if( db_step(&q)==SQLITE_ROW ){
     do{
+      int runid = db_column_int(&q,0);
       @ <div style="margin:0.35em 0;">
-      @ <b>#%d(db_column_int(&q,0))</b> %h(db_column_text(&q,1))
+      @ <b><a href="%R/knowledge-run?runid=%d(runid)">#%d(runid)</a></b> %h(db_column_text(&q,1))
       @ <span class="dimmed">[%h(db_column_text(&q,2)) | %h(db_column_text(&q,3))]</span><br>
       @ <span class="dimmed">%h(db_column_text(&q,4))</span>
       @ </div>
@@ -1841,6 +1934,185 @@ static void agent_render_recent_retrievals_html(int nLimit){
 }
 
 /*
+** Return a static human-readable label for an AI note tier.
+*/
+static const char *agent_note_tier_label(int tier){
+  switch( tier ){
+    case 3: return "Tier 3: Atomic Records";
+    case 2: return "Tier 2: Curated Drafts";
+    case 1: return "Tier 1: Working Set";
+    default: return "Tier 0: Raw Intake";
+  }
+}
+
+/*
+** Build the SQL WHERE clause for the knowledge browser filters.
+*/
+static char *agent_knowledge_filter_clause(
+  const char *zTier,
+  const char *zSource,
+  const char *zProcess,
+  const char *zSearch,
+  int showMerged
+){
+  Blob sql = BLOB_INITIALIZER;
+  blob_append_sql(&sql, " WHERE 1");
+  if( zTier && zTier[0] && fossil_isdigit(zTier[0]) ){
+    int tier = atoi(zTier);
+    if( tier>=0 && tier<=3 ){
+      blob_append_sql(&sql, " AND coalesce(tier,0)=%d", tier);
+    }
+  }
+  if( zSource && zSource[0] ){
+    blob_append_sql(&sql, " AND coalesce(source_type,'')=%Q", zSource);
+  }
+  if( zProcess && zProcess[0] ){
+    blob_append_sql(&sql, " AND coalesce(process_level,'')=%Q", zProcess);
+  }
+  if( !showMerged ){
+    blob_append_sql(&sql, " AND coalesce(merged_into,0)=0");
+  }
+  if( zSearch && zSearch[0] ){
+    char *zLike = mprintf("%%%s%%", zSearch);
+    blob_append_sql(&sql,
+      " AND (coalesce(title,'') LIKE %Q"
+      "   OR coalesce(body,'') LIKE %Q"
+      "   OR coalesce(source_ref,'') LIKE %Q)",
+      zLike, zLike, zLike
+    );
+    fossil_free(zLike);
+  }
+  return blob_str(&sql);
+}
+
+/*
+** Emit a best-effort source/artifact link for one knowledge note.
+*/
+static void agent_render_note_source_link(
+  const char *zSourceType,
+  int sourceId,
+  const char *zSourceRef
+){
+  if( zSourceType==0 ) zSourceType = "";
+  if( zSourceRef==0 ) zSourceRef = "";
+  @ <span class="dimmed">source:</span> %h(zSourceType)
+  if( zSourceRef[0] ){
+    @ <span class="dimmed">| ref:</span>
+    if( fossil_strcmp(zSourceType, "wiki")==0 ){
+      @ <a href="%R/wiki?name=%T(zSourceRef)">%h(zSourceRef)</a>
+    }else if( fossil_strcmp(zSourceType, "ticket")==0 ){
+      @ <a href="%R/tktview/%T(zSourceRef)">%h(zSourceRef)</a>
+    }else if( fossil_strcmp(zSourceType, "doc")==0 ){
+      @ <a href="%R/doc/tip/%T(zSourceRef)">%h(zSourceRef)</a>
+    }else if( fossil_strcmp(zSourceType, "technote")==0 ){
+      @ <a href="%R/technote/%T(zSourceRef)">%h(zSourceRef)</a>
+    }else{
+      @ <code>%h(zSourceRef)</code>
+    }
+  }
+  if( sourceId>0 ){
+    @ <span class="dimmed">| id=%d(sourceId)</span>
+  }
+}
+
+/*
+** Emit an explicit durable artifact link for one knowledge note when present.
+*/
+static void agent_render_note_artifact_link(
+  const char *zArtifactKind,
+  const char *zArtifactRef,
+  int artifactRid,
+  const char *zArtifactPath,
+  const char *zArtifactStatus
+){
+  char *zUuid = 0;
+  if( zArtifactKind==0 ) zArtifactKind = "";
+  if( zArtifactRef==0 ) zArtifactRef = "";
+  if( zArtifactPath==0 ) zArtifactPath = "";
+  if( zArtifactStatus==0 ) zArtifactStatus = "";
+  if( zArtifactKind[0]==0 && zArtifactRef[0]==0 && artifactRid<=0
+   && zArtifactPath[0]==0 ){
+    return;
+  }
+  @ <div style="margin-top:0.35em;">
+  @ <span class="dimmed">artifact:</span>
+  if( fossil_strcmp(zArtifactKind, "wiki")==0 && zArtifactRef[0] ){
+    @ <a href="%R/wiki?name=%T(zArtifactRef)">%h(zArtifactRef)</a>
+  }else if( fossil_strcmp(zArtifactKind, "ticket")==0 && zArtifactRef[0] ){
+    @ <a href="%R/tktview/%T(zArtifactRef)">%h(zArtifactRef)</a>
+  }else if( fossil_strcmp(zArtifactKind, "technote")==0 && zArtifactRef[0] ){
+    @ <a href="%R/technote/%T(zArtifactRef)">%h(zArtifactRef)</a>
+  }else if(
+    (fossil_strcmp(zArtifactKind, "doc")==0 || fossil_strcmp(zArtifactKind, "file")==0)
+    && (zArtifactPath[0] || zArtifactRef[0])
+  ){
+    const char *zPath = zArtifactPath[0] ? zArtifactPath : zArtifactRef;
+    @ <a href="%R/doc/tip/%T(zPath)">%h(zPath)</a>
+  }else if( zArtifactRef[0] ){
+    @ <code>%h(zArtifactRef)</code>
+  }else if( artifactRid>0 ){
+    zUuid = rid_to_uuid(artifactRid);
+    if( zUuid && zUuid[0] ){
+      @ <a href="%R/artifact/%S(zUuid)">artifact %d(artifactRid)</a>
+    }else{
+      @ <span class="dimmed">rid=%d(artifactRid)</span>
+    }
+    fossil_free(zUuid);
+  }else if( zArtifactPath[0] ){
+    @ <code>%h(zArtifactPath)</code>
+  }
+  if( zArtifactKind[0] ){
+    @ <span class="dimmed">| kind=%h(zArtifactKind)</span>
+  }
+  if( zArtifactStatus[0] ){
+    @ <span class="dimmed">| status=%h(zArtifactStatus)</span>
+  }
+  @ </div>
+}
+
+/*
+** Emit recent retrieval history for a single note.
+*/
+static void agent_render_note_retrieval_history(int nid){
+  Stmt q;
+  int shown = 0;
+  if( nid<=0 || !db_table_exists("repository","ai_retrieval_note")
+   || !db_table_exists("repository","ai_retrieval") ){
+    return;
+  }
+  db_prepare(&q,
+    "SELECT r.qid, coalesce(r.query_text,''),"
+    "       datetime(r.created_at,toLocal()), rn.rank"
+    "  FROM ai_retrieval_note AS rn"
+    "  JOIN ai_retrieval AS r ON r.qid=rn.qid"
+    " WHERE rn.nid=%d"
+    " ORDER BY r.qid DESC"
+    " LIMIT 3",
+    nid
+  );
+  while( db_step(&q)==SQLITE_ROW ){
+    if( shown==0 ){
+      @ <div style="margin-top:0.35em;"><span class="dimmed">recent retrievals:</span>
+    }
+    @ <div style="margin:0.15em 0 0 0.75em;">
+    @ <a href="%R/agent-retrieval?qid=%d(db_column_int(&q,0))">retrieval #%d(db_column_int(&q,0))</a>
+    @ <span class="dimmed">rank=%d(db_column_int(&q,3))</span>
+    if( db_column_text(&q, 2) && db_column_text(&q, 2)[0] ){
+      @ <span class="dimmed">[%h(db_column_text(&q,2))]</span>
+    }
+    if( db_column_text(&q, 1) && db_column_text(&q, 1)[0] ){
+      @ <br><span class="dimmed">%h(db_column_text(&q,1))</span>
+    }
+    @ </div>
+    shown++;
+  }
+  db_finalize(&q);
+  if( shown>0 ){
+    @ </div>
+  }
+}
+
+/*
 ** WEBPAGE: software
 **
 ** High-level landing page for SCM and collaboration interfaces.
@@ -1878,8 +2150,8 @@ void system_page(void){
   login_check_credentials();
   style_set_current_feature("system");
   agent_system_submenu();
-  style_header("Admin Control");
-  @ <div class="fossil-doc" data-title="Admin Control">
+  style_header("System Control");
+  @ <div class="fossil-doc" data-title="System Control">
   @ <p>This path groups repository administration and authentication controls
   @ under one top-level tab.</p>
   @ <div style="display:grid;grid-template-columns:repeat(3,minmax(16em,1fr));gap:0.8em;">
@@ -1970,6 +2242,352 @@ void knowledge_page(void){
   @ </div>
   @ </div>
   @ </div>
+  style_finish_page();
+}
+
+/*
+** WEBPAGE: knowledge-browser
+**
+** Browse all indexed knowledge elements with lightweight filters.
+*/
+void knowledge_browser_page(void){
+  const char *zTier = P("tier");
+  const char *zSource = P("source");
+  const char *zProcess = P("process");
+  const char *zSearch = P("q");
+  int showMerged = PB("show_merged");
+  int nLimit = atoi(PD("limit","40"));
+  char *zWhere = 0;
+  Blob sql = BLOB_INITIALIZER;
+  int totalNotes = 0;
+  int filteredNotes = 0;
+  int hasArtifactKind;
+  int hasArtifactRef;
+  int hasArtifactRid;
+  int hasArtifactPath;
+  int hasArtifactStatus;
+  Stmt q;
+  const char *zTierAny = zTier && zTier[0] ? "" : " selected";
+  const char *zTier0 = zTier && fossil_strcmp(zTier,"0")==0 ? " selected" : "";
+  const char *zTier1 = zTier && fossil_strcmp(zTier,"1")==0 ? " selected" : "";
+  const char *zTier2 = zTier && fossil_strcmp(zTier,"2")==0 ? " selected" : "";
+  const char *zTier3 = zTier && fossil_strcmp(zTier,"3")==0 ? " selected" : "";
+
+  if( nLimit<=0 ) nLimit = 40;
+  if( nLimit>200 ) nLimit = 200;
+  login_check_credentials();
+  if( !g.perm.Read ){
+    login_needed(g.anon.Read);
+    return;
+  }
+  style_set_current_feature("knowledge");
+  agent_knowledge_submenu();
+  style_header("Knowledge Browser");
+  @ <div class="fossil-doc" data-title="Knowledge Browser">
+  @ <p>Browse indexed knowledge elements across the pool, including processing
+  @ tier, source, retrieval history, and duplicate or merge lineage. This page
+  @ is the browse surface; the overview at <a href="%R/knowledge">/knowledge</a>
+  @ remains the dashboard.</p>
+  if( !db_table_exists("repository","ai_note") ){
+    @ <div style="border:1px solid #888;padding:0.8em;background:rgba(127,127,127,0.05);">
+    @ <b>No indexed knowledge records yet.</b><br>
+    @ <span class="dimmed">The repository does not have AI note tables yet, so
+    @ there is nothing to browse. Initialize or use an AI path that creates
+    @ `ai_note` records first.</span>
+    @ </div>
+    @ </div>
+    style_finish_page();
+    return;
+  }
+  hasArtifactKind = db_table_has_column("repository","ai_note","artifact_kind");
+  hasArtifactRef = db_table_has_column("repository","ai_note","artifact_ref");
+  hasArtifactRid = db_table_has_column("repository","ai_note","artifact_rid");
+  hasArtifactPath = db_table_has_column("repository","ai_note","artifact_path");
+  hasArtifactStatus = db_table_has_column("repository","ai_note","artifact_status");
+  zWhere = agent_knowledge_filter_clause(
+    zTier, zSource, zProcess, zSearch, showMerged
+  );
+  totalNotes = db_int(0, "SELECT count(*) FROM ai_note");
+  blob_init(&sql, "SELECT count(*) FROM ai_note", -1);
+  blob_append(&sql, zWhere, -1);
+  filteredNotes = db_int(0, "%s", blob_sql_text(&sql));
+  blob_reset(&sql);
+  @ <form method="get" action="%R/knowledge-browser">
+  @ <div style="border:1px solid #888;padding:0.8em;background:rgba(127,127,127,0.05);margin-bottom:1em;">
+  @ <div style="display:grid;grid-template-columns:repeat(5,minmax(10em,1fr));gap:0.7em;align-items:end;">
+  @ <label>Tier<br>
+  @ <select name="tier">
+  @ <option value=""%s(zTierAny)>All tiers</option>
+  @ <option value="3"%s(zTier3)>Tier 3</option>
+  @ <option value="2"%s(zTier2)>Tier 2</option>
+  @ <option value="1"%s(zTier1)>Tier 1</option>
+  @ <option value="0"%s(zTier0)>Tier 0</option>
+  @ </select></label>
+  @ <label>Source Type<br><input type="text" name="source" value="%h(zSource ? zSource : "")" placeholder="wiki, ticket, doc"></label>
+  @ <label>Process Level<br><input type="text" name="process" value="%h(zProcess ? zProcess : "")" placeholder="raw, grouped, curated, atomic"></label>
+  @ <label>Search<br><input type="text" name="q" value="%h(zSearch ? zSearch : "")" placeholder="title, body, or source ref"></label>
+  @ <label>Limit<br><input type="number" min="1" max="200" name="limit" value="%d(nLimit)"></label>
+  @ </div>
+  @ <div style="margin-top:0.7em;">
+  @ <label><input type="checkbox" name="show_merged" value="1"%s(showMerged ? " checked" : "")> include merged-away records</label>
+  @ <input type="submit" value="Filter">
+  @ <a href="%R/knowledge-browser" style="margin-left:0.7em;">Reset</a>
+  @ </div>
+  @ </div>
+  @ </form>
+  @ <div style="display:grid;grid-template-columns:repeat(4,minmax(10em,1fr));gap:0.8em;margin:0 0 1em 0;">
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);"><b>%d(filteredNotes)</b><br><span class="dimmed">matching notes</span></div>
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);"><b>%d(totalNotes)</b><br><span class="dimmed">indexed notes</span></div>
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);"><b>%d(db_int(0,"SELECT count(*) FROM ai_note WHERE coalesce(duplicate_of,0)!=0"))</b><br><span class="dimmed">marked duplicates</span></div>
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);"><b>%d(db_int(0,"SELECT count(*) FROM ai_note WHERE coalesce(merged_into,0)!=0"))</b><br><span class="dimmed">merged records</span></div>
+  @ </div>
+  @ <div style="margin:0 0 1em 0;" class="dimmed">
+  @ Artifact links on this page are best-effort and currently inferred from
+  @ `source_type`, `source_ref`, and `source_id`. Dedicated artifact reference
+  @ fields are the next schema step.
+  @ </div>
+  blob_init(&sql,
+    "SELECT nid, coalesce(tier,0),"
+    "       coalesce(nullif(title,''), printf('note #%d',nid)),"
+    "       substr(replace(replace(coalesce(body,''), char(13), ' '), char(10), ' '), 1, 220),"
+    "       coalesce(source_type,''), coalesce(source_id,0), coalesce(source_ref,''),"
+    "       coalesce(process_level,''), coalesce(retrieval_count,0),"
+    "       coalesce(datetime(last_retrieved_at,toLocal()),''),"
+    "       coalesce(duplicate_of,0), coalesce(merged_into,0),"
+    "       coalesce(datetime(updated_at,toLocal()),'')",
+    -1
+  );
+  blob_append_sql(&sql, ", %s",
+                  hasArtifactKind ? "coalesce(artifact_kind,'')" : "''");
+  blob_append_sql(&sql, ", %s",
+                  hasArtifactRef ? "coalesce(artifact_ref,'')" : "''");
+  blob_append_sql(&sql, ", %s",
+                  hasArtifactRid ? "coalesce(artifact_rid,0)" : "0");
+  blob_append_sql(&sql, ", %s",
+                  hasArtifactPath ? "coalesce(artifact_path,'')" : "''");
+  blob_append_sql(&sql, ", %s",
+                  hasArtifactStatus ? "coalesce(artifact_status,'')" : "''");
+  blob_append_sql(&sql, " FROM ai_note");
+  blob_append(&sql, zWhere, -1);
+  blob_append_sql(&sql,
+    " ORDER BY coalesce(tier,0) DESC, coalesce(retrieval_count,0) DESC,"
+    "          coalesce(updated_at,0) DESC, nid DESC"
+    " LIMIT %d",
+    nLimit
+  );
+  db_prepare(&q, "%s", blob_sql_text(&sql));
+  blob_reset(&sql);
+  if( db_step(&q)==SQLITE_ROW ){
+    do{
+      int nid = db_column_int(&q, 0);
+      int tier = db_column_int(&q, 1);
+      int sourceId = db_column_int(&q, 5);
+      int duplicateOf = db_column_int(&q, 10);
+      int mergedInto = db_column_int(&q, 11);
+      @ <div style="border:1px solid #888;padding:0.8em;background:rgba(127,127,127,0.05);margin:0 0 0.9em 0;">
+      @ <div style="display:flex;justify-content:space-between;gap:1em;flex-wrap:wrap;">
+      @ <div>
+      @ <b>%h(db_column_text(&q, 2))</b>
+      @ <span class="dimmed">[#%d(nid)]</span><br>
+      @ <span class="dimmed">%s(agent_note_tier_label(tier))</span>
+      @ <span class="dimmed">| process=%h(db_column_text(&q, 7))</span>
+      @ <span class="dimmed">| retrievals=%d(db_column_int(&q, 8))</span>
+      @ </div>
+      @ <div class="dimmed">updated %h(db_column_text(&q, 12))</div>
+      @ </div>
+      @ <div style="margin-top:0.35em;">%h(db_column_text(&q, 3))</div>
+      @ <div style="margin-top:0.35em;">
+      agent_render_note_source_link(
+        db_column_text(&q, 4), sourceId, db_column_text(&q, 6)
+      );
+      if( db_column_text(&q, 9) && db_column_text(&q, 9)[0] ){
+        @ <span class="dimmed">| last retrieved %h(db_column_text(&q, 9))</span>
+      }
+      @ </div>
+      agent_render_note_artifact_link(
+        db_column_text(&q, 13),
+        db_column_text(&q, 14),
+        db_column_int(&q, 15),
+        db_column_text(&q, 16),
+        db_column_text(&q, 17)
+      );
+      if( duplicateOf>0 || mergedInto>0 ){
+        @ <div style="margin-top:0.35em;">
+        if( duplicateOf>0 ){
+          @ <span class="dimmed">duplicate_of=#%d(duplicateOf)</span>
+        }
+        if( mergedInto>0 ){
+          if( duplicateOf>0 ){
+            @ <span class="dimmed"> | </span>
+          }
+          @ <span class="dimmed">merged_into=#%d(mergedInto)</span>
+        }
+        @ </div>
+      }
+      agent_render_note_retrieval_history(nid);
+      @ </div>
+    }while( db_step(&q)==SQLITE_ROW );
+  }else{
+    @ <div style="border:1px solid #888;padding:0.8em;background:rgba(127,127,127,0.05);">
+    @ No notes match the current filter set.
+    @ </div>
+  }
+  db_finalize(&q);
+  fossil_free(zWhere);
+  @ </div>
+  style_finish_page();
+}
+
+/*
+** WEBPAGE: knowledge-runs
+**
+** Browse saved orchestration runs from the repository ledger.
+*/
+void knowledge_runs_page(void){
+  Stmt q;
+  const char *zKind = PD("kind","");
+  int nLimit = atoi(PD("limit","40"));
+  login_check_credentials();
+  if( !g.perm.Read ){
+    login_needed(g.anon.Read);
+    return;
+  }
+  if( nLimit<=0 ) nLimit = 40;
+  style_set_current_feature("knowledge");
+  agent_knowledge_submenu();
+  style_header("Knowledge Runs");
+  @ <div class="fossil-doc" data-title="Knowledge Runs">
+  @ <p>Saved orchestration runs preserve recipe output, verification results,
+  @ diagnostics summaries, and other durable execution artifacts for later
+  @ inspection.</p>
+  @ <form method="get" action="%R/knowledge-runs"
+  @  style="margin:0 0 1em 0;padding:0.7em;border:1px solid #888;background:rgba(127,127,127,0.05);">
+  @ <label>Kind:
+  @ <select name="kind">
+  @ <option value=""%s(zKind[0]==0?" selected":"")>all</option>
+  @ <option value="recipe"%s(fossil_strcmp(zKind,"recipe")==0?" selected":"")>recipe</option>
+  @ <option value="verify"%s(fossil_strcmp(zKind,"verify")==0?" selected":"")>verify</option>
+  @ <option value="diagnostics"%s(fossil_strcmp(zKind,"diagnostics")==0?" selected":"")>diagnostics</option>
+  @ </select>
+  @ </label>
+  @ <label style="margin-left:0.7em;">Limit:
+  @ <input type="number" min="1" max="200" name="limit" value="%d(nLimit)" style="width:5em;">
+  @ </label>
+  @ <input type="submit" value="Apply" style="margin-left:0.7em;">
+  @ <a href="%R/knowledge-runs" style="margin-left:0.7em;">Reset</a>
+  @ </form>
+  if( !db_table_exists("repository","agentrun") ){
+    @ <div class="dimmed">No persisted run ledger yet.</div>
+    @ </div>
+    style_finish_page();
+    return;
+  }
+  db_prepare(&q,
+    "SELECT runid,"
+    "       datetime(created_at,toLocal()),"
+    "       coalesce(nullif(kind,''),'(unset)'),"
+    "       coalesce(nullif(name,''),'(unset)'),"
+    "       coalesce(nullif(status,''),'(unset)'),"
+    "       coalesce(nullif(summary,''),''),"
+    "       coalesce(json_extract(payload,'$.recipe'),'')"
+    "  FROM agentrun"
+    " WHERE (%Q='' OR kind=%Q)"
+    " ORDER BY runid DESC LIMIT %d",
+    zKind, zKind, nLimit
+  );
+  if( db_step(&q)==SQLITE_ROW ){
+    @ <div style="display:grid;gap:0.8em;">
+    do{
+      int runid = db_column_int(&q,0);
+      const char *zCreated = db_column_text(&q,1);
+      const char *zRunKind = db_column_text(&q,2);
+      const char *zName = db_column_text(&q,3);
+      const char *zStatus = db_column_text(&q,4);
+      const char *zSummary = db_column_text(&q,5);
+      const char *zRecipe = db_column_text(&q,6);
+      @ <div style="border:1px solid #888;padding:0.8em;background:rgba(127,127,127,0.05);">
+      @ <div><b><a href="%R/knowledge-run?runid=%d(runid)">Run #%d(runid)</a></b> %h(zRunKind)
+      @ <span class="dimmed">[%h(zName) | %h(zStatus) | %h(zCreated)]</span></div>
+      if( zRecipe && zRecipe[0] ){
+        @ <div class="dimmed" style="margin-top:0.2em;">recipe=%h(zRecipe)</div>
+      }
+      if( zSummary && zSummary[0] ){
+        @ <div style="margin-top:0.4em;">%h(zSummary)</div>
+      }
+      @ </div>
+    }while( db_step(&q)==SQLITE_ROW );
+    @ </div>
+  }else{
+    @ <div class="dimmed">No saved runs match this filter.</div>
+  }
+  db_finalize(&q);
+  @ </div>
+  style_finish_page();
+}
+
+/*
+** WEBPAGE: knowledge-run
+**
+** Show the full metadata and payload for one persisted orchestration run.
+*/
+void knowledge_run_page(void){
+  Stmt q;
+  int runid = atoi(PD("runid","0"));
+  login_check_credentials();
+  if( !g.perm.Read ){
+    login_needed(g.anon.Read);
+    return;
+  }
+  if( runid<=0 ){
+    cgi_redirectf("%R/knowledge-runs");
+    return;
+  }
+  style_set_current_feature("knowledge");
+  agent_knowledge_submenu();
+  style_header("Knowledge Run");
+  agent_run_create_tables();
+  db_prepare(&q,
+    "SELECT datetime(created_at,toLocal()),"
+    "       coalesce(nullif(kind,''),'(unset)'),"
+    "       coalesce(nullif(name,''),'(unset)'),"
+    "       coalesce(nullif(status,''),'(unset)'),"
+    "       coalesce(nullif(summary,''),''),"
+    "       coalesce(payload,''),"
+    "       coalesce(json_extract(payload,'$.recipe'),'') ,"
+    "       coalesce(json_extract(payload,'$.provider'),'') ,"
+    "       coalesce(json_extract(payload,'$.model'),'') ,"
+    "       coalesce(json_extract(payload,'$.query'),'') ,"
+    "       coalesce(json_extract(payload,'$.guidance_ref_count'),"
+    "                json_extract(payload,'$.verification.overall_ok'),"
+    "                '')"
+    "  FROM agentrun WHERE runid=%d",
+    runid
+  );
+  if( db_step(&q)!=SQLITE_ROW ){
+    db_finalize(&q);
+    style_finish_page();
+    fossil_redirect_home();
+    return;
+  }
+  @ <div class="fossil-doc" data-title="Knowledge Run">
+  @ <div style="margin-bottom:1em;"><a href="%R/knowledge-runs">&larr; Back to runs</a></div>
+  @ <div style="border:1px solid #888;padding:0.8em;background:rgba(127,127,127,0.05);margin-bottom:1em;">
+  @ <div><b>Run #%d(runid)</b></div>
+  @ <div class="dimmed">created=%h(db_column_text(&q,0)) kind=%h(db_column_text(&q,1)) name=%h(db_column_text(&q,2)) status=%h(db_column_text(&q,3))</div>
+  @ <div style="margin-top:0.5em;">%h(db_column_text(&q,4))</div>
+  @ </div>
+  @ <div style="display:grid;grid-template-columns:repeat(2,minmax(16em,1fr));gap:0.8em;margin-bottom:1em;">
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);"><b>recipe</b><br>%h(db_column_text(&q,6))</div>
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);"><b>provider / model</b><br>%h(db_column_text(&q,7)) / %h(db_column_text(&q,8))</div>
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);"><b>query</b><br>%h(db_column_text(&q,9))</div>
+  @ <div style="border:1px solid #888;padding:0.7em;background:rgba(127,127,127,0.05);"><b>guidance refs or overall_ok</b><br>%h(db_column_text(&q,10))</div>
+  @ </div>
+  @ <div style="border:1px solid #888;padding:0.8em;background:rgba(127,127,127,0.05);">
+  @ <div style="font-weight:bold;margin-bottom:0.4em;">Payload</div>
+  @ <pre style="white-space:pre-wrap">%h(db_column_text(&q,5))</pre>
+  @ </div>
+  @ </div>
+  db_finalize(&q);
   style_finish_page();
 }
 
@@ -3083,7 +3701,13 @@ static void agent_note_cmd(void){
   const char *zSourceRef;
   const char *zProcessLevel;
   const char *zMetadata;
+  const char *zArtifactKind;
+  const char *zArtifactRef;
+  const char *zArtifactRid;
+  const char *zArtifactPath;
+  const char *zArtifactStatus;
   Blob body = BLOB_INITIALIZER;
+  int artifactRid = 0;
   int tier = 1;
 
   zTitle = find_option("title", 0, 1);
@@ -3092,6 +3716,12 @@ static void agent_note_cmd(void){
   zSourceRef = find_option("source-ref", 0, 1);
   zProcessLevel = find_option("process-level", 0, 1);
   zMetadata = find_option("metadata", 0, 1);
+  zArtifactKind = find_option("artifact-kind", 0, 1);
+  zArtifactRef = find_option("artifact-ref", 0, 1);
+  zArtifactRid = find_option("artifact-rid", 0, 1);
+  zArtifactPath = find_option("artifact-path", 0, 1);
+  zArtifactStatus = find_option("artifact-status", 0, 1);
+  if( zArtifactRid ) artifactRid = atoi(zArtifactRid);
   if( zTier ){
     tier = atoi(zTier);
   }else if( find_option("tier-2", 0, 0) ){
@@ -3113,11 +3743,20 @@ static void agent_note_cmd(void){
   }else{
     usage("note ?TEXT|FILE? [--title TEXT] [--tier N] [--tier-2]"
           " [--source-type TYPE] [--source-ref REF]"
-          " [--process-level LEVEL] [--metadata JSON]");
+          " [--process-level LEVEL] [--metadata JSON]"
+          " [--artifact-kind KIND] [--artifact-ref REF]"
+          " [--artifact-rid N] [--artifact-path PATH]"
+          " [--artifact-status STATUS]");
+  }
+  if( !zArtifactStatus && ((zArtifactKind && zArtifactKind[0])
+   || (zArtifactRef && zArtifactRef[0]) || artifactRid>0
+   || (zArtifactPath && zArtifactPath[0])) ){
+    zArtifactStatus = "materialized";
   }
   ai_require_enabled();
   ai_note_create(
-    tier, zTitle, &body, zSourceType, 0, zSourceRef, zProcessLevel, zMetadata
+    tier, zTitle, &body, zSourceType, 0, zSourceRef, zProcessLevel, zMetadata,
+    zArtifactKind, zArtifactRef, artifactRid, zArtifactPath, zArtifactStatus
   );
   fossil_print("Added note%s%s\n",
                zTitle ? ": " : "",
@@ -3729,6 +4368,10 @@ static void agent_recipe_show_cmd(void){
   fossil_print("title: %s\n", pRecipe->zTitle);
   fossil_print("description: %s\n", pRecipe->zDescription);
   fossil_print("usage: %s\n", pRecipe->zUsage);
+  fossil_print("guidance-refs: %s\n",
+    pRecipe->zGuidanceRefs ? pRecipe->zGuidanceRefs : "");
+  fossil_print("guidance-ref-count: %d\n",
+    agent_list_count(pRecipe->zGuidanceRefs));
   fossil_print("phases: %s\n", pRecipe->zPhases);
   if( pPrimary ){
     fossil_print("primary-phase: %s\n", pPrimary->zName);
@@ -3747,6 +4390,8 @@ static void agent_recipe_run_cmd(void){
   const char *zProvider;
   const char *zModel;
   char *zQuery;
+  Blob guidance = BLOB_INITIALIZER;
+  Blob guidanceJson = BLOB_INITIALIZER;
   const char *zReply;
   int jsonFlag;
   int saveFlag;
@@ -3774,6 +4419,9 @@ static void agent_recipe_run_cmd(void){
     fossil_fatal("%s", blob_str(&err));
   }
   pPrimary = agent_recipe_primary_phase(pRecipe);
+  if( !agent_guidance_load(pRecipe->zGuidanceRefs, &guidance, &guidanceJson, &err) ){
+    fossil_fatal("%s", blob_str(&err));
+  }
   zQuery = agent_join_args(5);
   zProvider = agent_chat_provider();
   zModel = agent_default_model();
@@ -3785,6 +4433,7 @@ static void agent_recipe_run_cmd(void){
   Th_SetVar(g.interp, "provider", 8, zProvider, (int)strlen(zProvider));
   Th_SetVar(g.interp, "model", 5, zModel, (int)strlen(zModel));
   Th_SetVar(g.interp, "query", 5, zQuery ? zQuery : "", (int)strlen(zQuery ? zQuery : ""));
+  Th_SetVar(g.interp, "guidance", 8, blob_str(&guidance), blob_size(&guidance));
   if( Th_Eval(g.interp, 0, pRecipe->zScript, -1)==TH_ERROR ){
     const char *zResult = Th_GetResult(g.interp, &nReply);
     fossil_fatal("recipe TH1 error: %.*s", nReply, zResult ? zResult : "");
@@ -3792,9 +4441,12 @@ static void agent_recipe_run_cmd(void){
   zReply = Th_GetResult(g.interp, &nReply);
   blob_appendf(&json, "{\"status\":\"ok\",\"recipe\":%!j,\"title\":%!j,"
                "\"provider\":%!j,\"model\":%!j,\"query\":%!j,"
+               "\"guidance_ref_count\":%d,\"guidance_refs\":%s,"
                "\"phase_count\":%d,\"phases\":",
     pRecipe->zName, pRecipe->zTitle, zProvider, zModel,
-    zQuery ? zQuery : "", agent_list_count(pRecipe->zPhases)
+    zQuery ? zQuery : "",
+    agent_list_count(pRecipe->zGuidanceRefs), blob_str(&guidanceJson),
+    agent_list_count(pRecipe->zPhases)
   );
   agent_append_phase_name_array(&json, pRecipe->zPhases);
   blob_append(&json, ",\"primary_phase\":", -1);
@@ -3836,6 +4488,9 @@ static void agent_recipe_run_cmd(void){
     fossil_print("recipe: %s\n", pRecipe->zName);
     fossil_print("provider: %s\n", zProvider);
     fossil_print("model: %s\n", zModel);
+    if( pRecipe->zGuidanceRefs && pRecipe->zGuidanceRefs[0] ){
+      fossil_print("guidance-refs: %s\n", pRecipe->zGuidanceRefs);
+    }
     fossil_print("phases: %s\n", pRecipe->zPhases);
     if( pPrimary ){
       fossil_print("primary-phase: %s\n", pPrimary->zName);
@@ -3854,6 +4509,8 @@ static void agent_recipe_run_cmd(void){
       fossil_print("saved-run: %d\n", runid);
     }
   }
+  blob_reset(&guidanceJson);
+  blob_reset(&guidance);
   blob_reset(&json);
   fossil_free(zQuery);
 }
@@ -3962,6 +4619,9 @@ static void agent_capabilities_cmd(void){
 **    fossil agent note ?FILE? [--title TEXT] [--tier N]
 **                             [--source-type TYPE] [--source-ref REF]
 **                             [--process-level LEVEL] [--metadata JSON]
+**                             [--artifact-kind KIND] [--artifact-ref REF]
+**                             [--artifact-rid N] [--artifact-path PATH]
+**                             [--artifact-status STATUS]
 **       Add a new note to the AI data pool.
 **
 **    fossil agent retrieve QUERY [--limit N]
@@ -5232,7 +5892,8 @@ static int pool_put_th1(
   zBody = argv[2];
   if( argc==4 ) zMeta = argv[3];
   blob_append(&body, zBody, argl[2]);
-  nid = ai_note_create(tier, 0, &body, "th1-pool", 0, 0, 0, zMeta);
+  nid = ai_note_create(tier, 0, &body, "th1-pool", 0, 0, 0, zMeta,
+                       0, 0, 0, 0, 0);
   blob_reset(&body);
   Th_SetResultInt(interp, nid);
   return TH_OK;

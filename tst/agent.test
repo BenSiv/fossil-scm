@@ -105,6 +105,11 @@ write_file [file join $userCfgDir ai-agent.json] [subst -nocommands {
 
 fossil ai init
 
+file mkdir knowledge
+file mkdir [file join knowledge guidance]
+write_file [file join knowledge guidance summarize-context.md] "Anchor the summary in repository-specific facts instead of generic SCM advice.\n"
+write_file [file join knowledge guidance review-change.md] "Review pending changes with a code-review mindset.\n"
+
 write_file agent-note.txt "Embeddings let retrieval find this note.\n"
 fossil agent --agent-config [file join $cfgDir agent.json] note agent-note.txt --title "Embeddings Note"
 test agent-note-1 {[normalize_result] eq {Added note: Embeddings Note}}
@@ -119,13 +124,20 @@ test agent-note-3 {[normalize_result] eq {Added note: Chat Note}}
 fossil sql "SELECT group_concat(title || ':' || printf('%.2f',artifact_weight), ',') FROM ai_note WHERE title IN ('Embeddings Note','Chat Note') ORDER BY title"
 test agent-note-4 {[string first {Embeddings Note:0.08} [normalize_result]]>=0 && [string first {Chat Note:0.02} [normalize_result]]>=0}
 
+write_file agent-artifact-note.txt "Durable knowledge should link to an artifact.\n"
+fossil agent --agent-config [file join $cfgDir agent.json] note agent-artifact-note.txt --title "Artifact Note" --source-type doc --source-ref source/doc --artifact-kind doc --artifact-ref knowledge/tier3/artifact-note.md --artifact-path knowledge/tier3/artifact-note.md --artifact-status materialized
+test agent-note-5 {[normalize_result] eq {Added note: Artifact Note}}
+
+fossil sql "SELECT artifact_kind || '|' || artifact_ref || '|' || artifact_path || '|' || artifact_status FROM ai_note WHERE title='Artifact Note' ORDER BY nid DESC LIMIT 1"
+test agent-note-6 {[normalize_result] eq {doc|knowledge/tier3/artifact-note.md|knowledge/tier3/artifact-note.md|materialized}}
+
 ###############################################################################
 
 fossil agent --agent-config [file join $cfgDir agent.json] embed {probe text}
 test agent-embed-1 {[normalize_result] eq {0.125000, 0.250000, 0.500000, 1.000000}}
 
 fossil agent --agent-config [file join $cfgDir agent.json] semantic-index
-test agent-index-1 {[normalize_result] eq {Indexed 2 notes.}}
+test agent-index-1 {[normalize_result] eq {Indexed 3 notes.}}
 
 fossil sql "SELECT source_type || '|' || dim FROM ai_vector ORDER BY source_id DESC LIMIT 1"
 test agent-index-2 {[normalize_result] eq {note|4}}
@@ -134,6 +146,19 @@ fossil agent --agent-config [file join $cfgDir agent.json] retrieve {Embeddings 
 test agent-retrieve-1 {[string first {Embeddings Note} [normalize_result]]>=0}
 test agent-retrieve-2 {[string first {reinforcement: +} [normalize_result]]>=0}
 test agent-retrieve-3 {[string first {Embeddings Note} [normalize_result]] < [string first {Chat Note} [normalize_result]]}
+
+fossil agent --agent-config [file join $cfgDir agent.json] retrieve {automatic promotion candidate} --limit 1
+test agent-retrieve-4 {[string first {Artifact Note} [normalize_result]]>=0}
+fossil agent --agent-config [file join $cfgDir agent.json] retrieve {automatic promotion candidate} --limit 1
+test agent-retrieve-5 {[string first {Artifact Note} [normalize_result]]>=0}
+fossil agent --agent-config [file join $cfgDir agent.json] retrieve {automatic promotion candidate} --limit 1
+test agent-retrieve-6 {[string first {Artifact Note} [normalize_result]]>=0}
+fossil agent --agent-config [file join $cfgDir agent.json] retrieve {automatic promotion candidate} --limit 1
+test agent-retrieve-7 {[string first {Artifact Note} [normalize_result]]>=0}
+fossil sql "SELECT tier || '|' || process_level || '|' || coalesce(artifact_status,'') FROM ai_note WHERE title='Artifact Note' ORDER BY nid DESC LIMIT 1"
+test agent-retrieve-8 {[normalize_result] eq {2|curated|materialized}}
+fossil sql "SELECT r.action_summary FROM ai_review AS r JOIN ai_note AS n ON n.nid=r.nid WHERE n.title='Artifact Note' AND r.action_summary LIKE '%promotion=promoted-1-to-2%' ORDER BY r.review_id DESC LIMIT 1"
+test agent-retrieve-9 {[string first {promotion=promoted-1-to-2} [normalize_result]]>=0}
 
 ###############################################################################
 
@@ -166,17 +191,22 @@ fossil agent recipe show summarize-context
 test agent-recipe-3 {[string first "name: summarize-context" [normalize_result]]>=0}
 test agent-recipe-4 {[string first "phases: explore" [normalize_result]]>=0}
 test agent-recipe-5 {[string first "capabilities: agent_context,agent_run" [normalize_result]]>=0}
+test agent-recipe-5a {[string first "guidance-refs: knowledge/guidance/summarize-context.md" [normalize_result]]>=0}
+test agent-recipe-5b {[string first "guidance-ref-count: 1" [normalize_result]]>=0}
 
 fossil agent --agent-config [file join $cfgDir agent.json] recipe run summarize-context retrieval --json
 test agent-recipe-6 {[string first "\"recipe\":\"summarize-context\"" [normalize_result]]>=0}
 test agent-recipe-7 {[string first "\"provider\":\"codex\"" [normalize_result]]>=0}
 test agent-recipe-8 {[string first "REPOSITORY CONTEXT" [normalize_result]]>=0}
 test agent-recipe-9 {[string first "\"reply\":\"test-agent model=test-chat-model" [normalize_result]]>=0}
+test agent-recipe-9a {[string first "Anchor the summary in repository-specific facts" [normalize_result]]>=0}
 test agent-recipe-10 {[string first "\"phase_count\":1" [normalize_result]]>=0 && [string first "\"phases\"" [normalize_result]]>=0}
 test agent-recipe-11 {[string first "\"primary_phase\"" [normalize_result]]>=0 && [string first "\"name\":\"explore\"" [normalize_result]]>=0}
 test agent-recipe-12 {[string first "\"executive_summary\":\"Recipe completed successfully.\"" [normalize_result]]>=0}
 test agent-recipe-13 {[string first {"artifacts":[]} [normalize_result]]>=0 && [string first {"risks":[]} [normalize_result]]>=0}
 test agent-recipe-14 {[string first "\"capabilities\"" [normalize_result]]>=0}
+test agent-recipe-14a {[string first "\"guidance_ref_count\":1" [normalize_result]]>=0}
+test agent-recipe-14b {[string first "knowledge/guidance/summarize-context.md" [normalize_result]]>=0}
 
 ###############################################################################
 
@@ -223,6 +253,7 @@ test agent-ui-26 {[string first {id="agent-retrieval-history"} $RESULT]>=0}
 test agent-ui-27 {[string first {fetch('agent-pool')} $RESULT]>=0}
 test agent-ui-28 {[string first {fetch('agent-retrieval?qid='+encodeURIComponent(qid))} $RESULT]>=0}
 test agent-ui-29 {[string first {data-retrieval-qid=} $RESULT]>=0}
+test agent-ui-30 {[string first {%R/system} $RESULT]<0 && [string first {>Admin<} $RESULT]<0}
 
 ###############################################################################
 
@@ -237,6 +268,18 @@ test software-ui-5 {[string first {/forum} $RESULT]>=0 && [string first {/chat} 
 
 ###############################################################################
 
+set response [agent_http_request $repository GET /system {}]
+set RESULT $response
+set CODE 0
+test system-ui-1 {[agent_http_status $RESULT] eq {200}}
+test system-ui-2 {[string first {System Control} $RESULT]>=0}
+test system-ui-3 {[string first {/setup} $RESULT]>=0}
+test system-ui-4 {[string first {/logout} $RESULT]>=0 || [string first {/login} $RESULT]>=0}
+test system-ui-5 {[string first {Overview} $RESULT]>=0}
+test system-ui-6 {[string first {>System<} $RESULT]>=0 && [string first {/system} $RESULT]>=0}
+
+###############################################################################
+
 set response [agent_http_request $repository GET /knowledge {}]
 set RESULT $response
 set CODE 0
@@ -246,6 +289,7 @@ test knowledge-ui-3 {[string first {Processing Tiers} $RESULT]>=0}
 test knowledge-ui-4 {[string first {Agent Console} $RESULT]>=0 && [string first {/agentui} $RESULT]>=0}
 test knowledge-ui-5 {[string first {/ticket} $RESULT]>=0 && [string first {/wiki} $RESULT]>=0}
 test knowledge-ui-6 {[string first {Tier 0: Raw Intake} $RESULT]>=0 || [string first {Tier 1: Working Set} $RESULT]>=0}
+test knowledge-ui-7 {[string first {/knowledge-browser} $RESULT]>=0 && [string first {>Browse<} $RESULT]>=0}
 
 set emptyRepo [file normalize [file join [pwd] knowledge-empty.fossil]]
 catch {file delete $emptyRepo}
@@ -256,6 +300,12 @@ set CODE 0
 test knowledge-ui-empty-1 {[agent_http_status $RESULT] eq {200}}
 test knowledge-ui-empty-2 {[string first {Knowledge System} $RESULT]>=0}
 test knowledge-ui-empty-3 {[string first {AI pool tables are not initialized for this repository yet.} $RESULT]>=0}
+
+set response [agent_http_request $emptyRepo GET /knowledge-browser {}]
+set RESULT $response
+set CODE 0
+test knowledge-browser-empty-1 {[agent_http_status $RESULT] eq {200}}
+test knowledge-browser-empty-2 {[string first {No indexed knowledge records yet.} $RESULT]>=0}
 
 ###############################################################################
 
@@ -423,6 +473,55 @@ test agent-retrieval-3 {[string first {"query_text":"say only hi"} $RESULT]>=0}
 test agent-retrieval-4 {[string first {"notes":[} $RESULT]>=0}
 test agent-retrieval-5 {[string first {"duplication_status":} $RESULT]>=0 && [string first {"atomicity_status":} $RESULT]>=0}
 
+fossil sql {
+  INSERT INTO ai_note(
+    tier,title,body,source_type,source_id,source_ref,process_level,metadata,
+    artifact_weight,heat,retrieval_count,last_retrieved_at,content_hash,
+    duplicate_of,merged_into,created_at,updated_at
+  ) VALUES(
+    3,'Knowledge Browser Concept','Materialized concept body for browser test.',
+    'wiki',NULL,'Knowledge/Concept-A','atomic','{}',
+    0.3,1.0,2,julianday('now'),'browser-concept-hash',
+    NULL,NULL,julianday('now'),julianday('now')
+  );
+  INSERT INTO ai_note(
+    tier,title,body,source_type,source_id,source_ref,process_level,metadata,
+    artifact_weight,heat,retrieval_count,last_retrieved_at,content_hash,
+    duplicate_of,merged_into,created_at,updated_at
+  ) VALUES(
+    2,'Storage Model Draft','Draft note body for browser doc link.',
+    'doc',NULL,'doc/ai/STORAGE_MODEL.md','curated','{}',
+    0.28,1.0,1,julianday('now'),'browser-draft-hash',
+    NULL,NULL,julianday('now'),julianday('now')
+  );
+  INSERT INTO ai_retrieval(context_id,query_text,created_at)
+  VALUES(NULL,'browser seeded retrieval',julianday('now'));
+  INSERT INTO ai_retrieval_note(qid,nid,rank,score,tier_weight,reinforcement_delta)
+  VALUES(
+    (SELECT max(qid) FROM ai_retrieval),
+    (SELECT nid FROM ai_note WHERE title='Knowledge Browser Concept' ORDER BY nid DESC LIMIT 1),
+    1,0.95,0.8,0.2
+  );
+}
+
+set response [agent_http_request $repository GET /knowledge-browser {}]
+set RESULT $response
+set CODE 0
+test knowledge-browser-1 {[agent_http_status $RESULT] eq {200}}
+test knowledge-browser-2 {[string first {Knowledge Browser} $RESULT]>=0}
+test knowledge-browser-3 {[string first {Knowledge Browser Concept} $RESULT]>=0}
+test knowledge-browser-4 {[string first {/wiki?name=Knowledge/Concept-A} $RESULT]>=0}
+test knowledge-browser-5 {[string first {recent retrievals:} $RESULT]>=0 && [string first {retrieval #} $RESULT]>=0}
+test knowledge-browser-6 {[string first {/doc/tip/doc/ai/STORAGE_MODEL.md} $RESULT]>=0}
+test knowledge-browser-6a {[string first {/doc/tip/knowledge/tier3/artifact-note.md} $RESULT]>=0 && [string first {status=materialized} $RESULT]>=0}
+
+set response [agent_http_request $repository GET /knowledge-browser?tier=3&source=wiki&process=atomic&q=Concept {}]
+set RESULT $response
+set CODE 0
+test knowledge-browser-7 {[agent_http_status $RESULT] eq {200}}
+test knowledge-browser-8 {[string first {Knowledge Browser Concept} $RESULT]>=0}
+test knowledge-browser-9 {[string first {Storage Model Draft} $RESULT]<0}
+
 ###############################################################################
 
 set body [subst {sid=$lastSid&acid=8&feedback=useful&proof=$proof}]
@@ -485,11 +584,26 @@ test agent-run-8 {[string first "\"verify\"" [normalize_result]]>=0 && [string f
 fossil agent recipe run summarize-context retrieval --json --save
 test agent-run-9 {[string first "\"saved_run_id\":" [normalize_result]]>=0}
 test agent-run-10 {[string first "\"recipe_run\"" [normalize_result]]>=0 && [string first "\"recipe\":\"summarize-context\"" [normalize_result]]>=0}
+test agent-run-10a {[string first "knowledge/guidance/summarize-context.md" [normalize_result]]>=0}
 
 fossil agent run-log --limit 3
 test agent-run-11 {[string first {|recipe|summarize-context|ok|Recipe completed successfully.} [normalize_result]]>=0}
 test agent-run-12 {[string first {|verify|verify|ok|verify overall ok} [normalize_result]]>=0}
 test agent-run-13 {[string first {|diagnostics|diagnostics|ok|diagnostics overall ok} [normalize_result]]>=0}
+
+set response [agent_http_request $repository GET "/knowledge-runs" ""]
+set body [agent_http_body $response]
+test agent-runs-ui-1 {[agent_http_status $response] eq {200}}
+test agent-runs-ui-2 {[string first {Knowledge Runs} $body]>=0 && [string first {Run #} $body]>=0}
+test agent-runs-ui-3 {[string first {summarize-context} $body]>=0 && [string first {knowledge-run?runid=} $body]>=0}
+
+fossil sql "SELECT max(runid) FROM agentrun WHERE kind='recipe'"
+set latestRecipeRun [normalize_result]
+set response [agent_http_request $repository GET [subst "/knowledge-run?runid=$latestRecipeRun"] ""]
+set body [agent_http_body $response]
+test agent-runs-ui-4 {[agent_http_status $response] eq {200}}
+test agent-runs-ui-5 {[string first [subst {Run #$latestRecipeRun}] $body]>=0 && [string first {Payload} $body]>=0}
+test agent-runs-ui-6 {[string first {knowledge/guidance/summarize-context.md} $body]>=0 && [string first {test-chat-model} $body]>=0}
 
 ###############################################################################
 

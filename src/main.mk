@@ -597,7 +597,10 @@ all:	$(APPNAME)
 
 install:	all
 	mkdir -p $(INSTALLDIR)
-	cp $(APPNAME) $(INSTALLDIR)
+	fsl_tmp_app="$(INSTALLDIR)/.$(notdir $(APPNAME)).tmp.$$"; \
+	rm -f "$$fsl_tmp_app"; \
+	install -m 755 $(APPNAME) "$$fsl_tmp_app"; \
+	mv -f "$$fsl_tmp_app" "$(INSTALLDIR)/$(notdir $(APPNAME))"
 	if test -z "$(DESTDIR)"; then \
 		fsl_user_home="$$HOME"; \
 		fsl_user_name=""; \

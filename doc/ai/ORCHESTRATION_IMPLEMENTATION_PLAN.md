@@ -1,15 +1,20 @@
 # AI Agent Orchestration Implementation Plan
 
 Purpose: define one Fossil-native implementation plan for agent orchestration
-by combining the most useful ideas from three references:
+by combining the most useful ideas from five references:
 
 - `~/goose` for workflows, self-test, diagnostics, and explicit capabilities
 - `~/gentle-ai` for inspect/apply/verify discipline, rollback, and dry-run UX
 - OpenCode-oriented command and skill patterns for subtask execution,
   structured phase contracts, and async delegation
+- `~/openclaw` for execution contracts, approval binding, boundary inventories,
+  and runtime observability
+- `~/Fabric` for artifact-backed prompt assets, guidance layering, and reusable
+  context/session distinctions
 
-This is not a plan to turn Fossil into Goose, `gentle-ai`, or OpenCode. The
-goal is to absorb the useful patterns while preserving Fossil's strengths:
+This is not a plan to turn Fossil into Goose, `gentle-ai`, OpenCode,
+`openclaw`, or `Fabric`. The goal is to absorb the useful patterns while
+preserving Fossil's strengths:
 
 - single-binary deployment
 - repository-local state
@@ -33,6 +38,12 @@ In concrete terms:
 - **OpenCode contributes** the execution model:
   command-style phase entry points, structured sub-agent contracts, persistent
   artifacts, and async-first delegation
+- **`openclaw` contributes** the contract model:
+  explicit compatibility boundaries, approval binding, parseable machine
+  outputs, and stronger runtime observability
+- **`Fabric` contributes** the guidance model:
+  named prompt assets, reusable contexts, task-oriented patterns, and
+  artifact-backed override layers
 
 The implementation center remains Fossil itself:
 
@@ -70,6 +81,16 @@ config files.
 
 Subtasks should run through explicit command/recipe contracts with clear
 inputs, outputs, and artifact persistence.
+
+### 6. Guidance is artifact-backed
+
+Reusable AI guidance should increasingly live as inspectable repository
+artifacts rather than opaque embedded strings or only user-local state.
+
+### 7. Machine interfaces are contractual
+
+JSON modes, approval prompts, and web/API execution surfaces should have stable
+contracts that remain parseable and regression-testable as diagnostics grow.
 
 ## Source Contributions
 
@@ -111,6 +132,32 @@ High-value ideas to adopt:
 OpenCode is most useful as the source of the **execution contract and
 delegation model**.
 
+### `openclaw`
+
+High-value ideas to adopt:
+
+- approval binding to actual command argv, cwd, and environment
+- boundary inventories enforced by tests
+- explicit compatibility and partial-support documentation
+- strict machine-readable stdout behavior for JSON commands
+- better runtime observability around runs, logs, and tool activity
+
+`openclaw` is most useful as the source of the **contract, approval, and
+observability model**.
+
+### `Fabric`
+
+High-value ideas to adopt:
+
+- named prompt and strategy assets as files
+- explicit separation of reusable context from session history
+- inspectable prompt composition
+- layered built-in and user-authored guidance
+- task-oriented prompt entry points
+
+`Fabric` is most useful as the source of the **guidance and reusable prompt
+asset model**.
+
 ## Fossil-Native Architecture
 
 ### C Core Responsibilities
@@ -123,6 +170,8 @@ delegation model**.
 - structured event persistence
 - diagnostics export packaging
 - verification helpers and capability registry plumbing
+- approval binding and execution-contract enforcement
+- guidance artifact lookup and provenance capture
 
 ### TH1 Responsibilities
 
@@ -135,6 +184,8 @@ delegation model**.
 - capability-aware gating
 - subtask launch policy
 - run summaries
+- guidance composition from artifact-backed sources
+- phase-to-artifact provenance recording
 
 ### Persistent Objects
 
@@ -143,6 +194,7 @@ Fossil should add or formalize storage for:
 - agent recipes
 - recipe runs
 - recipe phases
+- guidance artifacts and guidance layers
 - eval runs and eval cases
 - capability declarations
 - diagnostics artifacts or export manifests
@@ -166,6 +218,7 @@ Suggested fields:
 - `description`
 - `parameters`
 - `instructions`
+- `guidance_refs`
 - `phases`
 - `allowed_capabilities`
 - `model_policy`
@@ -246,6 +299,8 @@ The event model should become the common runtime layer for:
 - final reply
 - errors
 - verification results
+- promotion and materialization decisions
+- guidance-source composition metadata
 
 This gives Fossil one inspectable execution history for both chat and recipes.
 
@@ -268,6 +323,7 @@ This applies to:
 - future provider installation helpers
 - recipe-managed repo guidance setup
 - capability policy changes
+- artifact materialization and promotion paths
 
 ### `fossil agent verify`
 
@@ -290,6 +346,12 @@ Outputs should be:
 - JSON for CI
 - optionally stored repo-local run rows
 
+For JSON modes, Fossil should adopt a hard contract:
+
+- stdout remains parseable JSON
+- warnings move to stderr or structured JSON fields
+- machine mode output does not gain prose prefixes over time
+
 ### Diagnostics Bundle
 
 Borrowing from Goose and reinforced by `gentle-ai`'s operational posture,
@@ -308,6 +370,37 @@ Suggested contents:
 - recipe run summaries
 
 Default behavior must favor safe redaction.
+
+## Execution Contract Model
+
+### Approval Binding
+
+Borrowing from `openclaw`, any agent-triggered command approval should bind to
+the actual execution contract, not only a human-readable command string.
+
+The binding should include:
+
+- canonical argv
+- working directory
+- relevant environment overrides
+- run or session identity
+
+This matters before Fossil expands write-capable orchestration or
+materialization flows.
+
+### Boundary Inventories
+
+Borrowing from `openclaw`, Fossil should maintain small inventory-style checks
+for critical AI boundaries, such as:
+
+- AI web routes
+- AI CLI entry points
+- recipe and TH1 orchestration hooks
+- artifact materialization paths
+- JSON contract surfaces
+
+The goal is not perfection on day one. The goal is visible, regression-tested
+boundaries.
 
 ## Delegation Model
 
@@ -362,6 +455,7 @@ Suggested sources:
 - versioned guidance file such as `.fossil-agent.md`
 - wiki-backed guidance page
 - repo-local recipe files
+- guidance artifacts under `knowledge/guidance/` or similar
 - built-in safety policy
 
 Precedence should be explicit:
@@ -372,6 +466,14 @@ Precedence should be explicit:
 4. user prompt
 
 The source of each injected context fragment should be persisted.
+
+Borrowing from `Fabric`, Fossil should also keep a clear distinction between:
+
+- reusable guidance artifacts
+- session or run history
+- retrieved knowledge notes
+
+That distinction should be visible in both UI and saved run details.
 
 ## Testing And Evals
 
@@ -408,6 +510,9 @@ Examples:
 - verify phase detecting missing embeddings
 - guidance precedence correctness
 - capability denial behavior
+- JSON stdout contract preservation under warning conditions
+- approval binding mismatch behavior
+- promotion and materialization transition correctness
 
 The important point is not model scoring. It is replayable behavioral
 regression coverage.

@@ -27,9 +27,14 @@ Scope: define additional SQLite tables in the Fossil repository database using a
     - `body` TEXT
     - `source_type` TEXT             -- prompt|reasoning|diff|wiki|ticket|chat|doc|summary
     - `source_id` INTEGER            -- references ai_context or artifact rid
-    - `source_ref` TEXT              -- durable reference when source_id is insufficient
+    - `source_ref` TEXT              -- provenance reference when source_id is insufficient
     - `process_level` TEXT           -- raw|grouped|curated|atomic
     - `metadata` TEXT                -- JSON metadata payload
+    - `artifact_kind` TEXT           -- wiki|technote|doc|file|artifact|ticket
+    - `artifact_ref` TEXT            -- stable durable-artifact reference
+    - `artifact_rid` INTEGER         -- blob rid when the artifact is a repository object
+    - `artifact_path` TEXT           -- versioned path when materialized as a file/doc
+    - `artifact_status` TEXT         -- none|draft|materialized|stale|superseded
     - `artifact_weight` REAL DEFAULT 0.05
     - `heat` REAL DEFAULT 1.0
     - `retrieval_count` INTEGER DEFAULT 0

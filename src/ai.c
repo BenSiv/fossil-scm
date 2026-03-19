@@ -43,7 +43,12 @@ int ai_note_create(
   int sourceId,
   const char *zSourceRef,
   const char *zProcessLevel,
-  const char *zMetadata
+  const char *zMetadata,
+  const char *zArtifactKind,
+  const char *zArtifactRef,
+  int artifactRid,
+  const char *zArtifactPath,
+  const char *zArtifactStatus
 );
 
 /* Start a retrieval event and return its qid. */
@@ -258,6 +263,56 @@ static const char *ai_atomicity_status(const char *zBody){
 }
 
 /*
+** Return the tier a note should be promoted to based on accumulated usage.
+** Promotions are conservative: duplicates and notes that need splitting do
+** not advance into higher durable tiers automatically.
+*/
+static int ai_promotion_target_tier(
+  int tier,
+  int retrievalCount,
+  double heat,
+  int isDuplicate,
+  const char *zAtomicity
+){
+  int target = tier;
+  if( isDuplicate ) return tier;
+  if( zAtomicity==0 ) zAtomicity = "ok";
+  if( target<1 && retrievalCount>=2 ){
+    target = 1;
+  }
+  if( target<2 && retrievalCount>=4 && heat>=1.60
+   && fossil_strcmp(zAtomicity, "needs-split")!=0 ){
+    target = 2;
+  }
+  if( target<3 && retrievalCount>=7 && heat>=2.60
+   && fossil_strcmp(zAtomicity, "ok")==0 ){
+    target = 3;
+  }
+  return target;
+}
+
+/*
+** Return the artifact status implied by automatic promotion when no explicit
+** materialization has happened yet.
+*/
+static const char *ai_promoted_artifact_status(
+  int tier,
+  const char *zArtifactKind,
+  const char *zArtifactRef,
+  int artifactRid,
+  const char *zArtifactPath,
+  const char *zCurrentStatus
+){
+  if( zCurrentStatus && zCurrentStatus[0] ) return zCurrentStatus;
+  if( (zArtifactKind && zArtifactKind[0]) || (zArtifactRef && zArtifactRef[0])
+   || artifactRid>0 || (zArtifactPath && zArtifactPath[0]) ){
+    return "materialized";
+  }
+  if( tier>=2 ) return "draft";
+  return "";
+}
+
+/*
 ** Insert a single review row.
 */
 static void ai_review_insert(
@@ -267,11 +322,13 @@ static void ai_review_insert(
   const char *zConnectivity,
   const char *zDuplication,
   const char *zTitleStatus,
-  const char *zMetadataStatus
+  const char *zMetadataStatus,
+  const char *zPromotionStatus
 ){
   char *zSummary = mprintf(
-    "atomicity=%s; connectivity=%s; duplication=%s; title=%s; metadata=%s",
-    zAtomicity, zConnectivity, zDuplication, zTitleStatus, zMetadataStatus
+    "atomicity=%s; connectivity=%s; duplication=%s; title=%s; metadata=%s; promotion=%s",
+    zAtomicity, zConnectivity, zDuplication, zTitleStatus, zMetadataStatus,
+    zPromotionStatus ? zPromotionStatus : "unchanged"
   );
   Stmt q;
   db_prepare(&q,
@@ -440,6 +497,11 @@ void ai_schema_ensure(void){
     "  source_ref TEXT,"
     "  process_level TEXT,"
     "  metadata TEXT,"
+    "  artifact_kind TEXT,"
+    "  artifact_ref TEXT,"
+    "  artifact_rid INTEGER,"
+    "  artifact_path TEXT,"
+    "  artifact_status TEXT,"
     "  artifact_weight REAL DEFAULT 0.05,"
     "  heat REAL DEFAULT 1.0,"
     "  retrieval_count INTEGER DEFAULT 0,"
@@ -546,6 +608,21 @@ void ai_schema_ensure(void){
   }
   if( !db_table_has_column("repository","ai_note","metadata") ){
     db_multi_exec("ALTER TABLE repository.ai_note ADD COLUMN metadata TEXT;");
+  }
+  if( !db_table_has_column("repository","ai_note","artifact_kind") ){
+    db_multi_exec("ALTER TABLE repository.ai_note ADD COLUMN artifact_kind TEXT;");
+  }
+  if( !db_table_has_column("repository","ai_note","artifact_ref") ){
+    db_multi_exec("ALTER TABLE repository.ai_note ADD COLUMN artifact_ref TEXT;");
+  }
+  if( !db_table_has_column("repository","ai_note","artifact_rid") ){
+    db_multi_exec("ALTER TABLE repository.ai_note ADD COLUMN artifact_rid INTEGER;");
+  }
+  if( !db_table_has_column("repository","ai_note","artifact_path") ){
+    db_multi_exec("ALTER TABLE repository.ai_note ADD COLUMN artifact_path TEXT;");
+  }
+  if( !db_table_has_column("repository","ai_note","artifact_status") ){
+    db_multi_exec("ALTER TABLE repository.ai_note ADD COLUMN artifact_status TEXT;");
   }
   if( !db_table_has_column("repository","ai_note","artifact_weight") ){
     db_multi_exec(
@@ -655,7 +732,12 @@ int ai_note_create(
   int sourceId,
   const char *zSourceRef,
   const char *zProcessLevel,
-  const char *zMetadata
+  const char *zMetadata,
+  const char *zArtifactKind,
+  const char *zArtifactRef,
+  int artifactRid,
+  const char *zArtifactPath,
+  const char *zArtifactStatus
 ){
   Blob hash = BLOB_INITIALIZER;
   Stmt q;
@@ -696,11 +778,13 @@ int ai_note_create(
   db_prepare(&q,
     "INSERT INTO repository.ai_note("
     "  tier,title,body,source_type,source_id,source_ref,process_level,"
-    "  metadata,artifact_weight,heat,retrieval_count,last_retrieved_at,content_hash,"
+    "  metadata,artifact_kind,artifact_ref,artifact_rid,artifact_path,"
+    "  artifact_status,artifact_weight,heat,retrieval_count,last_retrieved_at,content_hash,"
     "  duplicate_of,merged_into,created_at,updated_at"
     ") VALUES("
     "  :tier,:title,:body,:source_type,:source_id,:source_ref,:process_level,"
-    "  :metadata,:artifact_weight,1.0,0,NULL,:content_hash,NULL,NULL,"
+    "  :metadata,:artifact_kind,:artifact_ref,:artifact_rid,:artifact_path,"
+    "  :artifact_status,:artifact_weight,1.0,0,NULL,:content_hash,NULL,NULL,"
     "  julianday('now'),julianday('now')"
     ");"
   );
@@ -714,6 +798,16 @@ int ai_note_create(
   else db_bind_null(&q, ":source_ref");
   db_bind_text(&q, ":process_level", zProcessLevel);
   db_bind_text(&q, ":metadata", zMetadata);
+  if( zArtifactKind && zArtifactKind[0] ) db_bind_text(&q, ":artifact_kind", zArtifactKind);
+  else db_bind_null(&q, ":artifact_kind");
+  if( zArtifactRef && zArtifactRef[0] ) db_bind_text(&q, ":artifact_ref", zArtifactRef);
+  else db_bind_null(&q, ":artifact_ref");
+  if( artifactRid>0 ) db_bind_int(&q, ":artifact_rid", artifactRid);
+  else db_bind_null(&q, ":artifact_rid");
+  if( zArtifactPath && zArtifactPath[0] ) db_bind_text(&q, ":artifact_path", zArtifactPath);
+  else db_bind_null(&q, ":artifact_path");
+  if( zArtifactStatus && zArtifactStatus[0] ) db_bind_text(&q, ":artifact_status", zArtifactStatus);
+  else db_bind_null(&q, ":artifact_status");
   db_bind_double(&q, ":artifact_weight", rArtifactWeight);
   db_bind_str(&q, ":content_hash", &hash);
   db_step(&q);
@@ -805,7 +899,11 @@ void ai_retrieval_review(int qid){
   db_prepare(&q,
     "SELECT n.nid, coalesce(n.title,''), coalesce(n.body,''),"
     "       coalesce(n.tier,0), coalesce(n.process_level,''),"
-    "       coalesce(n.metadata,''), coalesce(n.content_hash,'')"
+    "       coalesce(n.metadata,''), coalesce(n.content_hash,''),"
+    "       coalesce(n.retrieval_count,0), coalesce(n.heat,1.0),"
+    "       coalesce(n.artifact_kind,''), coalesce(n.artifact_ref,''),"
+    "       coalesce(n.artifact_rid,0), coalesce(n.artifact_path,''),"
+    "       coalesce(n.artifact_status,'')"
     "  FROM repository.ai_note n"
     "  JOIN repository.ai_retrieval_note r ON r.nid=n.nid"
     " WHERE r.qid=%d"
@@ -820,11 +918,19 @@ void ai_retrieval_review(int qid){
     const char *zProcess = db_column_text(&q, 4);
     const char *zMetadata = db_column_text(&q, 5);
     const char *zHash = db_column_text(&q, 6);
+    int retrievalCount = db_column_int(&q, 7);
+    double heat = db_column_double(&q, 8);
+    const char *zArtifactKind = db_column_text(&q, 9);
+    const char *zArtifactRef = db_column_text(&q, 10);
+    int artifactRid = db_column_int(&q, 11);
+    const char *zArtifactPath = db_column_text(&q, 12);
+    const char *zArtifactStatus = db_column_text(&q, 13);
     const char *zAtomicity = ai_atomicity_status(zBody);
     char *zConnectivity = mprintf("linked-%d", nPeers);
     char *zDuplication = 0;
     char *zTitleStatus = 0;
     char *zMetadataStatus = 0;
+    char *zPromotionStatus = 0;
     int canonicalNid = 0;
 
     if( zHash && zHash[0] ){
@@ -895,14 +1001,46 @@ void ai_retrieval_review(int qid){
       zMetadataStatus = mprintf("ok");
     }
 
+    {
+      int targetTier = ai_promotion_target_tier(
+        tier, retrievalCount, heat, canonicalNid>0 && canonicalNid!=nid, zAtomicity
+      );
+      if( targetTier>tier ){
+        const char *zNewProcess = ai_process_level_for_tier(targetTier);
+        const char *zNewArtifactStatus = ai_promoted_artifact_status(
+          targetTier, zArtifactKind, zArtifactRef, artifactRid, zArtifactPath,
+          zArtifactStatus
+        );
+        db_multi_exec(
+          "UPDATE repository.ai_note"
+          "   SET tier=%d,"
+          "       process_level=%Q,"
+          "       artifact_status=CASE"
+          "         WHEN coalesce(artifact_status,'')<>'' THEN artifact_status"
+          "         WHEN %Q<>'' THEN %Q"
+          "         ELSE artifact_status END,"
+          "       updated_at=julianday('now')"
+          " WHERE nid=%d;",
+          targetTier, zNewProcess,
+          zNewArtifactStatus, zNewArtifactStatus, nid
+        );
+        zPromotionStatus = mprintf(
+          "promoted-%d-to-%d", tier, targetTier
+        );
+      }else{
+        zPromotionStatus = mprintf("unchanged");
+      }
+    }
+
     ai_review_insert(
       qid, nid, zAtomicity, zConnectivity, zDuplication,
-      zTitleStatus, zMetadataStatus
+      zTitleStatus, zMetadataStatus, zPromotionStatus
     );
     fossil_free(zConnectivity);
     fossil_free(zDuplication);
     fossil_free(zTitleStatus);
     fossil_free(zMetadataStatus);
+    fossil_free(zPromotionStatus);
   }
   db_finalize(&q);
   db_end_transaction(0);
@@ -943,7 +1081,8 @@ void ai_record_commit(int rid, const char *zComment){
     reasoningNoteId = ai_note_create(
       0, zTitle, &reasoning, "reasoning", rid,
       "env:FOSSIL_AI_REASONING", "raw",
-      "{\"origin\":\"commit-env\",\"field\":\"FOSSIL_AI_REASONING\"}"
+      "{\"origin\":\"commit-env\",\"field\":\"FOSSIL_AI_REASONING\"}",
+      0, 0, 0, 0, 0
     );
     blob_reset(&reasoning);
     fossil_free(zTitle);
@@ -1057,12 +1196,14 @@ void ai_cmd(void){
     blob_init(&noteA, "# Selftest Topic\n\nShared note body.\n", -1);
     nidA = ai_note_create(
       1, "selftest note a", &noteA, "manual", 0, "selftest/a",
-      "grouped", "{\"selftest\":true,\"slot\":\"a\"}"
+      "grouped", "{\"selftest\":true,\"slot\":\"a\"}",
+      0, 0, 0, 0, 0
     );
     blob_init(&noteB, "# Selftest Topic\n\nShared note body.\n", -1);
     nidB = ai_note_create(
       2, "selftest note b", &noteB, "manual", 0, "selftest/b",
-      "curated", "{\"selftest\":true,\"slot\":\"b\"}"
+      "curated", "{\"selftest\":true,\"slot\":\"b\"}",
+      0, 0, 0, 0, 0
     );
     db_multi_exec(
       "UPDATE repository.ai_note"

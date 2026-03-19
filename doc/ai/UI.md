@@ -17,6 +17,11 @@ Primary interfaces exposed to the user.
 - Note browser with tier, processing level, and source filters
 - Retrieval count and related-note graph
 - Semantic retrieval can use a separate embedding model from the chat model
+- Browse all indexed knowledge elements, not only the current chat session
+- Show artifact location or artifact reference for durable notes
+- Expose duplicate and merge lineage
+- Expose retrieval history per note and per answer
+- Link indexed notes to their repository artifact form when materialized
 
 ## Wiki
 - Atomic concepts with tier badges
@@ -31,3 +36,13 @@ Primary interfaces exposed to the user.
 
 ## Tasks
 - Minimal task list tied to artifacts
+
+## Storage Expectation
+
+The UI should span both storage layers:
+
+- SQLite-backed runtime and retrieval metadata
+- repository artifacts holding durable textual knowledge
+
+Users should not need to know which storage layer currently holds a given
+knowledge element in order to browse it.
