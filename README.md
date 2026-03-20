@@ -22,7 +22,8 @@ Canonical documents for this fork live under [`doc/`](doc/):
 - Licence: [`doc/LICENCE.md`](doc/LICENCE.md)
 - Repository Map: [`doc/specs/repo-map.md`](doc/specs/repo-map.md)
 - AI docs: [`doc/ai/`](doc/ai/)
-  Includes the data pool strategy in [`doc/ai/DATA_POOL.md`](doc/ai/DATA_POOL.md).
+  Includes the [User Guide](doc/ai/USER_GUIDE.md) for active agent features.
+  Data pool strategy is in [`doc/ai/DATA_POOL.md`](doc/ai/DATA_POOL.md).
   Provider/model design notes live in
   [`doc/ai/PROVIDER_MODEL_SPLIT.md`](doc/ai/PROVIDER_MODEL_SPLIT.md) and
   [`doc/ai/IMPLEMENTATION_PLAN.md`](doc/ai/IMPLEMENTATION_PLAN.md), which now
