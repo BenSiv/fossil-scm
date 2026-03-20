@@ -14,6 +14,9 @@
 
 /* From file.c */
 char *fossil_getenv(const char *zName);
+void agent_promote_markdown_notes(int force, int respectSetting,
+  int *pnAdded, int *pnUpdated, int *pnSkipped
+);
 
 /*
 ** SETTING: ai-enable width=5 default=0
@@ -282,6 +285,19 @@ double ai_note_authority_score(int nid){
     nid
   );
 }
+
+/*
+** Return a status string indicating the atomicity of the note body.
+*/
+const char *ai_atomicity_status(const char *zBody){
+  int nParagraph = 0;
+  int nHeading = 0;
+  int bInText = 0;
+  int i;
+  for(i=0; zBody[i]; i++){
+    if( zBody[i]=='#' && (i==0 || zBody[i-1]=='\n') ){
+      nHeading++;
+    }
     if( zBody[i]=='\n' ){
       if( zBody[i+1]=='\n' ) bInText = 0;
     }else if( !fossil_isspace(zBody[i]) ){
@@ -1186,6 +1202,7 @@ void ai_cmd(void){
     verify_all_options();
     db_set_int("ai-enable", 1, 0);
     ai_schema_ensure();
+    agent_promote_markdown_notes(1, 1, 0, 0, 0);
     fossil_print("ai: initialized\n");
     return;
   }

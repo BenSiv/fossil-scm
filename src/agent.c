@@ -25,9 +25,9 @@
 #include "json_detail.h"
 #endif
 
-int ai_is_enabled(void);
 void ai_schema_ensure(void);
 void ai_require_enabled(void);
+int ai_is_enabled(void);
 int ai_note_create(
   int tier,
   const char *zTitle,
@@ -211,6 +211,12 @@ static int agentLastRetrievalQid = 0;
 ** SETTING: agent-history-count width=10 default=50
 **
 ** Number of recent agent chat messages to render in /agentui.
+*/
+/*
+** SETTING: agent-auto-promote-markdown boolean default=off
+**
+** If enabled, automatically promote markdown files in the checkout into tier 1
+** knowledge notes for retrieval.
 */
 
 /*
@@ -603,6 +609,31 @@ static char *agent_config_get(const char *zKey){
   (void)zKey;
   return 0;
 #endif
+}
+
+/*
+** Return non-zero if zVal is a truthy string ("1","yes","true","on").
+*/
+static int agent_truthy_value(const char *zVal){
+  if( zVal==0 || zVal[0]==0 ) return 0;
+  if( fossil_stricmp(zVal, "1")==0 ) return 1;
+  if( fossil_stricmp(zVal, "yes")==0 ) return 1;
+  if( fossil_stricmp(zVal, "true")==0 ) return 1;
+  if( fossil_stricmp(zVal, "on")==0 ) return 1;
+  return atoi(zVal)!=0;
+}
+
+/*
+** Lookup a boolean flag from cfg/ai-agent.json, falling back to dflt.
+*/
+static int agent_config_get_boolean(const char *zKey, int dflt){
+  char *zVal = agent_config_get(zKey);
+  int rc = dflt;
+  if( zVal ){
+    rc = agent_truthy_value(zVal);
+    fossil_free(zVal);
+  }
+  return rc;
 }
 
 /*
@@ -3357,6 +3388,130 @@ static void agent_repomap_cmd(void){
 }
 
 /*
+** Return non-zero if zPath looks like a markdown file name.
+*/
+static int agent_is_markdown_path(const char *zPath){
+  const char *zExt;
+  if( zPath==0 ) return 0;
+  zExt = strrchr(zPath, '.');
+  if( zExt==0 ) return 0;
+  if( fossil_stricmp(zExt, ".md")==0 ) return 1;
+  if( fossil_stricmp(zExt, ".markdown")==0 ) return 1;
+  if( fossil_stricmp(zExt, ".mdown")==0 ) return 1;
+  if( fossil_stricmp(zExt, ".mkd")==0 ) return 1;
+  if( fossil_stricmp(zExt, ".mdx")==0 ) return 1;
+  return 0;
+}
+
+/*
+** Return non-zero if auto-promotion of markdown notes is enabled.
+*/
+static int agent_auto_promote_markdown_enabled(void){
+  int rc = agent_config_get_boolean("auto_promote_markdown", -1);
+  if( rc>=0 ) return rc;
+  return db_get_boolean("agent-auto-promote-markdown", 0);
+}
+
+/*
+** Promote markdown files in the current checkout into tier 1 notes.
+** If force is false, runs at most once per checkout (tracked locally).
+*/
+void agent_promote_markdown_notes(int force, int respectSetting,
+  int *pnAdded, int *pnUpdated, int *pnSkipped
+){
+  Stmt q;
+  int vid;
+  int added = 0;
+  int updated = 0;
+  int skipped = 0;
+
+  if( pnAdded ) *pnAdded = 0;
+  if( pnUpdated ) *pnUpdated = 0;
+  if( pnSkipped ) *pnSkipped = 0;
+  if( respectSetting && !agent_auto_promote_markdown_enabled() ) return;
+  if( !g.localOpen ) return;
+  if( g.zLocalRoot==0 || g.zLocalRoot[0]==0 ) return;
+  if( !ai_is_enabled() ) return;
+  vid = db_lget_int("checkout", 0);
+  if( vid==0 ) return;
+  if( !force ){
+    int lastVid = db_lget_int("agent-md-promote-vid", 0);
+    if( lastVid==vid ) return;
+  }
+
+  ai_require_enabled();
+  db_prepare(&q,
+    "SELECT pathname FROM vfile"
+    " WHERE vid=%d AND deleted=0"
+    "   AND ("
+    "     lower(pathname) LIKE '%%.md'"
+    "  OR lower(pathname) LIKE '%%.markdown'"
+    "  OR lower(pathname) LIKE '%%.mdown'"
+    "  OR lower(pathname) LIKE '%%.mkd'"
+    "  OR lower(pathname) LIKE '%%.mdx'"
+    "   )"
+    " ORDER BY pathname",
+    vid
+  );
+  while( db_step(&q)==SQLITE_ROW ){
+    const char *zPath = db_column_text(&q, 0);
+    Blob body = BLOB_INITIALIZER;
+    char *zAbs = 0;
+    if( !agent_is_markdown_path(zPath) ){
+      skipped++;
+      continue;
+    }
+    if( db_exists(
+          "SELECT 1 FROM ai_note"
+          " WHERE artifact_path=%Q"
+          "   AND coalesce(merged_into,0)=0"
+          "   AND coalesce(tier,0)>=1",
+          zPath
+        ) ){
+      skipped++;
+      continue;
+    }
+    if( db_exists(
+          "SELECT 1 FROM ai_note"
+          " WHERE artifact_path=%Q"
+          "   AND coalesce(merged_into,0)=0",
+          zPath
+        ) ){
+      db_multi_exec(
+        "UPDATE ai_note"
+        "   SET tier=1, updated_at=julianday('now')"
+        " WHERE artifact_path=%Q"
+        "   AND coalesce(merged_into,0)=0",
+        zPath
+      );
+      updated++;
+      continue;
+    }
+    zAbs = mprintf("%s%s", g.zLocalRoot, zPath);
+    if( blob_read_from_file(&body, zAbs, ExtFILE)<0 || blob_size(&body)==0 ){
+      fossil_free(zAbs);
+      blob_reset(&body);
+      skipped++;
+      continue;
+    }
+    ai_note_create(
+      1, 0, &body, "doc", 0, zPath, 0, 0,
+      "doc", 0, 0, zPath, "materialized"
+    );
+    added++;
+    fossil_free(zAbs);
+    blob_reset(&body);
+  }
+  db_finalize(&q);
+  if( !force ){
+    db_lset_int("agent-md-promote-vid", vid);
+  }
+  if( pnAdded ) *pnAdded = added;
+  if( pnUpdated ) *pnUpdated = updated;
+  if( pnSkipped ) *pnSkipped = skipped;
+}
+
+/*
 ** Create or update a wiki page with a manager-facing development entry.
 */
 static void agent_wiki_sync_cmd(void){
@@ -3623,8 +3778,16 @@ typedef void (*agent_chunk_handler)(const char *zChunk, int nChunk, void *pApp);
 */
 static void agent_sse_handler(const char *zChunk, int nChunk, void *pApp){
   if( nChunk<=0 ) return;
-  CX("data: %!j\n\n", zChunk);
-  fflush(stdout);
+  if( zChunk && nChunk>0 ){
+    Blob tmp = BLOB_INITIALIZER;
+    blob_append(&tmp, zChunk, nChunk);
+    agent_strip_ansi(&tmp);
+    if( blob_size(&tmp)>0 ){
+      CX("data: %!j\n\n", blob_str(&tmp));
+      fflush(stdout);
+    }
+    blob_reset(&tmp);
+  }
 }
 
 static int agent_run_backend_core(
@@ -3638,6 +3801,8 @@ static int agent_run_backend_core(
 ){
   Blob cmd = BLOB_INITIALIZER;
   Blob envCmd = BLOB_INITIALIZER;
+  Blob err = BLOB_INITIALIZER;
+  Blob *pErrUse = pErr ? pErr : &err;
   FILE *in;
   FILE *out = 0;
   int fdIn = -1;
@@ -3646,17 +3811,19 @@ static int agent_run_backend_core(
   const char *zCmdTmpl = agent_command_template();
 
   if( pReply ) blob_zero(pReply);
-  blob_zero(pErr);
-  if( agent_validate_provider_model(zProvider, zModel, pErr) ){
+  blob_zero(pErrUse);
+  if( agent_validate_provider_model(zProvider, zModel, pErrUse) ){
+    if( pErr==0 ) blob_reset(&err);
     return 1;
   }
   agent_expand_command(&cmd, zCmdTmpl, zModel);
   agent_prepare_command(&envCmd, "chat", zProvider, zModel, &cmd);
   rc = popen2(blob_str(&envCmd), &fdIn, &out, &childPid, 0);
   if( rc!=0 || fdIn<0 || out==0 ){
-    blob_appendf(pErr, "unable to run configured agent command");
+    blob_appendf(pErrUse, "unable to run configured agent command");
     blob_reset(&cmd);
     blob_reset(&envCmd);
+    if( pErr==0 ) blob_reset(&err);
     return 1;
   }
   fprintf(out, "%s", zPrompt);
@@ -3665,9 +3832,10 @@ static int agent_run_backend_core(
   in = fdopen(fdIn, "rb");
   if( in==0 ){
     pclose2(fdIn, out, childPid);
-    blob_appendf(pErr, "unable to read output from configured agent command");
+    blob_appendf(pErrUse, "unable to read output from configured agent command");
     blob_reset(&cmd);
     blob_reset(&envCmd);
+    if( pErr==0 ) blob_reset(&err);
     return 1;
   }
   if( xChunk ){
@@ -3687,16 +3855,16 @@ static int agent_run_backend_core(
     agent_strip_prefix_noise(pReply);
     blob_trim(pReply);
     if( blob_size(pReply)==0 ){
-      if( pErr ){
-        blob_appendf(pErr, "agent backend returned an empty reply");
-      }
+      blob_appendf(pErrUse, "agent backend returned an empty reply");
       blob_reset(&cmd);
       blob_reset(&envCmd);
+      if( pErr==0 ) blob_reset(&err);
       return 1;
     }
   }
   blob_reset(&cmd);
   blob_reset(&envCmd);
+  if( pErr==0 ) blob_reset(&err);
   return 0;
 }
 
@@ -4168,6 +4336,23 @@ static void agent_note_cmd(void){
                zTitle ? ": " : "",
                zTitle ? zTitle : "");
   blob_reset(&body);
+}
+
+/*
+** Promote markdown files in the current checkout into tier 1 notes.
+*/
+static void agent_promote_markdown_cmd(void){
+  int forceFlag = find_option("force", "f", 0)!=0;
+  int added = 0;
+  int updated = 0;
+  int skipped = 0;
+  verify_all_options();
+  if( g.argc!=3 ){
+    usage("promote-markdown [--force]");
+  }
+  agent_promote_markdown_notes(forceFlag, 0, &added, &updated, &skipped);
+  fossil_print("promoted: added=%d updated=%d skipped=%d\n",
+               added, updated, skipped);
 }
 
 /*
@@ -5028,6 +5213,9 @@ static void agent_capabilities_cmd(void){
 **    fossil agent semantic-index
 **       Generate embeddings for all notes and store them in ai_vector.
 **
+**    fossil agent promote-markdown [--force]
+**       Promote markdown files in the checkout into tier 1 notes.
+**
 **    fossil agent note ?FILE? [--title TEXT] [--tier N]
 **                             [--source-type TYPE] [--source-ref REF]
 **                             [--process-level LEVEL] [--metadata JSON]
@@ -5096,6 +5284,8 @@ void agent_cmd(void){
     agent_verify_cmd();
   }else if( fossil_strcmp(zCmd, "semantic-index")==0 ){
     agent_semantic_index_cmd();
+  }else if( fossil_strcmp(zCmd, "promote-markdown")==0 ){
+    agent_promote_markdown_cmd();
   }else if( fossil_strcmp(zCmd, "wiki-sync")==0 ){
     agent_wiki_sync_cmd();
   }else if( fossil_strcmp(zCmd, "pool-process")==0 ){
@@ -5388,7 +5578,8 @@ static const char zAgentOrchestrateBuiltin[] =
 "set thinking_tag [agent_config thinking_tag]\n"
 "if {[string compare $thinking_tag \"\"] == 0} {set thinking_tag \"thought\"}\n"
 "\n"
-"set full_prompt $msg\n"
+"set system_prompt \"You are the Fossil AI Agent. Provide concise, direct answers. Do not include chain-of-thought. If you need to reason, put it inside <$thinking_tag>...</$thinking_tag> and do not include it in the final answer.\"\n"
+"set full_prompt \"$system_prompt\\n\\nUser request:\\n$msg\"\n"
 "set context \"\"\n"
 "set retrieval_qid 0\n"
 "\n"
@@ -5405,7 +5596,7 @@ static const char zAgentOrchestrateBuiltin[] =
 "      set event_meta \"{\\\"stage\\\":\\\"context\\\",\\\"hidden\\\":true}\"\n"
 "    }\n"
 "    agent_save_event $sid $user \"context\" $provider $model $event_meta $context\n"
-"    set full_prompt \"Context:\\n$context\\n\\nUser request:\\n$msg\"\n"
+"    set full_prompt \"$system_prompt\\n\\nContext:\\n$context\\n\\nUser request:\\n$msg\"\n"
 "  }\n"
 "  set event_meta \"{\\\"stage\\\":\\\"context\\\",\\\"status\\\":\\\"ok\\\"}\"\n"
 "  set event_msg \"Repository context assembled\"\n"
@@ -5470,12 +5661,12 @@ static const char zAgentOrchestrateBuiltin[] =
 "agent_save_event $sid $user \"progress\" $provider $model $event_meta $event_msg\n"
 "\n"
 "set meta \"\"\n"
-"if {[string compare $thinking \"\"] != 0} {\n"
-"  set meta \"{\\\"thinking\\\":[agent_json_quote $thinking]}\"\n"
-"}\n"
 "set acid [agent_save $sid $user \"agent\" \"reply\" $provider $model $meta $clean_reply]\n"
+"if {[string compare $thinking \"\"] != 0} {\n"
+"  agent_save_reasoning $sid $acid $provider $model $thinking\n"
+"}\n"
 "agent_eval $sid $acid $provider $model \"reply\" $reply\n"
-"return \"{\\\"sid\\\":$sid,\\\"provider\\\":[agent_json_quote $provider],\\\"model\\\":[agent_json_quote $model],\\\"reply\\\":[agent_json_quote $reply]}\"\n"
+"return \"{\\\"sid\\\":$sid,\\\"provider\\\":[agent_json_quote $provider],\\\"model\\\":[agent_json_quote $model],\\\"reply\\\":[agent_json_quote $clean_reply]}\"\n"
 ;
 
 /*
@@ -5606,7 +5797,12 @@ void agent_chat_stream_page(void){
       zPath = mprintf("%scfg/roles/default.th1", g.zLocalRoot);
     }
     if( blob_read_from_file(&script, zPath, ExtFILE)>=0 ){
-      Th_Eval(g.interp, 0, blob_str(&script), -1);
+      int thRc = Th_Eval(g.interp, 0, blob_str(&script), -1);
+      if( thRc==TH_ERROR ){
+        int nResult = 0;
+        const char *zResult = Th_GetResult(g.interp, &nResult);
+        CX("data: {\"error\":%!j}\n\n", zResult ? zResult : "TH1 eval failed");
+      }
     }else{
       CX("data: {\"error\":\"Role script not found: %s\"}\n\n", zRoleParam[0] ? zRoleParam : "default");
     }
@@ -5886,6 +6082,56 @@ static int agent_save_event_th1(
 }
 
 /*
+** TH1 command: agent_save_reasoning SID ACID PROVIDER MODEL MSG
+**
+** Persist model reasoning as a tier-0 note in the AI pool.
+*/
+static int agent_save_reasoning_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  int sid;
+  int acid;
+  const char *zProvider;
+  const char *zModel;
+  const char *zMsg;
+  Blob body = BLOB_INITIALIZER;
+  char *zTitle = 0;
+  char *zMeta = 0;
+  int nid = 0;
+
+  if( argc!=6 ){
+    return Th_WrongNumArgs(interp, "agent_save_reasoning SID ACID PROVIDER MODEL MSG");
+  }
+  if( !ai_is_enabled() ) return TH_OK;
+  sid = atoi(argv[1]);
+  acid = atoi(argv[2]);
+  zProvider = argv[3];
+  zModel = argv[4];
+  zMsg = argv[5];
+  if( zMsg==0 || zMsg[0]==0 ) return TH_OK;
+
+  ai_schema_ensure();
+  blob_init(&body, zMsg, -1);
+  zTitle = mprintf("Agent reasoning sid %d acid %d", sid, acid);
+  zMeta = mprintf("{\"source\":\"agentchat\",\"sid\":%d,\"acid\":%d,"
+                  "\"provider\":%!j,\"model\":%!j}",
+                  sid, acid, zProvider ? zProvider : "", zModel ? zModel : "");
+  nid = ai_note_create(
+    0, zTitle, &body, "reasoning", 0, "agentchat", "raw", zMeta,
+    0, 0, 0, 0, 0
+  );
+  fossil_free(zTitle);
+  fossil_free(zMeta);
+  blob_reset(&body);
+  Th_SetResultInt(interp, nid);
+  return TH_OK;
+}
+
+/*
 ** TH1 command: agent_config KEY
 **
 ** Returns a setting from cfg/ai-agent.json.
@@ -6074,6 +6320,7 @@ void agent_register_th1(Th_Interp *interp){
     {"agent_run_stream", agent_run_stream_th1, 0},
     {"agent_save",       agent_save_th1, 0},
     {"agent_save_event", agent_save_event_th1, 0},
+    {"agent_save_reasoning", agent_save_reasoning_th1, 0},
     {"agent_config",     agent_config_th1, 0},
     {"agent_eval",       agent_eval_th1, 0},
     {"agent_mcp_call",   agent_mcp_call_th1, 0},

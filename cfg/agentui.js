@@ -14,6 +14,24 @@
   var lastAcid = 0;
   var lastReplyAcid = 0;
   var lastReplyFeedback = '';
+  var supportsStreaming = null;
+  var configPromise = null;
+
+  function ensureConfig(){
+    if(configPromise) return configPromise;
+    configPromise = fetch('agent-config?sid=' + encodeURIComponent(sid)).then(function(resp){
+      if(!resp.ok) throw new Error('Config request failed: HTTP ' + resp.status);
+      return resp.json();
+    }).then(function(cfg){
+      if(cfg && typeof cfg.chat_supports_streaming !== 'undefined'){
+        supportsStreaming = !!cfg.chat_supports_streaming;
+      }
+      if(cfg && cfg.sid) sid = cfg.sid;
+    }).catch(function(){
+      supportsStreaming = false;
+    });
+    return configPromise;
+  }
 
   function esc(text){
     return (text || '').replace(/[&<>]/g, function(c){
@@ -64,14 +82,24 @@
     setStatus('Sending request...', 'running');
     addMsg('You', msg);
     input.value = '';
-    var params = {sid: sid, msg: msg};
+    ensureConfig().then(function(){
+      if(supportsStreaming){
+        sendStream(msg);
+      }else{
+        sendJson(msg);
+      }
+    });
+  });
+
+  function sendStream(msg){
+    var params = {sid: sid, msg: msg, provider: provider.value, model: model.value, context: context.checked ? 1 : 0};
     var url = 'agent-chat-stream?' + new URLSearchParams(params);
     var decoder = new TextDecoder();
     var partialLine = '';
     var agentDiv = null;
     var agentPre = null;
     var sawPayload = false;
-    
+
     fetch(url).then(function(response){
       if(!response.ok){
         throw new Error('Stream request failed: HTTP ' + response.status);
@@ -99,8 +127,9 @@
               var dataStr = line.slice(6).trim();
               var content;
               try { content = JSON.parse(dataStr); } catch(e) { return; }
-              
+
               if(content && typeof content === 'object' && content.error){
+                sawPayload = true;
                 setStatus('Backend error', 'error');
                 addMsg('System', content.error);
                 return;
@@ -131,7 +160,31 @@
       setStatus('Request failed', 'error');
       addMsg('System', err && err.message ? err.message : 'Request failed.');
     });
-  });
+  }
+
+  function sendJson(msg){
+    var params = {sid: sid, msg: msg, provider: provider.value, model: model.value, context: context.checked ? 1 : 0};
+    var url = 'agent-chat?' + new URLSearchParams(params);
+    fetch(url).then(function(response){
+      if(!response.ok){
+        throw new Error('Request failed: HTTP ' + response.status);
+      }
+      return response.json();
+    }).then(function(data){
+      if(data && data.error){
+        setStatus('Backend error', 'error');
+        addMsg('System', data.error);
+        return;
+      }
+      if(data && data.sid) sid = data.sid;
+      var reply = (data && typeof data.reply === 'string') ? data.reply : JSON.stringify(data || '');
+      setStatus('Reply received');
+      addMsg('Agent', reply);
+    }).catch(function(err){
+      setStatus('Request failed', 'error');
+      addMsg('System', err && err.message ? err.message : 'Request failed.');
+    });
+  }
 
   function renderApprovalCard(data){
     var div = document.createElement('div');

@@ -286,6 +286,7 @@ struct Global {
   int fNoThHook;          /* Disable all TH1 command/webpage hooks */
 #endif
   int thTrace;            /* True to enable TH1 debugging output */
+  int ai_last_retrieval_qid; /* ID of last knowledge retrieval set assembled */
   Blob thLog;             /* Text of the TH1 debugging output */
 
   int isHome;             /* True if rendering the "home" page */

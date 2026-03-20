@@ -6,6 +6,7 @@
   "embedding_model": "mxbai-embed-large",
   "embedding_command": "",
   "thinking_tag": "thought",
+  "auto_promote_markdown": 1,
   "chat_provider_locked": 1,
   "providers": [
     {

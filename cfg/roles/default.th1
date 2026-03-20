@@ -1,10 +1,11 @@
 set tools_json ""
-set tools_path "$g(zLocalRoot)cfg/mcp_tools.json"
-if {[file exists $tools_path]} {
-  set tools_json [read_file $tools_path]
-}
+set tools_path "cfg/mcp_tools.json"
+catch { set tools_json [read_file $tools_path] }
 
-set system_prompt "You are the Fossil AI Agent. You have access to the following tools:\n$tools_json\n\nTo use a tool, output: <tool_call>{\"name\":\"tool_name\",\"args\":{...}}</tool_call>\n"
+set thinking_tag [agent_config thinking_tag]
+if {[string compare $thinking_tag ""] == 0} {set thinking_tag "thought"}
+
+set system_prompt "You are the Fossil AI Agent. You have access to the following tools:\n$tools_json\n\nTo use a tool, output: <tool_call>{\"name\":\"tool_name\",\"args\":{...}}</tool_call>\nIf you need to reason, put it inside <$thinking_tag>...</$thinking_tag> and do not include it in the final answer.\n"
 
 set context ""
 if {$context_enabled} {
@@ -44,5 +45,33 @@ if {[catch {agent_run_stream $provider $model $full_prompt} reply]} {
   CX "data: {\"error\":[agent_json_quote $reply]}\n\n"
   agent_save $sid $user "agent" "error" $provider $model "" $reply
 } else {
-  agent_save $sid $user "agent" "reply" $provider $model "" $reply
+  set start_tag "<$thinking_tag>"
+  set end_tag "</$thinking_tag>"
+  set s [string first $start_tag $reply]
+  set e [string first $end_tag $reply]
+  set thinking ""
+  set clean_reply $reply
+  if {$s != -1} {
+    if {$e != -1} {
+      set s_end [expr {$s + [string length $start_tag]}]
+      set thinking [string range $reply $s_end [expr {$e - 1}]]
+      if {$s == 0} {
+        set pre ""
+      } else {
+        set pre [string range $reply 0 [expr {$s - 1}]]
+      }
+      set post [string range $reply [expr {$e + [string length $end_tag]}] [expr {[string length $reply] - 1}]]
+      if {[string length $pre] == 0} {
+        set clean_reply $post
+      } elseif {[string length $post] == 0} {
+        set clean_reply $pre
+      } else {
+        set clean_reply "$pre $post"
+      }
+    }
+  }
+  set acid [agent_save $sid $user "agent" "reply" $provider $model "" $clean_reply]
+  if {[string compare $thinking ""] != 0} {
+    agent_save_reasoning $sid $acid $provider $model $thinking
+  }
 }

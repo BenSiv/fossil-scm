@@ -89,6 +89,7 @@ write_file [file join $cfgDir ai-agent.json] [subst -nocommands {
   "embedding_provider": "ollama",
   "embedding_model": "test-base-embed-model",
   "embedding_command": "$backend",
+  "auto_promote_markdown": 1,
   "chat_provider_locked": 1,
   "providers": [
     {
@@ -162,13 +163,21 @@ write_file [file join $userCfgDir ai-agent.json] [subst -nocommands {
 
 ###############################################################################
 
-fossil ai init
-
 file mkdir doc
 file mkdir [file join doc ai]
 file mkdir [file join doc ai guidance]
 write_file [file join doc ai guidance summarize-context.md] "Anchor the summary in repository-specific facts instead of generic SCM advice.\n"
 write_file [file join doc ai guidance review-change.md] "Review pending changes with a code-review mindset.\n"
+
+write_file [file join doc ai autopromote.md] "Auto promotion should index this markdown file.\n"
+fossil add [file join doc ai autopromote.md]
+
+fossil set agent-auto-promote-markdown on
+
+fossil ai init
+
+fossil sql "SELECT count(*) FROM ai_note WHERE artifact_path='doc/ai/autopromote.md' AND tier=1"
+test agent-markdown-auto-1 {[normalize_result] eq {1}}
 
 write_file agent-note.txt "Embeddings let retrieval find this note.\n"
 fossil agent --agent-config [file join $cfgDir agent.json] note agent-note.txt --title "Embeddings Note"
@@ -197,7 +206,7 @@ fossil agent --agent-config [file join $cfgDir agent.json] embed {probe text}
 test agent-embed-1 {[normalize_result] eq {0.125000, 0.250000, 0.500000, 1.000000}}
 
 fossil agent --agent-config [file join $cfgDir agent.json] semantic-index
-test agent-index-1 {[normalize_result] eq {Indexed 3 notes.}}
+test agent-index-1 {[normalize_result] eq {Indexed 4 notes.}}
 
 fossil sql "SELECT source_type || '|' || dim FROM ai_vector ORDER BY source_id DESC LIMIT 1"
 test agent-index-2 {[normalize_result] eq {note|4}}
@@ -303,7 +312,7 @@ test agent-ui-16 {[string first {beforeunload} $RESULT]>=0}
 test agent-ui-17 {[string first {id="agent-chat-status"} $RESULT]>=0}
 test agent-ui-18 {[string first {Status: Idle} $RESULT]>=0}
 test agent-ui-19 {[string first {setStatus('Sending request...')} $RESULT]>=0}
-test agent-ui-20 {[string first {setStatus('Reply received', '')} $RESULT]>=0}
+test agent-ui-20 {[string first {setStatus('Reply received')} $RESULT]>=0}
 test agent-ui-21 {[string first {id="agent-feedback-useful"} $RESULT]>=0}
 test agent-ui-22 {[string first {id="agent-feedback-not-useful"} $RESULT]>=0}
 test agent-ui-23 {[string first {sendFeedback('useful')} $RESULT]>=0}
@@ -417,6 +426,15 @@ test agent-chat-6 {[normalize_result] eq {say only hi}}
 fossil sql "SELECT msg FROM agentchat WHERE role='agent' ORDER BY acid DESC LIMIT 1"
 test agent-chat-7 {[string first {reply:} [normalize_result]]>=0}
 
+fossil sql "SELECT coalesce(meta,'') FROM agentchat WHERE role='agent' AND kind='reply' ORDER BY acid DESC LIMIT 1"
+test agent-chat-reasoning-1 {[string first {thinking} [normalize_result]]<0}
+
+fossil sql "SELECT count(*) FROM ai_note WHERE source_type='reasoning' AND source_ref='agentchat'"
+test agent-chat-reasoning-2 {[normalize_result] eq {1}}
+
+fossil sql "SELECT body FROM ai_note WHERE source_type='reasoning' AND source_ref='agentchat' ORDER BY nid DESC LIMIT 1"
+test agent-chat-reasoning-3 {[string first {test reasoning for test-chat-model} [normalize_result]]>=0}
+
 fossil sql "SELECT provider || '|' || model FROM agentchat_session ORDER BY sid DESC LIMIT 1"
 test agent-chat-8 {[normalize_result] eq {codex|test-chat-model}}
 
@@ -493,6 +511,13 @@ test agent-chat-42 {[string first {"role":"user","kind":"prompt"} $RESULT]>=0}
 test agent-chat-43 {[string first {"msg":"say only hi"} $RESULT]>=0}
 test agent-chat-44 {[string first {"role":"agent","kind":"reply"} $RESULT]>=0}
 test agent-chat-44a {[string first {"feedback":""} $RESULT]>=0}
+
+write_file [file join doc ai manual-promote.md] "Manual promotion should index this markdown file.\n"
+fossil add [file join doc ai manual-promote.md]
+fossil agent --agent-config [file join $cfgDir agent.json] promote-markdown --force
+test agent-markdown-cli-1 {[string first {promoted:} [normalize_result]]>=0}
+fossil sql "SELECT count(*) FROM ai_note WHERE artifact_path='doc/ai/manual-promote.md' AND tier=1"
+test agent-markdown-cli-2 {[normalize_result] eq {1}}
 
 set response [agent_http_request $repository GET [subst {/agent-events?sid=$lastSid}] {}]
 set RESULT [agent_http_body $response]

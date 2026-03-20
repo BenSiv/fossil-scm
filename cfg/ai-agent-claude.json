@@ -4,5 +4,6 @@
   "command": "./dev/agents/fossil-claude-agent.sh",
   "embedding_provider": "ollama",
   "embedding_model": "mxbai-embed-large",
-  "embedding_command": ""
+  "embedding_command": "",
+  "auto_promote_markdown": 1
 }

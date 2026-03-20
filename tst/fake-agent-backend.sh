@@ -7,6 +7,7 @@ input="$(cat)"
 
 case "$mode" in
   chat)
+    printf '<thought>test reasoning for %s</thought>\n' "$model"
     printf 'test-agent model=%s\n' "$model"
     printf 'reply: %s\n' "$(printf '%s' "$input" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
     ;;
