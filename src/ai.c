@@ -238,16 +238,50 @@ void ai_note_link_upsert(
 }
 
 /*
-** Return a simple atomicity classification for zBody.
+** Return a comma-separated list of NIDs related to nid by high-weight links.
+** limit is the max number of related notes to return.
 */
-static const char *ai_atomicity_status(const char *zBody){
-  int nHeading = 0;
-  int nParagraph = 0;
-  int bInText = 0;
-  int i;
-  if( zBody==0 || zBody[0]==0 ) return "thin";
-  for(i=0; zBody[i]; i++){
-    if( (i==0 || zBody[i-1]=='\n') && zBody[i]=='#' ) nHeading++;
+char *ai_note_related_nids(int nid, int limit){
+  Stmt q;
+  Blob res = BLOB_INITIALIZER;
+  int first = 1;
+
+  if( nid<=0 ) return 0;
+  if( limit<=0 ) limit = 5;
+  ai_require_enabled();
+  db_prepare(&q,
+    "SELECT CASE n.from_nid WHEN %d THEN n.to_nid ELSE n.from_nid END AS peer_nid"
+    "  FROM repository.ai_note_link n"
+    " WHERE (n.from_nid=%d OR n.to_nid=%d)"
+    "   AND n.link_type IN ('co_retrieved','duplicate','merged')"
+    " ORDER BY n.weight DESC, n.updated_at DESC"
+    " LIMIT %d",
+    nid, nid, nid, limit
+  );
+  while( db_step(&q)==SQLITE_ROW ){
+    int peer = db_column_int(&q, 0);
+    blob_appendf(&res, "%s%d", first ? "" : ",", peer);
+    first = 0;
+  }
+  db_finalize(&q);
+  return blob_str(&res);
+}
+
+/*
+** Return a combined "authority score" for a note, blending tier, heat,
+** and artifact type weights.
+*/
+double ai_note_authority_score(int nid){
+  return db_double(0.0,
+    "SELECT"
+    "  (CASE tier WHEN 3 THEN 0.35 WHEN 2 THEN 0.20 WHEN 1 THEN 0.10 ELSE 0.0 END)"
+    "  + MIN(coalesce(artifact_weight,0.05),0.30)"
+    "  + (MIN(coalesce(heat,1.0),25.0)*0.02)"
+    "  + (MIN(coalesce(retrieval_count,0),50)*0.01)"
+    " FROM ai_note WHERE nid=%d",
+    nid
+  );
+}
     if( zBody[i]=='\n' ){
       if( zBody[i+1]=='\n' ) bInText = 0;
     }else if( !fossil_isspace(zBody[i]) ){

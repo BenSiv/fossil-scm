@@ -10,6 +10,11 @@ set context ""
 if {$context_enabled} {
   set context [agent_context $msg $model]
   if {[string compare $context ""] != 0} {
+    # Collective Synthesis Phase
+    if {[string first "Knowledge Graph Expansion" $context] != -1} {
+       set synth_prompt "Consolidate the following repository context and knowledge graph expansion into a concise, unified briefing for the final reasoning step:\n\n$context"
+       set context [agent_run $provider $model $synth_prompt]
+    }
     set full_prompt "$system_prompt\nContext:\n$context\n\nUser request:\n$msg"
   } else {
     set full_prompt "$system_prompt\nUser request:\n$msg"

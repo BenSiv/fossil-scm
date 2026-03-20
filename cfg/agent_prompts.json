@@ -2,5 +2,6 @@
   "context_header": "--- REPOSITORY CONTEXT ---",
   "file_structure_header": "File Structure (top 100 files):",
   "pending_changes_header": "Pending Changes:",
+  "graph_expansion_header": "Knowledge Graph Expansion (related info):",
   "context_footer": "--- END CONTEXT ---"
 }

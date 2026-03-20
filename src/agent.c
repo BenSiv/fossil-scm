@@ -59,6 +59,8 @@ void ai_chat_eval_record(
   const char *zKind,
   const char *zMsg
 );
+char *ai_note_related_nids(int nid, int limit);
+double ai_note_authority_score(int nid);
 void ai_chat_eval_feedback(int sid, int acid, const char *zFeedback);
 
 static int agent_generate_embedding(
@@ -3567,10 +3569,41 @@ static int agent_assemble_context(
 
   if( zQuery && zQuery[0] ){
     int nBefore = blob_size(pOut);
+    int qid = 0;
     if( !nAdded ){
       blob_appendf(pOut, "%s\n", agent_prompt_fragment("context_header", "--- REPOSITORY CONTEXT ---"));
     }
-    agent_semantic_search(zModel, zQuery, 3, pOut, 0, pRetrievalQid);
+    agent_semantic_search(zModel, zQuery, 3, pOut, 0, &qid);
+    if( pRetrievalQid ) *pRetrievalQid = qid;
+    if( qid>0 ){
+      Stmt qR;
+      int nExpanded = 0;
+      db_prepare(&qR,
+        "SELECT n.nid, n.title, n.body, n.tier"
+        "  FROM ai_note n, ai_note_link l"
+        " WHERE l.from_nid IN (SELECT nid FROM ai_retrieval_note WHERE qid=%d)"
+        "   AND l.to_nid=n.nid"
+        "   AND n.nid NOT IN (SELECT nid FROM ai_retrieval_note WHERE qid=%d)"
+        " UNION "
+        "SELECT n.nid, n.title, n.body, n.tier"
+        "  FROM ai_note n, ai_note_link l"
+        " WHERE l.to_nid IN (SELECT nid FROM ai_retrieval_note WHERE qid=%d)"
+        "   AND l.from_nid=n.nid"
+        "   AND n.nid NOT IN (SELECT nid FROM ai_retrieval_note WHERE qid=%d)"
+        " ORDER BY n.tier DESC LIMIT 3",
+        qid, qid, qid, qid
+      );
+      while( db_step(&qR)==SQLITE_ROW ){
+        if( nExpanded==0 ){
+          blob_appendf(pOut, "\n%s\n", agent_prompt_fragment("graph_expansion_header", "Knowledge Graph Expansion (related info):"));
+        }
+        blob_appendf(pOut, "--- Related (T%d): %s ---\n%s\n",
+          db_column_int(&qR, 3), db_column_text(&qR, 1), db_column_text(&qR, 2)
+        );
+        nExpanded++;
+      }
+      db_finalize(&qR);
+    }
     if( blob_size(pOut)>nBefore ) nAdded = 1;
   }
   if( nAdded ){
@@ -6639,9 +6672,37 @@ static int pool_link_th1(
 }
 
 /*
+** TH1 command: pool_related NID LIMIT
+**
+** Returns a Tcl list of NIDs related to the given note via the Knowledge Graph.
+*/
+static int pool_related_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  int nid, limit;
+  char *zRes;
+  if( argc!=2 && argc!=3 ){
+    return Th_WrongNumArgs(interp, "pool_related NID ?LIMIT?");
+  }
+  nid = atoi(argv[1]);
+  limit = argc==3 ? atoi(argv[2]) : 5;
+  zRes = ai_note_related_nids(nid, limit);
+  if( zRes ){
+    Th_SetResult(interp, zRes, -1);
+    fossil_free(zRes);
+  }else{
+    Th_SetResult(interp, "", 0);
+  }
+  return TH_OK;
+}
+
+/*
 ** MCP Tool: list_files
 */
-<<<<<<< Updated upstream
 void agent_register_th1(Th_Interp *interp){
   static const struct {
     const char *zName;
@@ -6659,12 +6720,15 @@ void agent_register_th1(Th_Interp *interp){
     {"pool_get",          pool_get_th1},
     {"pool_put",          pool_put_th1},
     {"pool_link",         pool_link_th1},
+    {"pool_related",      pool_related_th1},
     {0, 0}
   };
   int i;
   for(i=0; aCmd[i].zName; i++){
     Th_CreateCommand(interp, aCmd[i].zName, aCmd[i].xProc, 0, 0);
-=======
+  }
+}
+
 static void agent_mcp_list_files(void){
   Stmt q;
   int vid = db_lget_int("checkout", 0);
@@ -6741,7 +6805,7 @@ void agent_mcp_cmd(void){
         zCopy = fossil_strdup(zQuery);
         for(int i=0; zCopy[i]; i++){ if(zCopy[i]=='\"'){ zCopy[i]=0; break; } }
         Blob out = BLOB_INITIALIZER;
-        if( agent_semantic_search(agent_embedding_model(), zCopy, 5, &out, 0)>0 ){
+        if( agent_semantic_search(agent_embedding_model(), zCopy, 5, &out, 0, 0)>0 ){
           CX("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":%!j}]}}\n", blob_str(&out));
         }else{
           CX("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"No matches found.\"}]}}\n");
@@ -6752,6 +6816,5 @@ void agent_mcp_cmd(void){
       fflush(stdout);
     }
     blob_reset(&line);
->>>>>>> Stashed changes
   }
 }
