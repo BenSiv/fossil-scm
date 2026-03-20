@@ -1,0 +1,6 @@
+set context [agent_context "What are my pending changes?" $model]
+if {[string compare $context ""] == 0} {
+  return "No pending changes to review."
+}
+set prompt "You are a senior software engineer and security auditor. Review the following pending changes for bugs, security vulnerabilities, or style issues:\n\n$context\n\nProvide a concise audit report."
+agent_run_stream $provider $model $prompt

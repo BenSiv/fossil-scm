@@ -1,0 +1,61 @@
+<style nonce="$style_nonce">
+$ui_css
+</style>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1em;" data-sid="$sid">
+  <div class="section-title" style="margin:0;">AI Agent Configuration</div>
+  <button id="theme-toggle" class="theme-toggle">🌓 Toggle Theme</button>
+</div>
+
+<div id="agent-config-details" style="margin-bottom:1.5em;padding:0.8em;border:1px solid var(--agent-border);background:var(--agent-card-bg);font-size:0.9em;">
+  <b>Source:</b> <span id="agent-config-source">$config_source</span><br>
+  <b>Chat:</b> <span id="agent-config-chat-provider">$chat_provider</span> / <span id="agent-config-chat-model">$chat_model</span><br>
+  <b>Embeddings:</b> <span id="agent-config-embedding-provider">$embed_provider</span> / <span id="agent-config-embedding-model">$embed_model</span><br>
+  <b>Capabilities:</b> <span id="agent-config-capabilities">$capabilities</span>
+</div>
+
+<div style="display:grid;grid-template-columns:minmax(12em,16em) 1fr;gap:1em;">
+<div>
+  <div style="margin-bottom:0.7em;"><a class="btn" href="$repo_url/agentui?new=1">New Chat</a></div>
+  <div style="border:1px solid var(--agent-border);padding:0.6em;background:var(--agent-card-bg);">
+    <div style="font-weight:bold;margin-bottom:0.4em;">Sessions</div>
+    $sessions_html
+  </div>
+</div>
+<div>
+  <div class="forumEdit">
+    <label for="agent-provider"><b>Provider:</b></label>
+    <select id="agent-provider" $provider_disabled_attr>
+      <option value="$chat_provider" selected>$chat_provider</option>
+    </select>
+    &nbsp;&nbsp;
+    <label for="agent-model"><b>Model:</b></label>
+    <input type="text" id="agent-model" size="24" list="agent-model-suggestions" value="$chat_model">
+    <datalist id="agent-model-suggestions"></datalist>
+    &nbsp;&nbsp;
+    <label><input type="checkbox" id="agent-context" checked> <b>Context Awareness</b></label>
+  </div>
+
+  <div id="agent-chat-status" style="margin:0.6em 0;padding:0.5em 0.7em;border:1px solid var(--agent-border);background:var(--agent-card-bg);">Status: Idle</div>
+
+  <div id="agent-chat-log" style="min-height:320px;max-height:520px;overflow:auto;border:1px solid var(--agent-border);padding:0.8em;margin:1em 0;background:var(--agent-card-bg);">
+    $history_html
+  </div>
+
+<div class="forumEdit">
+  <textarea id="agent-chat-input" rows="6" cols="80" placeholder="Ask the local agent a question..."></textarea>
+</div>
+<div class="forumEdit">
+  <input type="button" class="btn" id="agent-chat-send" value="Send">
+</div>
+
+<div class="forumEdit" id="agent-feedback-controls" style="margin-top:0.8em;">
+  <b>Feedback:</b>
+  <input type="button" class="btn" id="agent-feedback-useful" value="Useful" disabled>
+  <input type="button" class="btn" id="agent-feedback-not-useful" value="Not Useful" disabled>
+  <span class="dimmed" id="agent-feedback-status">No reply selected</span>
+</div>
+
+<script nonce="$style_nonce">
+$ui_js
+</script>

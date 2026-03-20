@@ -1,0 +1,53 @@
+.dimmed { color: #888; font-size: 0.9em; }
+.spinner {
+  display: inline-block;
+  width: 1em; height: 1em;
+  border: 2px solid rgba(0,0,0,0.1);
+  border-top-color: #333;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  vertical-align: middle;
+  margin-left: 0.5em;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.thinking-details[open] summary { margin-bottom: 0.5em; }
+
+/* Theme overrides */
+body.theme-light { 
+  --agent-bg: #ffffff; 
+  --agent-text: #333333; 
+  --agent-border: #cccccc;
+  --agent-card-bg: rgba(0,0,0,0.03); 
+}
+body.theme-dark { 
+  --agent-bg: #1a1a1a; 
+  --agent-text: #e0e0e0; 
+  --agent-border: #444444;
+  --agent-card-bg: rgba(255,255,255,0.05); 
+}
+body[class*="theme-"] {
+  background-color: var(--agent-bg);
+  color: var(--agent-text);
+}
+.theme-toggle { cursor: pointer; padding: 0.3em 0.6em; border: 1px solid var(--agent-border); border-radius: 4px; background: var(--agent-card-bg); color: inherit; font-size: 0.9em; }
+
+.approval-card {
+  margin: 1em 0;
+  padding: 1em;
+  border: 2px solid var(--agent-border);
+  background: var(--agent-card-bg);
+  border-radius: 4px;
+}
+.diff-preview {
+  font-family: monospace;
+  font-size: 0.9em;
+  background: rgba(0,0,0,0.1);
+  padding: 0.5em;
+  margin: 0.5em 0;
+  border-left: 4px solid #f0ad4e;
+  overflow-x: auto;
+}
+.diff-del { background: #fee; color: #b00; text-decoration: line-through; }
+.diff-add { background: #efe; color: #080; }
+.btn-approve { background: #5cb85c; color: white; border: none; padding: 0.4em 0.8em; cursor: pointer; border-radius: 3px; }
+.btn-reject { background: #d9534f; color: white; border: none; padding: 0.4em 0.8em; cursor: pointer; margin-left: 0.5em; border-radius: 3px; }

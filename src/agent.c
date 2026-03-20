@@ -1922,7 +1922,7 @@ static int agent_chat_is_terminal_acid(int sid, int acid){
 /*
 ** Emit session list for the current user.
 */
-static void agent_chat_render_sessions(const char *zUser, int sidCurrent){
+static void agent_chat_render_sessions_to_blob(const char *zUser, int sidCurrent, Blob *pOut){
   Stmt q;
   int nLimit = db_get_int("agent-history-count", 50);
   if( nLimit<=0 ) return;
@@ -1942,15 +1942,26 @@ static void agent_chat_render_sessions(const char *zUser, int sidCurrent){
     const char *zProvider = db_column_text(&q, 2);
     const char *zModel = db_column_text(&q, 3);
     const char *zState = agent_chat_session_state(sid);
-    @ <div>
+    blob_appendf(pOut, "<div>\n");
     if( sid==sidCurrent ){
-      @ <b>%h(zTitle)</b> <span class="dimmed">[%h(zProvider)%s(zModel&&zModel[0]?" / ":"")%h(zModel)%s(zState&&zState[0]?" | ":"")%h(zState)]</span>
+      blob_appendf(pOut, "<b>%h</b> <span class=\"dimmed\">[%h%s%h%s%h]</span>",
+                   zTitle, zProvider, (zModel&&zModel[0]?" / ":""), zModel,
+                   (zState&&zState[0]?" | ":""), zState);
     }else{
-      @ <a href="%R/agentui?sid=%d(sid)">%h(zTitle)</a> <span class="dimmed">[%h(zProvider)%s(zModel&&zModel[0]?" / ":"")%h(zModel)%s(zState&&zState[0]?" | ":"")%h(zState)]</span>
+      blob_appendf(pOut, "<a href=\"%%R/agentui?sid=%d\">%h</a> <span class=\"dimmed\">[%h%s%h%s%h]</span>",
+                   sid, zTitle, zProvider, (zModel&&zModel[0]?" / ":""), zModel,
+                   (zState&&zState[0]?" | ":""), zState);
     }
-    @ </div>
+    blob_appendf(pOut, "</div>\n");
   }
   db_finalize(&q);
+}
+
+static void agent_chat_render_sessions(const char *zUser, int sidCurrent){
+  Blob out = BLOB_INITIALIZER;
+  agent_chat_render_sessions_to_blob(zUser, sidCurrent, &out);
+  CX("%s", blob_str(&out));
+  blob_reset(&out);
 }
 
 /*
@@ -1976,7 +1987,7 @@ static int agent_chat_meta_retrieval_qid(const char *zMeta){
 /*
 ** Emit recent saved agent chat messages for a session into the page log.
 */
-static void agent_chat_render_history(int sidCurrent){
+static void agent_chat_render_history_to_blob(int sidCurrent, Blob *pOut){
   Stmt q;
   int nLimit = db_get_int("agent-history-count", 50);
   if( nLimit<=0 || sidCurrent<=0 ) return;
@@ -2010,6 +2021,7 @@ static void agent_chat_render_history(int sidCurrent){
     const char *zMeta = db_column_text(&q, 4);
     const char *zMsg = db_column_text(&q, 5);
     const char *zFeedback = db_column_text(&q, 6);
+<<<<<<< Updated upstream
     int bPromptMeta = zRole && zKind
       && fossil_strcmp(zRole,"user")==0
       && fossil_strcmp(zKind,"prompt")==0
@@ -2017,12 +2029,18 @@ static void agent_chat_render_history(int sidCurrent){
     int retrievalQid = bPromptMeta ? agent_chat_meta_retrieval_qid(zMeta) : 0;
     @ <div style="margin-bottom:0.8em;">
     @ <b>%h(zRoleLabel):</b>
+=======
+    blob_appendf(pOut, "<div style=\"margin-bottom:0.8em;\">\n");
+    blob_appendf(pOut, "<b>%h:</b>", zRoleLabel);
+>>>>>>> Stashed changes
     if( zProvider && zProvider[0] ){
-      @ <span class="dimmed">[%h(zProvider)%s(zModel&&zModel[0]?" / ":"")%h(zModel)]</span>
+      blob_appendf(pOut, " <span class=\"dimmed\">[%h%s%h]</span>", 
+                   zProvider, (zModel&&zModel[0]?" / ":""), zModel);
     }
     if( zKind && zKind[0] ){
-      @ <span class="dimmed">{%h(zKind)}</span>
+      blob_appendf(pOut, " <span class=\"dimmed\">{%h}</span>", zKind);
     }
+<<<<<<< Updated upstream
     if( bPromptMeta ){
       @ <span class="dimmed">[context=pool]</span>
       if( retrievalQid>0 ){
@@ -2030,14 +2048,25 @@ static void agent_chat_render_history(int sidCurrent){
       }
     }else if( zMeta && zMeta[0] ){
       @ <span class="dimmed">meta=%h(zMeta)</span>
+=======
+    if( zMeta && zMeta[0] ){
+      blob_appendf(pOut, " <span class=\"dimmed\">meta=%h</span>", zMeta);
+>>>>>>> Stashed changes
     }
     if( zFeedback && zFeedback[0] ){
-      @ <span class="dimmed">feedback=%h(zFeedback)</span>
+      blob_appendf(pOut, " <span class=\"dimmed\">feedback=%h</span>", zFeedback);
     }
-    @ <pre style="white-space:pre-wrap;display:inline;margin:0">%h(zMsg)</pre>
-    @ </div>
+    blob_appendf(pOut, " <pre style=\"white-space:pre-wrap;display:inline;margin:0\">%h</pre>\n", zMsg);
+    blob_appendf(pOut, "</div>\n");
   }
   db_finalize(&q);
+}
+
+static void agent_chat_render_history(int sidCurrent){
+  Blob out = BLOB_INITIALIZER;
+  agent_chat_render_history_to_blob(sidCurrent, &out);
+  CX("%s", blob_str(&out));
+  blob_reset(&out);
 }
 
 /*
@@ -3480,6 +3509,31 @@ static int agent_semantic_search(
 ** Assemble a context summary of the current repository state into pOut.
 ** Returns non-zero if any useful context was added.
 */
+static const char *agent_prompt_fragment(const char *zKey, const char *zDefault){
+  static Blob config = BLOB_INITIALIZER;
+  if( blob_size(&config)==0 ){
+    char *zPath = mprintf("%scfg/agent_prompts.json", g.zLocalRoot);
+    blob_read_from_file(&config, zPath, ExtFILE);
+    fossil_free(zPath);
+  }
+  if( blob_size(&config)>0 ){
+    /* Simple JSON extraction for fragments */
+    char *zSearch = mprintf("\"%s\":\"", zKey);
+    char *zPos = strstr(blob_str(&config), zSearch);
+    fossil_free(zSearch);
+    if( zPos ){
+      char *zEnd;
+      zPos += strlen(zKey) + 4;
+      zEnd = strchr(zPos, '\"');
+      if( zEnd ){
+        int n = (int)(zEnd - zPos);
+        return mprintf("%.*s", n, zPos);
+      }
+    }
+  }
+  return zDefault;
+}
+
 static int agent_assemble_context(
   Blob *pOut,
   const char *zModel,
@@ -3492,8 +3546,8 @@ static int agent_assemble_context(
   vid = db_table_exists("localdb", "vvar") ? db_lget_int("checkout", 0) : 0;
   if( vid ){
     int nFile = 0;
-    blob_appendf(pOut, "--- REPOSITORY CONTEXT ---\n");
-    blob_appendf(pOut, "File Structure (top 100 files):\n");
+    blob_appendf(pOut, "%s\n", agent_prompt_fragment("context_header", "--- REPOSITORY CONTEXT ---"));
+    blob_appendf(pOut, "%s\n", agent_prompt_fragment("file_structure_header", "File Structure (top 100 files):"));
     db_prepare(&q,
       "SELECT pathname FROM vfile WHERE vid=%d AND deleted=0 ORDER BY pathname",
       vid
@@ -3504,7 +3558,7 @@ static int agent_assemble_context(
     }
     db_finalize(&q);
     if( nFile>=100 ) blob_appendf(pOut, "  ... (truncated)\n");
-    blob_appendf(pOut, "\nPending Changes:\n");
+    blob_appendf(pOut, "\n%s\n", agent_prompt_fragment("pending_changes_header", "Pending Changes:"));
     if( agent_changes_text(pOut, vid, "  ")==0 ){
       blob_appendf(pOut, "  (none)\n");
     }
@@ -3514,13 +3568,13 @@ static int agent_assemble_context(
   if( zQuery && zQuery[0] ){
     int nBefore = blob_size(pOut);
     if( !nAdded ){
-      blob_appendf(pOut, "--- REPOSITORY CONTEXT ---\n");
+      blob_appendf(pOut, "%s\n", agent_prompt_fragment("context_header", "--- REPOSITORY CONTEXT ---"));
     }
     agent_semantic_search(zModel, zQuery, 3, pOut, 0, pRetrievalQid);
     if( blob_size(pOut)>nBefore ) nAdded = 1;
   }
   if( nAdded ){
-    blob_appendf(pOut, "--- END CONTEXT ---\n\n");
+    blob_appendf(pOut, "%s\n\n", agent_prompt_fragment("context_footer", "--- END CONTEXT ---"));
   }else{
     blob_reset(pOut);
   }
@@ -3533,14 +3587,28 @@ static int agent_assemble_context(
 ** Returns 0 on success and non-zero on error.
 */
 static void agent_strip_ansi(Blob *pText);
-static void agent_strip_prefix_noise(Blob *pText);
+/*
+** Chunk handler for streaming output.
+*/
+typedef void (*agent_chunk_handler)(const char *zChunk, int nChunk, void *pApp);
 
-static int agent_run_backend(
+/*
+** SSE chunk handler: emits text as a "data:" SSE event.
+*/
+static void agent_sse_handler(const char *zChunk, int nChunk, void *pApp){
+  if( nChunk<=0 ) return;
+  CX("data: %!j\n\n", zChunk);
+  fflush(stdout);
+}
+
+static int agent_run_backend_core(
   const char *zProvider,
   const char *zModel,
   const char *zPrompt,
   Blob *pReply,
-  Blob *pErr
+  Blob *pErr,
+  agent_chunk_handler xChunk,
+  void *pApp
 ){
   Blob cmd = BLOB_INITIALIZER;
   Blob envCmd = BLOB_INITIALIZER;
@@ -3551,7 +3619,7 @@ static int agent_run_backend(
   int rc;
   const char *zCmdTmpl = agent_command_template();
 
-  blob_zero(pReply);
+  if( pReply ) blob_zero(pReply);
   blob_zero(pErr);
   if( agent_validate_provider_model(zProvider, zModel, pErr) ){
     return 1;
@@ -3565,7 +3633,6 @@ static int agent_run_backend(
     blob_reset(&envCmd);
     return 1;
   }
-  /* Send the prompt via stdin and close it so the child doesn't wait. */
   fprintf(out, "%s", zPrompt);
   fclose(out);
   out = 0;
@@ -3577,28 +3644,36 @@ static int agent_run_backend(
     blob_reset(&envCmd);
     return 1;
   }
-  blob_read_from_channel(pReply, in, -1);
-  pclose2(fdIn, out, childPid);
-  agent_strip_ansi(pReply);
-  agent_strip_prefix_noise(pReply);
-  blob_trim(pReply);
-  if( blob_size(pReply)==0 ){
-    blob_appendf(pErr,
-      "agent command failed for model \"%s\"", zModel
-    );
-    blob_reset(&cmd);
-    blob_reset(&envCmd);
-    return 1;
+  if( xChunk ){
+    char zBuf[1024];
+    int n;
+    while( (n = fread(zBuf, 1, sizeof(zBuf)-1, in))>0 ){
+      zBuf[n] = 0;
+      xChunk(zBuf, n, pApp);
+      if( pReply ) blob_append(pReply, zBuf, n);
+    }
+  }else{
+    blob_read_from_channel(pReply, in, -1);
   }
-  if( fossil_strncmp(blob_str(pReply), "Error:", 6)==0 ){
-    blob_append(pErr, blob_str(pReply), blob_size(pReply));
-    blob_reset(&cmd);
-    blob_reset(&envCmd);
-    return 1;
+  pclose2(fdIn, out, childPid);
+  if( pReply ){
+    agent_strip_ansi(pReply);
+    agent_strip_prefix_noise(pReply);
+    blob_trim(pReply);
   }
   blob_reset(&cmd);
   blob_reset(&envCmd);
   return 0;
+}
+
+static int agent_run_backend(
+  const char *zProvider,
+  const char *zModel,
+  const char *zPrompt,
+  Blob *pReply,
+  Blob *pErr
+){
+  return agent_run_backend_core(zProvider, zModel, zPrompt, pReply, pErr, 0, 0);
 }
 
 /*
@@ -4991,6 +5066,9 @@ void agent_cmd(void){
     agent_wiki_sync_cmd();
   }else if( fossil_strcmp(zCmd, "pool-process")==0 ){
     agent_pool_process_cmd();
+  }else if( fossil_strcmp(zCmd, "mcp")==0 ){
+    void agent_mcp_cmd(void);
+    agent_mcp_cmd();
   }else{
     fossil_fatal("unknown agent subcommand: %s", zCmd);
   }
@@ -5002,6 +5080,7 @@ void agent_cmd(void){
 ** Knowledge console for interactive orchestration and retrieval tracing.
 */
 void agentui_page(void){
+<<<<<<< Updated upstream
   char *zModel;
   char *zSessionProvider;
   char *zCmd;
@@ -5012,8 +5091,19 @@ void agentui_page(void){
   const char *zUser;
   char *zConfigSource;
   int chatProviderLocked;
+=======
+>>>>>>> Stashed changes
   int sidCurrent;
   int sidRequested;
+  const char *zUser;
+  const char *zProvider;
+  const char *zModel;
+  const char *zEmbedProvider;
+  const char *zEmbedCmd;
+  const char *zEmbedModel;
+  char *zConfigSource;
+  char *zCmd;
+  int chatProviderLocked;
 
   login_check_credentials();
   if( !g.perm.Read ){
@@ -5023,6 +5113,7 @@ void agentui_page(void){
   zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
   sidRequested = atoi(PD("sid","0"));
   sidCurrent = agent_chat_session_exists(sidRequested) ? sidRequested : 0;
+<<<<<<< Updated upstream
   zSessionProvider = mprintf("%s",
     agent_chat_session_provider(sidCurrent, agent_chat_provider())
   );
@@ -5034,9 +5125,20 @@ void agentui_page(void){
   zEmbedCmd = mprintf("%s", agent_embedding_template());
   zProvider = mprintf("%s", zSessionProvider);
   zEmbedProvider = mprintf("%s", agent_embedding_provider());
+=======
+
+  zProvider = agent_chat_session_provider(sidCurrent, agent_chat_provider());
+  zModel = agent_chat_session_model(sidCurrent, agent_default_model());
+  zCmd = agent_command_template();
+  zEmbedProvider = agent_embedding_provider();
+  zEmbedCmd = agent_embedding_template();
+  zEmbedModel = agent_embedding_model();
+>>>>>>> Stashed changes
   zConfigSource = agent_config_source();
   chatProviderLocked = agent_chat_provider_locked();
+
   style_set_current_feature("agent");
+<<<<<<< Updated upstream
   agent_console_submenu(sidCurrent);
   style_header("Agent Console");
   @ <div class="fossil-doc" data-title="Agent Console">
@@ -5572,6 +5674,71 @@ void agentui_page(void){
   fossil_free(zEmbedCmd);
   fossil_free(zProvider);
   fossil_free(zEmbedProvider);
+=======
+  style_header("AI Agent");
+  
+  /* Set up dynamic variables for TH1 */
+  Th_FossilInit(TH_INIT_DEFAULT);
+  Th_StoreInt("sid", sidCurrent);
+  Th_SetVar(g.interp, "user", 4, zUser, -1);
+  Th_SetVar(g.interp, "style_nonce", 11, style_nonce(), -1);
+  Th_SetVar(g.interp, "repo_url", 8, g.zTop, -1);
+  Th_SetVar(g.interp, "chat_provider", 13, zProvider, -1);
+  Th_SetVar(g.interp, "chat_model", 10, zModel ? zModel : "", -1);
+  Th_SetVar(g.interp, "embed_provider", 14, zEmbedProvider, -1);
+  Th_SetVar(g.interp, "embed_model", 11, zEmbedModel ? zEmbedModel : "", -1);
+  Th_SetVar(g.interp, "config_source", 13, zConfigSource, -1);
+  Th_SetVar(g.interp, "capabilities", 28, "chat-stream,context,roles", -1);
+  Th_SetVar(g.interp, "provider_disabled_attr", 22, chatProviderLocked ? "disabled" : "", -1);
+  
+  /* Render history into a variable */
+  {
+    Blob history = BLOB_INITIALIZER;
+    agent_chat_render_history_to_blob(sidCurrent, &history);
+    Th_SetVar(g.interp, "history_html", 12, blob_str(&history), blob_size(&history));
+    blob_reset(&history);
+  }
+
+  /* Render sessions into a variable */
+  {
+    Blob sessions = BLOB_INITIALIZER;
+    agent_chat_render_sessions_to_blob(zUser, sidCurrent, &sessions);
+    Th_SetVar(g.interp, "sessions_html", 13, blob_str(&sessions), blob_size(&sessions));
+    blob_reset(&sessions);
+  }
+
+  /* Load and render the template and resources */
+  {
+    Blob template = BLOB_INITIALIZER;
+    Blob css = BLOB_INITIALIZER;
+    Blob js = BLOB_INITIALIZER;
+    char *zPath;
+    
+    zPath = mprintf("%scfg/agentui.css", g.zLocalRoot);
+    if( blob_read_from_file(&css, zPath, ExtFILE)>=0 ){
+      Th_SetVar(g.interp, "ui_css", 6, blob_str(&css), blob_size(&css));
+    }
+    fossil_free(zPath);
+
+    zPath = mprintf("%scfg/agentui.js", g.zLocalRoot);
+    if( blob_read_from_file(&js, zPath, ExtFILE)>=0 ){
+      Th_SetVar(g.interp, "ui_js", 5, blob_str(&js), blob_size(&js));
+    }
+    fossil_free(zPath);
+
+    zPath = mprintf("%scfg/agentui.th1", g.zLocalRoot);
+    if( blob_read_from_file(&template, zPath, ExtFILE)>=0 ){
+      Th_Render(blob_str(&template));
+    }else{
+      CX("<p class=\"error\">Error: cfg/agentui.th1 not found at %h</p>", zPath);
+    }
+    fossil_free(zPath);
+    blob_reset(&template);
+    blob_reset(&css);
+    blob_reset(&js);
+  }
+
+>>>>>>> Stashed changes
   fossil_free(zConfigSource);
   style_finish_page();
 }
@@ -5908,6 +6075,125 @@ void agent_chat_page(void){
 }
 
 /*
+** WEBPAGE: agent-chat-stream
+**
+** SSE (Server-Sent Events) endpoint for streaming agent chat.
+*/
+void agent_chat_stream_page(void){
+  const char *zMsg;
+  const char *zModel;
+  const char *zProvider;
+  const char *zUser;
+  int sid;
+
+  login_check_credentials();
+  if( !g.perm.Read ){
+    cgi_set_content_type("text/plain");
+    CX("error: missing read permissions or not logged in\n");
+    return;
+  }
+  zMsg = PD("msg", "");
+  zProvider = PD("provider", agent_chat_provider());
+  zModel = PD("model", agent_default_model());
+  zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
+  sid = atoi(PD("sid","0"));
+  const char *zRoleParam = PD("role", "");
+  
+  /* Disable Fossil's standard output buffering for SSE */
+  cgi_set_content_type("text/event-stream");
+  cgi_printf("Cache-Control: no-cache\nConnection: keep-alive\n\n");
+  fflush(stdout);
+
+  if( zMsg[0]==0 || zModel[0]==0 ){
+    if( fossil_strcmp(zRoleParam, "reviewer")!=0 ){
+      CX("data: {\"error\":\"missing msg or model parameter\"}\n\n");
+      return;
+    }
+  }
+
+  db_begin_write();
+  db_unprotect(PROTECT_READONLY);
+  if( sid<=0 || !agent_chat_session_exists(sid) ){
+    sid = agent_chat_session_create(zUser, zProvider, zModel);
+  }
+
+  Th_FossilInit(TH_INIT_DEFAULT);
+  Th_StoreInt("sid", sid);
+  Th_SetVar(g.interp, "msg",       3, zMsg,      (int)strlen(zMsg));
+  Th_SetVar(g.interp, "provider",  8, zProvider, (int)strlen(zProvider));
+  Th_SetVar(g.interp, "model",     5, zModel,    (int)strlen(zModel));
+  Th_SetVar(g.interp, "user",      4, zUser,     (int)strlen(zUser));
+  Th_StoreInt("context_enabled", PB("context"));
+
+  /* Direct TH1 run with streaming */
+  {
+    Blob script = BLOB_INITIALIZER;
+    char *zPath;
+    if( zRoleParam[0] ){
+      zPath = mprintf("%scfg/roles/%s.th1", g.zLocalRoot, zRoleParam);
+    }else{
+      zPath = mprintf("%scfg/roles/default.th1", g.zLocalRoot);
+    }
+    if( blob_read_from_file(&script, zPath, ExtFILE)>=0 ){
+      Th_Eval(g.interp, 0, blob_str(&script), -1);
+    }else{
+      CX("data: {\"error\":\"Role script not found: %s\"}\n\n", zRoleParam[0] ? zRoleParam : "default");
+    }
+    fossil_free(zPath);
+    blob_reset(&script);
+  }
+  db_end_transaction(0);
+}
+
+/*
+** TH1 command: agent_json_extract JSON FIELD
+**
+** CRUDE: Extract a simple string value from a'flat' JSON object for the prototype.
+*/
+static int agent_json_extract_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  const char *zJson = argv[1];
+  const char *zField = argv[2];
+  char *zKey;
+  char *zStart, *zEnd;
+  if( argc!=3 ) return Th_WrongNumArgs(interp, "agent_json_extract JSON FIELD");
+  zKey = mprintf("\"%s\":\"", zField);
+  zStart = strstr(zJson, zKey);
+  if( zStart ){
+    zStart += strlen(zKey);
+    zEnd = strchr(zStart, '\"');
+    if( zEnd ){
+      Th_SetResult(interp, zStart, (int)(zEnd - zStart));
+    }
+  }
+  fossil_free(zKey);
+  return TH_OK;
+}
+
+/*
+** TH1 command: agent_json_quote STRING
+*/
+static int agent_json_quote_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  Blob out = BLOB_INITIALIZER;
+  if( argc!=2 ) return Th_WrongNumArgs(interp, "agent_json_quote STRING");
+  blob_appendf(&out, "%!j", argv[1]);
+  Th_SetResult(interp, blob_str(&out), blob_size(&out));
+  blob_reset(&out);
+  return TH_OK;
+}
+
+/*
 ** TH1 command: agent_context MESSAGE ?MODEL?
 **
 ** Assembles the repository context for the given message and model.
@@ -5973,14 +6259,131 @@ static int agent_run_th1(
   if( argc!=4 ){
     return Th_WrongNumArgs(interp, "agent_run PROVIDER MODEL MSG");
   }
-  rc = agent_run_backend(argv[1], argv[2], argv[3], &reply, &err);
-  if( rc==0 ){
-    Th_SetResult(interp, blob_str(&reply), blob_size(&reply));
+  blob_reset(&err);
+  return rc;
+}
+
+/*
+** TH1 command: agent_mcp_call TOOL_NAME JSON_ARGS
+**
+** Invokes a tool on the internal or external MCP server.
+*/
+static int agent_mcp_call_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  Blob out = BLOB_INITIALIZER;
+  if( argc<2 ){
+    return Th_WrongNumArgs(interp, "agent_mcp_call TOOL_NAME ?ARGS...?");
+  }
+  
+  const char *zTool = argv[1];
+  if( fossil_strcmp(zTool, "list_files")==0 ){
+    int vid = db_lget_int("checkout", 0);
+    Stmt q;
+    int first = 1;
+    blob_appendf(&out, "Files:\n");
+    db_prepare(&q, "SELECT pathname FROM vfile WHERE vid=%d AND deleted=0 ORDER BY pathname LIMIT 50", vid);
+    while( db_step(&q)==SQLITE_ROW ){
+      blob_appendf(&out, "%s  %s", first ? "" : "\n", db_column_text(&q, 0));
+      first = 0;
+    }
+    db_finalize(&q);
+  }else if( fossil_strcmp(zTool, "read_file")==0 ){
+    if( argc<3 ) return Th_WrongNumArgs(interp, "agent_mcp_call read_file PATH");
+    if( blob_read_from_file(&out, argv[2], ExtFILE)<0 ){
+       blob_appendf(&out, "Error: could not read file %s", argv[2]);
+    }
+  }else if( fossil_strcmp(zTool, "edit_file")==0 ){
+    /* edit_file PATH EXPL REPLACE WITH CONFIRMED */
+    if( argc<6 ) return Th_WrongNumArgs(interp, "agent_mcp_call edit_file PATH EXPL REPLACE WITH CONFIRMED");
+    const char *zPath = argv[2];
+    const char *zReplace = argv[4];
+    const char *zWith = argv[5];
+    int bConfirmed = atoi(argv[6]);
+
+    if( bConfirmed ){
+       Blob content = BLOB_INITIALIZER;
+       if( blob_read_from_file(&content, zPath, ExtFILE)>=0 ){
+         char *zOld = (char*)blob_str(&content);
+         char *zPos = strstr(zOld, zReplace);
+         if( zPos ){
+           Blob next = BLOB_INITIALIZER;
+           blob_append(&next, zOld, (int)(zPos - zOld));
+           blob_append(&next, zWith, -1);
+           blob_append(&next, zPos + strlen(zReplace), -1);
+           blob_write_to_file(&next, zPath);
+           blob_appendf(&out, "Successfully applied the edit to %s.", zPath);
+           blob_reset(&next);
+         }else{
+           blob_appendf(&out, "Error: The target text to replace was not found in %s.", zPath);
+         }
+         blob_reset(&content);
+       }else{
+         blob_appendf(&out, "Error: Could not read file %s for editing.", zPath);
+       }
+    }else{
+      /* Propose phase */
+      blob_appendf(&out, "{\"type\":\"propose_edit\",\"path\":%!j,\"replace\":%!j,\"with\":%!j}", 
+                   zPath, zReplace, zWith);
+    }
   }else{
+    blob_appendf(&out, "Error: Unknown tool %s (External MCP client not yet fully piped)", zTool);
+  }
+
+  Th_SetResult(interp, blob_str(&out), blob_size(&out));
+  blob_reset(&out);
+  return TH_OK;
+}
+
+/*
+** Register all agent-related TH1 commands.
+*/
+void agent_register_th1(Th_Interp *interp){
+  static const struct {
+    const char *zName;
+    Th_CommandProc xProc;
+    void *pContext;
+  } aCmd[] = {
+    { "agent_context",     agent_context_th1,     0 },
+    { "agent_run",         agent_run_th1,         0 },
+    { "agent_run_stream",  agent_run_stream_th1,  0 },
+    { "agent_save",        agent_save_th1,        0 },
+    { "agent_mcp_call",    agent_mcp_call_th1,    0 },
+    { "agent_json_extract", agent_json_extract_th1, 0 },
+    { "agent_json_quote",   agent_json_quote_th1,   0 },
+  };
+  int i;
+  for(i=0; i<sizeof(aCmd)/sizeof(aCmd[0]); i++){
+    Th_CreateCommand(interp, aCmd[i].zName, aCmd[i].xProc, aCmd[i].pContext, 0);
+  }
+}
+
+/*
+** TH1 command: agent_run_stream PROVIDER MODEL MSG
+**
+** Calls the configured AI backend and streams the response as SSE.
+*/
+static int agent_run_stream_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  Blob err = BLOB_INITIALIZER;
+  int rc;
+  if( argc!=4 ){
+    return Th_WrongNumArgs(interp, "agent_run_stream PROVIDER MODEL MSG");
+  }
+  rc = agent_run_backend_core(argv[1], argv[2], argv[3], 0, &err, agent_sse_handler, 0);
+  if( rc!=0 ){
     Th_SetResult(interp, blob_str(&err), blob_size(&err));
     rc = TH_ERROR;
   }
-  blob_reset(&reply);
   blob_reset(&err);
   return rc;
 }
@@ -6236,8 +6639,9 @@ static int pool_link_th1(
 }
 
 /*
-** Register all agent commands with the TH1 interpreter.
+** MCP Tool: list_files
 */
+<<<<<<< Updated upstream
 void agent_register_th1(Th_Interp *interp){
   static const struct {
     const char *zName;
@@ -6260,5 +6664,94 @@ void agent_register_th1(Th_Interp *interp){
   int i;
   for(i=0; aCmd[i].zName; i++){
     Th_CreateCommand(interp, aCmd[i].zName, aCmd[i].xProc, 0, 0);
+=======
+static void agent_mcp_list_files(void){
+  Stmt q;
+  int vid = db_lget_int("checkout", 0);
+  int first = 1;
+  CX("{\"tools\":[{\"name\":\"list_files\",\"description\":\"List files in the repo\",\"content\":[");
+  db_prepare(&q, "SELECT pathname FROM vfile WHERE vid=%d AND deleted=0 ORDER BY pathname LIMIT 100", vid);
+  while( db_step(&q)==SQLITE_ROW ){
+    CX("%s%#j", first ? "" : ",", db_column_text(&q, 0));
+    first = 0;
+  }
+  db_finalize(&q);
+  CX("]}]}");
+}
+
+/*
+** COMMAND: agent
+**
+** Additional SUBCOMMAND for MCP:
+**
+**    fossil agent mcp
+**       Run Fossil as a Model Context Protocol (MCP) server on stdio.
+*/
+void agent_mcp_cmd(void){
+  Blob line = BLOB_INITIALIZER;
+  db_find_and_open_repository(OPEN_ANY_SCHEMA, 0);
+  while( blob_read_from_channel(&line, stdin, 0)>=0 ){
+    const char *zLine = blob_str(&line);
+    if( strstr(zLine, "\"method\":\"tools/list\"") ){
+      Blob schema = BLOB_INITIALIZER;
+      char *zPath = mprintf("%scfg/mcp_tools.json", g.zLocalRoot);
+      if( blob_read_from_file(&schema, zPath, ExtFILE)>=0 ){
+        CX("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":%s}\n", blob_str(&schema));
+      }else{
+        CX("{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32000,\"message\":\"MCP schema not found\"}}\n");
+      }
+      fossil_free(zPath);
+      blob_reset(&schema);
+      fflush(stdout);
+    }else if( strstr(zLine, "\"method\":\"tools/call\"") && strstr(zLine, "\"name\":\"list_files\"") ){
+      Stmt q;
+      int vid = db_lget_int("checkout", 0);
+      int first = 1;
+      CX("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"");
+      db_prepare(&q, "SELECT pathname FROM vfile WHERE vid=%d AND deleted=0 ORDER BY pathname LIMIT 100", vid);
+      while( db_step(&q)==SQLITE_ROW ){
+        CX("%s%s", first ? "" : "\\n", db_column_text(&q, 0));
+        first = 0;
+      }
+      db_finalize(&q);
+      CX("\"}]}}\n");
+      fflush(stdout);
+    }else if( strstr(zLine, "\"method\":\"tools/call\"") && strstr(zLine, "\"name\":\"read_file\"") ){
+      const char *zPath = strstr(zLine, "\"path\":\"");
+      if( zPath ){
+        char *zCopy;
+        zPath += 8;
+        zCopy = fossil_strdup(zPath);
+        for(int i=0; zCopy[i]; i++){ if(zCopy[i]=='\"'){ zCopy[i]=0; break; } }
+        Blob content = BLOB_INITIALIZER;
+        if( blob_read_from_file(&content, zCopy, ExtFILE)>=0 ){
+          CX("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":%!j}]}}\n", blob_str(&content));
+        }else{
+          CX("{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32000,\"message\":\"File not found\"}}\n");
+        }
+        blob_reset(&content);
+        fossil_free(zCopy);
+      }
+      fflush(stdout);
+    }else if( strstr(zLine, "\"method\":\"tools/call\"") && strstr(zLine, "\"name\":\"semantic_search\"") ){
+      const char *zQuery = strstr(zLine, "\"query\":\"");
+      if( zQuery ){
+        char *zCopy;
+        zQuery += 9;
+        zCopy = fossil_strdup(zQuery);
+        for(int i=0; zCopy[i]; i++){ if(zCopy[i]=='\"'){ zCopy[i]=0; break; } }
+        Blob out = BLOB_INITIALIZER;
+        if( agent_semantic_search(agent_embedding_model(), zCopy, 5, &out, 0)>0 ){
+          CX("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":%!j}]}}\n", blob_str(&out));
+        }else{
+          CX("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"No matches found.\"}]}}\n");
+        }
+        blob_reset(&out);
+        fossil_free(zCopy);
+      }
+      fflush(stdout);
+    }
+    blob_reset(&line);
+>>>>>>> Stashed changes
   }
 }

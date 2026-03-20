@@ -1,0 +1,57 @@
+{
+  "tools": [
+    {
+      "name": "list_files",
+      "description": "List common files in the checkout",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "read_file",
+      "description": "Read a file's contents",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    },
+    {
+      "name": "semantic_search",
+      "description": "Search the RAG knowledge base",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "edit_file",
+      "description": "Propose an edit to a file. Requires user approval.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "explanation": { "type": "string" },
+          "replace": { "type": "string" },
+          "with": { "type": "string" }
+        },
+        "required": ["path", "explanation", "replace", "with"]
+      }
+    }
+  ]
+}

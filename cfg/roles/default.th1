@@ -1,0 +1,43 @@
+set tools_json ""
+set tools_path "$g(zLocalRoot)cfg/mcp_tools.json"
+if {[file exists $tools_path]} {
+  set tools_json [read_file $tools_path]
+}
+
+set system_prompt "You are the Fossil AI Agent. You have access to the following tools:\n$tools_json\n\nTo use a tool, output: <tool_call>{\"name\":\"tool_name\",\"args\":{...}}</tool_call>\n"
+
+set context ""
+if {$context_enabled} {
+  set context [agent_context $msg $model]
+  if {[string compare $context ""] != 0} {
+    set full_prompt "$system_prompt\nContext:\n$context\n\nUser request:\n$msg"
+  } else {
+    set full_prompt "$system_prompt\nUser request:\n$msg"
+  }
+} else {
+  set full_prompt "$system_prompt\nUser request:\n$msg"
+}
+
+agent_save $sid $user "user" "prompt" $provider $model "" $msg
+
+# Handle HITL Confirmation
+if {[string compare [string range $msg 0 14] "CONFIRMED_EDIT:"] == 0} {
+  set json [string range $msg 16 end]
+  # Very simple field extraction for the prototype
+  set path [agent_json_extract $json "path"]
+  set replace [agent_json_extract $json "replace"]
+  set with [agent_json_extract $json "with"]
+  
+  set res [agent_mcp_call edit_file $path "Applying approved edit" $replace $with 1]
+  CX "data: [agent_json_quote $res]\n\n"
+  agent_save $sid $user "agent" "reply" $provider $model "" $res
+  return
+}
+
+# Main reasoning loop
+if {[catch {agent_run_stream $provider $model $full_prompt} reply]} {
+  CX "data: {\"error\":[agent_json_quote $reply]}\n\n"
+  agent_save $sid $user "agent" "error" $provider $model "" $reply
+} else {
+  agent_save $sid $user "agent" "reply" $provider $model "" $reply
+}
