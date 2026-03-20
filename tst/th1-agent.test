@@ -44,6 +44,23 @@ esac
 }
 file attributes $thinkingBackend -permissions 0755
 
+# A fake backend that exits successfully but emits no chat payload.
+set emptyBackend [file normalize [file join [pwd] fake-empty-backend.sh]]
+write_file $emptyBackend {#!/usr/bin/env bash
+mode="${FOSSIL_AGENT_MODE:-}"
+case "$mode" in
+  chat)
+    exit 0
+    ;;
+  embed)
+    printf '{"embedding":[0.125,0.25,0.5,1.0]}\n'
+    ;;
+  *)
+    printf 'Error: unsupported mode: %s\n' "$mode"; exit 1 ;;
+esac
+}
+file attributes $emptyBackend -permissions 0755
+
 proc agent_http_request {repository method url body} {
   set requestFile [file join [pwd] th1-agent-http-[getSeqNo].txt]
   set outFile [file join [pwd] th1-agent-http-out-[getSeqNo].txt]
@@ -304,6 +321,14 @@ fossil test-th-eval --open-config {agent_eval a b c}
 test th1-agent-eval-args-2 {[string first {wrong # args} $RESULT]>=0}
 
 ###############################################################################
+# agent_run_stream – Streaming Reply Unit Tests
+###############################################################################
+
+fossil test-th-eval --open-config {agent_run_stream ollama test-th1-model hello}
+test th1-agent-run-stream-1 {[string first {test-agent model=test-th1-model} $RESULT]>=0}
+test th1-agent-run-stream-2 {[string first {reply: hello} $RESULT]>=0}
+
+###############################################################################
 # agent_json_quote – JSON Quoting Unit Tests
 ###############################################################################
 
@@ -509,6 +534,31 @@ test th1-agent-hist-2 {[string first {"sid":} $histBody]>=0}
 test th1-agent-hist-3 {[string first {"messages":[} $histBody]>=0}
 test th1-agent-hist-4 {[string first {"title":"events and history"} $histBody]>=0}
 test th1-agent-hist-5 {[string first {"role":"agent","kind":"reply"} $histBody]>=0}
+test th1-agent-hist-6 {[string first {reply: events and history} $histBody]>=0}
+
+###############################################################################
+# Empty backend replies must surface as errors
+###############################################################################
+
+write_file [file join $cfgDir agent.json] [subst -nocommands {
+{
+  "provider": "ollama",
+  "model": "test-th1-model",
+  "command": "$emptyBackend",
+  "thinking_tag": "thought",
+  "embedding_provider": "ollama",
+  "embedding_model": "test-embed-model",
+  "embedding_command": "$backend"
+}
+}]
+
+set body [subst {sid=0&msg=empty+reply&model=test-th1-model&context=0&proof=$proof}]
+set response [agent_http_request $repository POST /agent-chat $body]
+set body2 [agent_http_body $response]
+set RESULT $body2
+set CODE 0
+test th1-agent-empty-1 {[string first {"error":} $body2]>=0}
+test th1-agent-empty-2 {[string first {empty reply} $body2]>=0}
 
 ###############################################################################
 
@@ -539,4 +589,5 @@ fossil sql "SELECT count(*) FROM repository.ai_note WHERE nid=$new_nid AND tier=
 test th1-pool-verify-1 {[normalize_result] == 1}
 
 catch {file delete $thinkingBackend}
+catch {file delete $emptyBackend}
 test_cleanup

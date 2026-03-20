@@ -70,12 +70,27 @@
     var partialLine = '';
     var agentDiv = null;
     var agentPre = null;
+    var sawPayload = false;
     
     fetch(url).then(function(response){
+      if(!response.ok){
+        throw new Error('Stream request failed: HTTP ' + response.status);
+      }
+      if(!response.body){
+        throw new Error('Stream request returned no body.');
+      }
       var reader = response.body.getReader();
       function readChunk(){
         reader.read().then(function(result){
-          if(result.done){ setStatus('Idle'); return; }
+          if(result.done){
+            if(sawPayload){
+              setStatus('Reply received');
+            }else{
+              setStatus('Backend returned an empty reply', 'error');
+              addMsg('System', 'Backend returned an empty reply.');
+            }
+            return;
+          }
           var chunk = decoder.decode(result.value, {stream: true});
           var lines = (partialLine + chunk).split('\n');
           partialLine = lines.pop();
@@ -85,7 +100,11 @@
               var content;
               try { content = JSON.parse(dataStr); } catch(e) { return; }
               
-              if(typeof content === 'object' && content.type === 'propose_edit'){
+              if(content && typeof content === 'object' && content.error){
+                setStatus('Backend error', 'error');
+                addMsg('System', content.error);
+                return;
+              } else if(content && typeof content === 'object' && content.type === 'propose_edit'){
                 renderApprovalCard(content);
               } else {
                 if(!agentDiv){
@@ -95,15 +114,22 @@
                   log.appendChild(agentDiv);
                   agentPre = agentDiv.querySelector('pre');
                 }
+                sawPayload = true;
                 agentPre.textContent += content;
               }
               log.scrollTop = log.scrollHeight;
             }
           });
           readChunk();
+        }).catch(function(err){
+          setStatus('Stream failed', 'error');
+          addMsg('System', err && err.message ? err.message : 'Stream read failed.');
         });
       }
       readChunk();
+    }).catch(function(err){
+      setStatus('Request failed', 'error');
+      addMsg('System', err && err.message ? err.message : 'Request failed.');
     });
   });
 

@@ -21,6 +21,7 @@
 #include "agent.h"
 #include <assert.h>
 #ifdef FOSSIL_ENABLE_JSON
+#include "cson_amalgamation.h"
 #include "json_detail.h"
 #endif
 
@@ -92,6 +93,7 @@ static int agent_provider_match_command(
   const char *zCmdExec
 );
 #endif
+static void agent_strip_prefix_noise(Blob *pText);
 static int agent_validate_provider_model(
   const char *zProvider,
   const char *zModel,
@@ -702,12 +704,12 @@ static int agent_embedding_is_available(void){
 }
 
 static int agent_provider_is_known(const char *zProvider){
+  if( zProvider==0 || zProvider[0]==0 ) return 0;
+#ifdef FOSSIL_ENABLE_JSON
   cson_value *pRoot = 0;
   Blob json = BLOB_INITIALIZER;
   cson_object *pRootObj = 0;
   int rc = 0;
-  if( zProvider==0 || zProvider[0]==0 ) return 0;
-#ifdef FOSSIL_ENABLE_JSON
   pRootObj = agent_metadata_parse_object(&pRoot, &json);
   if( agent_provider_array_count(pRootObj)>0 ){
     rc = agent_provider_object(pRootObj, zProvider)!=0;
@@ -744,11 +746,11 @@ static int agent_provider_rejects_ollama_models(const char *zProvider){
 ** implementation.
 */
 static int agent_chat_provider_locked(void){
+  int rc = 1;
+#ifdef FOSSIL_ENABLE_JSON
   cson_value *pRoot = 0;
   Blob json = BLOB_INITIALIZER;
   cson_object *pRootObj = 0;
-  int rc = 1;
-#ifdef FOSSIL_ENABLE_JSON
   pRootObj = agent_metadata_parse_object(&pRoot, &json);
   rc = agent_json_bool(pRootObj, "chat_provider_locked", 1);
   cson_value_free(pRoot);
@@ -2023,18 +2025,13 @@ static void agent_chat_render_history_to_blob(int sidCurrent, Blob *pOut){
     const char *zMeta = db_column_text(&q, 4);
     const char *zMsg = db_column_text(&q, 5);
     const char *zFeedback = db_column_text(&q, 6);
-<<<<<<< Updated upstream
     int bPromptMeta = zRole && zKind
       && fossil_strcmp(zRole,"user")==0
       && fossil_strcmp(zKind,"prompt")==0
       && agent_chat_meta_context_enabled(zMeta);
     int retrievalQid = bPromptMeta ? agent_chat_meta_retrieval_qid(zMeta) : 0;
-    @ <div style="margin-bottom:0.8em;">
-    @ <b>%h(zRoleLabel):</b>
-=======
     blob_appendf(pOut, "<div style=\"margin-bottom:0.8em;\">\n");
     blob_appendf(pOut, "<b>%h:</b>", zRoleLabel);
->>>>>>> Stashed changes
     if( zProvider && zProvider[0] ){
       blob_appendf(pOut, " <span class=\"dimmed\">[%h%s%h]</span>", 
                    zProvider, (zModel&&zModel[0]?" / ":""), zModel);
@@ -2042,18 +2039,14 @@ static void agent_chat_render_history_to_blob(int sidCurrent, Blob *pOut){
     if( zKind && zKind[0] ){
       blob_appendf(pOut, " <span class=\"dimmed\">{%h}</span>", zKind);
     }
-<<<<<<< Updated upstream
     if( bPromptMeta ){
-      @ <span class="dimmed">[context=pool]</span>
+      blob_appendf(pOut, " <span class=\"dimmed\">[context=pool]</span>");
       if( retrievalQid>0 ){
-        @ <span class="dimmed">[<a href="%R/agentui?sid=%d(sidCurrent)#retrieval-%d(retrievalQid)" data-retrieval-qid="%d(retrievalQid)">retrieval #%d(retrievalQid)</a>]</span>
+        blob_appendf(pOut, " <span class=\"dimmed\">[<a href=\"%%R/agentui?sid=%d#retrieval-%d\" data-retrieval-qid=\"%d\">retrieval #%d</a>]</span>",
+                     sidCurrent, retrievalQid, retrievalQid, retrievalQid);
       }
     }else if( zMeta && zMeta[0] ){
-      @ <span class="dimmed">meta=%h(zMeta)</span>
-=======
-    if( zMeta && zMeta[0] ){
       blob_appendf(pOut, " <span class=\"dimmed\">meta=%h</span>", zMeta);
->>>>>>> Stashed changes
     }
     if( zFeedback && zFeedback[0] ){
       blob_appendf(pOut, " <span class=\"dimmed\">feedback=%h</span>", zFeedback);
@@ -3693,6 +3686,14 @@ static int agent_run_backend_core(
     agent_strip_ansi(pReply);
     agent_strip_prefix_noise(pReply);
     blob_trim(pReply);
+    if( blob_size(pReply)==0 ){
+      if( pErr ){
+        blob_appendf(pErr, "agent backend returned an empty reply");
+      }
+      blob_reset(&cmd);
+      blob_reset(&envCmd);
+      return 1;
+    }
   }
   blob_reset(&cmd);
   blob_reset(&envCmd);
@@ -5113,27 +5114,14 @@ void agent_cmd(void){
 ** Knowledge console for interactive orchestration and retrieval tracing.
 */
 void agentui_page(void){
-<<<<<<< Updated upstream
-  char *zModel;
-  char *zSessionProvider;
-  char *zCmd;
-  char *zEmbedModel;
-  char *zEmbedCmd;
-  char *zProvider;
-  char *zEmbedProvider;
-  const char *zUser;
-  char *zConfigSource;
-  int chatProviderLocked;
-=======
->>>>>>> Stashed changes
   int sidCurrent;
   int sidRequested;
   const char *zUser;
-  const char *zProvider;
-  const char *zModel;
-  const char *zEmbedProvider;
-  const char *zEmbedCmd;
-  const char *zEmbedModel;
+  char *zProvider;
+  char *zModel;
+  char *zEmbedProvider;
+  char *zEmbedCmd;
+  char *zEmbedModel;
   char *zConfigSource;
   char *zCmd;
   int chatProviderLocked;
@@ -5146,568 +5134,18 @@ void agentui_page(void){
   zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
   sidRequested = atoi(PD("sid","0"));
   sidCurrent = agent_chat_session_exists(sidRequested) ? sidRequested : 0;
-<<<<<<< Updated upstream
-  zSessionProvider = mprintf("%s",
-    agent_chat_session_provider(sidCurrent, agent_chat_provider())
-  );
-  zModel = mprintf("%s",
-    agent_chat_session_model(sidCurrent, agent_default_model())
-  );
-  zCmd = mprintf("%s", agent_command_template());
-  zEmbedModel = mprintf("%s", agent_embedding_model());
-  zEmbedCmd = mprintf("%s", agent_embedding_template());
-  zProvider = mprintf("%s", zSessionProvider);
-  zEmbedProvider = mprintf("%s", agent_embedding_provider());
-=======
 
-  zProvider = agent_chat_session_provider(sidCurrent, agent_chat_provider());
-  zModel = agent_chat_session_model(sidCurrent, agent_default_model());
-  zCmd = agent_command_template();
-  zEmbedProvider = agent_embedding_provider();
-  zEmbedCmd = agent_embedding_template();
-  zEmbedModel = agent_embedding_model();
->>>>>>> Stashed changes
+  zProvider = mprintf("%s", agent_chat_session_provider(sidCurrent, agent_chat_provider()));
+  zModel = mprintf("%s", agent_chat_session_model(sidCurrent, agent_default_model()));
+  zCmd = mprintf("%s", agent_command_template());
+  zEmbedProvider = mprintf("%s", agent_embedding_provider());
+  zEmbedCmd = mprintf("%s", agent_embedding_template());
+  zEmbedModel = mprintf("%s", agent_embedding_model());
   zConfigSource = agent_config_source();
   chatProviderLocked = agent_chat_provider_locked();
 
   style_set_current_feature("agent");
-<<<<<<< Updated upstream
   agent_console_submenu(sidCurrent);
-  style_header("Agent Console");
-  @ <div class="fossil-doc" data-title="Agent Console">
-  @ <p>This is the interactive AI retrieval and processing path. Use it to run
-  @ chat-driven orchestration, inspect retrieval influence, and work against
-  @ the repository knowledge pool in real time.</p>
-  @ <div style="border:1px solid #888;padding:0.6em;margin:0 0 1em 0;background:rgba(127,127,127,0.05);">
-  @ <b>Effective config</b><br>
-  @ source: <span id="agent-config-source">%h(zConfigSource)</span><br>
-  @ chat provider: <span id="agent-config-chat-provider">%h(zProvider)</span><br>
-  @ chat command: <span id="agent-config-chat-command">%h(zCmd)</span><br>
-  @ chat model: <span id="agent-config-chat-model">%h(zModel && zModel[0] ? zModel : "(unset)")</span><br>
-  @ embedding provider: <span id="agent-config-embedding-provider">%h(zEmbedProvider)</span><br>
-  @ embedding command: <span id="agent-config-embedding-command">%h(zEmbedCmd && zEmbedCmd[0] ? zEmbedCmd : "(builtin/default)")</span><br>
-  @ embedding model: <span id="agent-config-embedding-model">%h(zEmbedModel && zEmbedModel[0] ? zEmbedModel : "(unset)")</span><br>
-  @ capabilities:
-  @ <span id="agent-config-capabilities">
-  @ chat streaming=no, model discovery=no, provider locked=yes, embeddings=%s(agent_embedding_is_available() ? "yes" : "no")
-  @ </span>
-  @ </div>
-  @ <div style="display:grid;grid-template-columns:minmax(12em,16em) 1fr;gap:1em;">
-  @ <div>
-  @ <div style="margin-bottom:0.7em;"><a class="btn" href="%R/agentui?new=1">New Chat</a></div>
-  @ <div style="border:1px solid #888;padding:0.6em;background:rgba(127,127,127,0.05);">
-  @ <div style="font-weight:bold;margin-bottom:0.4em;">Processing Tiers</div>
-  @ <div class="dimmed" style="margin-bottom:0.5em;">Everything stays in the pool and moves through review tiers.</div>
-  @ <div id="agent-pool-tiers">Loading pool summary...</div>
-  @ </div>
-  @ <div style="border:1px solid #888;padding:0.6em;background:rgba(127,127,127,0.05);margin-top:0.8em;">
-  @ <div style="font-weight:bold;margin-bottom:0.4em;">Sessions</div>
-  agent_chat_render_sessions(zUser, sidCurrent);
-  @ </div>
-  @ </div>
-  @ <div>
-  @ <div class="forumEdit">
-  @ <label for="agent-provider"><b>Provider:</b></label>
-  @ <select id="agent-provider"%s(chatProviderLocked ? " disabled" : "")>
-  @ <option value="%h(zProvider)" selected>%h(zProvider)</option>
-  @ </select>
-  @ &nbsp;&nbsp;
-  @ <label for="agent-model"><b>Model:</b></label>
-  @ <input type="text" id="agent-model" size="24" list="agent-model-suggestions" value="%h(zModel)">
-  @ <datalist id="agent-model-suggestions"></datalist>
-  @ &nbsp;&nbsp;
-  @ <label><input type="checkbox" id="agent-context" checked> <b>Context Awareness</b></label>
-  @ </div>
-  @ <div id="agent-chat-status"
-  @  style="margin:0.6em 0;padding:0.5em 0.7em;border:1px solid #888;background:rgba(127,127,127,0.05);">
-  @ Status: Idle
-  @ </div>
-  @ <style nonce="%h(style_nonce())">
-  @   .spinner {
-  @     display: inline-block;
-  @     width: 1em; height: 1em;
-  @     border: 2px solid rgba(0,0,0,0.1);
-  @     border-radius: 50%%;
-  @     border-top-color: #555;
-  @     animation: spin 1s ease-in-out infinite;
-  @     vertical-align: middle;
-  @     margin-left: 0.5em;
-  @   }
-  @   @keyframes spin { to { transform: rotate(360deg); } }
-  @   .thinking-details[open] summary { margin-bottom: 0.5em; }
-  @ </style>
-  @ <div id="agent-chat-log"
-  @  style="min-height:320px;max-height:520px;overflow:auto;border:1px solid
-  @  #888;padding:0.8em;margin:1em 0;background:rgba(127,127,127,0.05);">
-  agent_chat_render_history(sidCurrent);
-  @ </div>
-  @ <div class="forumEdit">
-  @ <textarea id="agent-chat-input" rows="6" cols="80"
-  @  placeholder="Ask the local agent a question..."></textarea>
-  @ </div>
-  @ <div class="forumEdit">
-  @ <input type="button" class="btn" id="agent-chat-send" value="Send">
-  @ </div>
-  @ <div class="forumEdit" id="agent-feedback-controls" style="margin-top:0.8em;">
-  @ <b>Feedback:</b>
-  @ <input type="button" class="btn" id="agent-feedback-useful" value="Useful" disabled>
-  @ <input type="button" class="btn" id="agent-feedback-not-useful" value="Not Useful" disabled>
-  @ <span class="dimmed" id="agent-feedback-status">No reply selected</span>
-  @ </div>
-  @ <div style="border:1px solid #888;padding:0.6em;background:rgba(127,127,127,0.05);margin-top:1em;">
-  @ <div style="font-weight:bold;margin-bottom:0.4em;">Retrieval History</div>
-  @ <div class="dimmed" style="margin-bottom:0.5em;">Each context-aware run links to the retrieval set that shaped it.</div>
-  @ <div id="agent-retrieval-history">No retrieval selected.</div>
-  @ </div>
-  @ <script nonce="%h(style_nonce())">
-  @ (function(){
-  @   var sid = %d(sidCurrent);
-  @   var input = document.getElementById('agent-chat-input');
-  @   var send = document.getElementById('agent-chat-send');
-  @   var provider = document.getElementById('agent-provider');
-  @   var model = document.getElementById('agent-model');
-  @   var context = document.getElementById('agent-context');
-  @   var statusBox = document.getElementById('agent-chat-status');
-  @   var log = document.getElementById('agent-chat-log');
-  @   var feedbackUseful = document.getElementById('agent-feedback-useful');
-  @   var feedbackNotUseful = document.getElementById('agent-feedback-not-useful');
-  @   var feedbackStatus = document.getElementById('agent-feedback-status');
-  @   var pollHandle = 0;
-  @   var lastAcid = 0;
-  @   var lastReplyAcid = 0;
-  @   var lastReplyFeedback = '';
-  @   var configSource = document.getElementById('agent-config-source');
-  @   var cfgChatProvider = document.getElementById('agent-config-chat-provider');
-  @   var cfgChatCommand = document.getElementById('agent-config-chat-command');
-  @   var cfgChatModel = document.getElementById('agent-config-chat-model');
-  @   var cfgEmbedProvider = document.getElementById('agent-config-embedding-provider');
-  @   var cfgEmbedCommand = document.getElementById('agent-config-embedding-command');
-  @   var cfgEmbedModel = document.getElementById('agent-config-embedding-model');
-  @   var cfgCapabilities = document.getElementById('agent-config-capabilities');
-  @   var poolTiers = document.getElementById('agent-pool-tiers');
-  @   var retrievalHistory = document.getElementById('agent-retrieval-history');
-  @   var latestRetrievalQid = 0;
-  @   function esc(text){
-  @     return (text || '').replace(/[&<>]/g, function(c){
-  @       return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];
-  @     });
-  @   }
-  @   function yesNo(v){
-  @     return v ? 'yes' : 'no';
-  @   }
-  @   function setStatus(text, status){
-  @     var statusText = 'Status: ' + text;
-  @     if(status==='running'){
-  @       statusText += ' <span class="spinner"></span>';
-  @     }
-  @     if(statusBox) statusBox.innerHTML = statusText;
-  @   }
-  @   function setFeedbackState(acid, feedback){
-  @     lastReplyAcid = acid || 0;
-  @     lastReplyFeedback = feedback || '';
-  @     if(feedbackUseful) feedbackUseful.disabled = !lastReplyAcid;
-  @     if(feedbackNotUseful) feedbackNotUseful.disabled = !lastReplyAcid;
-  @     if(feedbackStatus){
-  @       feedbackStatus.textContent = lastReplyAcid
-  @         ? ('Current: ' + (lastReplyFeedback || 'none'))
-  @         : 'No reply selected';
-  @     }
-  @   }
-  @   function showValue(node, value, fallback){
-  @     if(node) node.textContent = value && value.length ? value : fallback;
-  @   }
-  @   function setOptions(selectNode, values, selectedValue){
-  @     var i, opt;
-  @     if(!selectNode || !values || !values.length) return;
-  @     selectNode.innerHTML = '';
-  @     for(i=0; i<values.length; i++){
-  @       opt = document.createElement('option');
-  @       opt.value = values[i];
-  @       opt.textContent = values[i];
-  @       if(values[i]===selectedValue) opt.selected = true;
-  @       selectNode.appendChild(opt);
-  @     }
-  @     if(selectedValue && values.indexOf(selectedValue)<0){
-  @       opt = document.createElement('option');
-  @       opt.value = selectedValue;
-  @       opt.textContent = selectedValue;
-  @       opt.selected = true;
-  @       selectNode.appendChild(opt);
-  @     }
-  @   }
-  @   function setDatalist(listNode, values, selectedValue){
-  @     var seen = Object.create(null);
-  @     var i, opt;
-  @     if(!listNode) return;
-  @     listNode.innerHTML = '';
-  @     function addOne(value){
-  @       if(!value || seen[value]) return;
-  @       seen[value] = true;
-  @       opt = document.createElement('option');
-  @       opt.value = value;
-  @       listNode.appendChild(opt);
-  @     }
-  @     addOne(selectedValue);
-  @     if(values){
-  @       for(i=0; i<values.length; i++) addOne(values[i]);
-  @     }
-  @   }
-  @   function applyConfig(data){
-  @     provider.disabled = !!data.chat_provider_locked;
-  @     setOptions(provider, data.chat_provider_choices || [data.chat_provider], data.chat_provider);
-  @     if(data.chat_model!==undefined){ model.value = data.chat_model || ''; }
-  @     setDatalist(document.getElementById('agent-model-suggestions'),
-  @       data.chat_model_suggestions || [], data.chat_model);
-  @     showValue(configSource, data.source, '(unknown)');
-  @     showValue(cfgChatProvider, data.chat_provider, '(unset)');
-  @     showValue(cfgChatCommand, data.chat_command, '(unset)');
-  @     showValue(cfgChatModel, data.chat_model, '(unset)');
-  @     showValue(cfgEmbedProvider, data.embedding_provider, '(unset)');
-  @     showValue(cfgEmbedCommand, data.embedding_command, '(builtin/default)');
-  @     showValue(cfgEmbedModel, data.embedding_model, '(unset)');
-  @     if(cfgCapabilities){
-  @       cfgCapabilities.textContent =
-  @         'chat streaming=' + yesNo(data.chat_supports_streaming)
-  @         + ', model discovery=' + yesNo(data.chat_supports_model_discovery)
-  @         + ', provider locked=' + yesNo(data.chat_provider_locked)
-  @         + ', embeddings=' + yesNo(data.embedding_available);
-  @     }
-  @   }
-  @   function renderPool(data){
-  @     var i, j, tier, note, html;
-  @     if(!poolTiers) return;
-  @     if(!data || !data.tiers){
-  @       poolTiers.textContent = 'Pool summary unavailable.';
-  @       return;
-  @     }
-  @     html = '';
-  @     for(i=0; i<data.tiers.length; i++){
-  @       tier = data.tiers[i];
-  @       html += '<div style="margin-bottom:0.7em;">'
-  @            + '<div><b>' + esc(tier.label || ('Tier ' + tier.tier)) + '</b>'
-  @            + ' <span class="dimmed">(' + esc(tier.process_level || '') + ', '
-  @            + (tier.note_count || 0) + ' notes)</span></div>';
-  @       if(tier.recent_notes && tier.recent_notes.length){
-  @         html += '<div style="margin-top:0.25em;">';
-  @         for(j=0; j<tier.recent_notes.length; j++){
-  @           note = tier.recent_notes[j];
-  @           html += '<div style="margin:0.15em 0 0.15em 0.6em;">'
-  @                + esc(note.title || ('note #' + note.nid))
-  @                + ' <span class="dimmed">retrievals=' + (note.retrieval_count || 0) + '</span>';
-  @           if(note.duplicate_of){
-  @             html += ' <span class="dimmed">dup->' + note.duplicate_of + '</span>';
-  @           }
-  @           if(note.merged_into){
-  @             html += ' <span class="dimmed">merged->' + note.merged_into + '</span>';
-  @           }
-  @           html += '</div>';
-  @         }
-  @         html += '</div>';
-  @       }else{
-  @         html += '<div class="dimmed" style="margin-left:0.6em;">No notes yet.</div>';
-  @       }
-  @       html += '</div>';
-  @     }
-  @     html += '<div class="dimmed" style="border-top:1px solid rgba(0,0,0,0.12);padding-top:0.5em;">'
-  @          + 'retrievals=' + (data.retrieval_count || 0)
-  @          + ', duplicates=' + (data.duplicate_count || 0)
-  @          + ', merged=' + (data.merged_count || 0)
-  @          + '</div>';
-  @     poolTiers.innerHTML = html;
-  @   }
-  @   function refreshPool(){
-  @     return fetch('agent-pool').then(function(r){
-  @       return r.json();
-  @     }).then(function(data){
-  @       renderPool(data);
-  @       return data;
-  @     }).catch(function(){
-  @       if(poolTiers) poolTiers.textContent = 'Pool summary unavailable.';
-  @     });
-  @   }
-  @   function renderRetrieval(data){
-  @     var i, note, html;
-  @     if(!retrievalHistory) return;
-  @     if(!data || !data.qid){
-  @       retrievalHistory.textContent = 'No retrieval selected.';
-  @       return;
-  @     }
-  @     html = '<div><b>Retrieval #' + data.qid + '</b></div>'
-  @          + '<div class="dimmed" style="margin-bottom:0.4em;">'
-  @          + esc(data.created_at || '')
-  @          + '</div>'
-  @          + '<div style="margin-bottom:0.5em;"><b>Query:</b> '
-  @          + esc(data.query_text || '')
-  @          + '</div>';
-  @     if(data.notes && data.notes.length){
-  @       for(i=0; i<data.notes.length; i++){
-  @         note = data.notes[i];
-  @         html += '<div style="margin-bottom:0.5em;padding-top:0.35em;border-top:1px solid rgba(0,0,0,0.08);">'
-  @              + '<div><b>#' + note.rank + '</b> ' + esc(note.title || ('note #' + note.nid)) + '</div>'
-  @              + '<div class="dimmed">tier=' + (note.tier || 0)
-  @              + ' (' + esc(note.process_level || '') + ')'
-  @              + ', score=' + esc(String(note.score || 0))
-  @              + ', delta=' + esc(String(note.reinforcement_delta || 0))
-  @              + ', retrievals=' + (note.retrieval_count || 0)
-  @              + '</div>';
-  @         if(note.duplicate_of || note.merged_into){
-  @           html += '<div class="dimmed">';
-  @           if(note.duplicate_of){
-  @             html += 'duplicate_of=' + note.duplicate_of + ' ';
-  @           }
-  @           if(note.merged_into){
-  @             html += 'merged_into=' + note.merged_into;
-  @           }
-  @           html += '</div>';
-  @         }
-  @         html += '<div class="dimmed">duplication=' + esc(note.duplication_status || 'unknown')
-  @              + ', atomicity=' + esc(note.atomicity_status || 'unknown')
-  @              + ', metadata=' + esc(note.metadata_status || 'unknown')
-  @              + '</div></div>';
-  @       }
-  @     }else{
-  @       html += '<div class="dimmed">This retrieval did not return any notes.</div>';
-  @     }
-  @     retrievalHistory.innerHTML = html;
-  @   }
-  @   function loadRetrieval(qid){
-  @     if(!qid){
-  @       renderRetrieval(null);
-  @       return Promise.resolve();
-  @     }
-  @     latestRetrievalQid = qid;
-  @     if(retrievalHistory){
-  @       retrievalHistory.textContent = 'Loading retrieval #' + qid + '...';
-  @     }
-  @     return fetch('agent-retrieval?qid='+encodeURIComponent(qid)).then(function(r){
-  @       return r.json();
-  @     }).then(function(data){
-  @       renderRetrieval(data);
-  @       return data;
-  @     }).catch(function(){
-  @       if(retrievalHistory){
-  @         retrievalHistory.textContent = 'Retrieval history unavailable.';
-  @       }
-  @     });
-  @   }
-  @   function renderHistory(data){
-  @     var i, msg, div, html;
-  @     log.innerHTML = '';
-  @     lastAcid = 0;
-  @     setFeedbackState(0, '');
-  @     setStatus('Idle');
-  @     if(!data || !data.messages) return;
-  @     for(i=0; i<data.messages.length; i++){
-  @       msg = data.messages[i];
-  @       appendEvent(msg);
-  @     }
-  @     log.scrollTop = log.scrollHeight;
-  @   }
-  @   function appendEvent(msg){
-  @     var meta;
-  @     var showMeta = !!msg.meta;
-  @     var retrievalQid = 0;
-  @     try{ meta = msg.meta ? JSON.parse(msg.meta) : {}; }catch(e){ meta = {}; }
-  @     if(meta.hidden || msg.kind==='context') return;
-  @     if(meta.retrieval_qid) retrievalQid = meta.retrieval_qid;
-  @     var div = document.createElement('div');
-  @     var html;
-  @     div.style.marginBottom = '0.8em';
-  @     html = '<b>' + (msg.role==='user' ? 'You'
-  @            : (msg.role==='system' ? 'System' : 'Agent')) + ':</b>';
-  @     if(msg.provider){
-  @       html += ' <span class="dimmed">[' + esc(msg.provider)
-  @            + (msg.model ? ' / ' + esc(msg.model) : '') + ']</span>';
-  @     }
-  @     if(msg.kind){
-  @       html += ' <span class="dimmed">{' + esc(msg.kind) + '}</span>';
-  @     }
-  @     if(meta.thinking){
-  @       html += ' <details class="thinking-details"><summary class="dimmed">Reasoning</summary>'
-  @            + '<pre style="white-space:pre-wrap;margin:0.5em 0;padding:0.5em;border-left:3px solid #ccc;background:rgba(0,0,0,0.02)">'
-  @            + esc(meta.thinking) + '</pre></details>';
-  @     }
-  @     if(msg.role==='user' && msg.kind==='prompt' && meta.context!==undefined){
-  @       showMeta = 0;
-  @       html += ' <span class="dimmed">[context=' + (meta.context ? 'pool' : 'off') + ']</span>';
-  @       if(retrievalQid>0){
-  @         latestRetrievalQid = retrievalQid;
-  @         html += ' <span class="dimmed">[<a href="#" data-retrieval-qid="' + retrievalQid + '">retrieval #' + retrievalQid + '</a>]</span>';
-  @       }
-  @     }
-  @     if(showMeta && !meta.thinking){
-  @       html += ' <span class="dimmed">meta=' + esc(msg.meta) + '</span>';
-  @     }
-  @     if(msg.feedback){
-  @       html += ' <span class="dimmed">feedback=' + esc(msg.feedback) + '</span>';
-  @     }
-  @     html += ' <pre style="white-space:pre-wrap;display:inline;margin:0">'
-  @           + esc(msg.msg || '') + '</pre>';
-  @     div.innerHTML = html;
-  @     log.appendChild(div);
-  @     if(msg.acid && msg.acid>lastAcid) lastAcid = msg.acid;
-  @     if(msg.kind==='progress' && msg.msg){
-  @       setStatus(msg.msg, meta.status || '');
-  @     }else if(msg.kind==='tool' && msg.msg){
-  @       setStatus(msg.msg, '');
-  @     }else if(msg.role==='agent' && msg.kind==='reply'){
-  @       setStatus('Reply received', '');
-  @       setFeedbackState(msg.acid || 0, msg.feedback || '');
-  @     }else if(msg.role==='agent' && msg.kind==='error'){
-  @       setStatus('Reply failed', 'error');
-  @       setFeedbackState(msg.acid || 0, msg.feedback || '');
-  @     }
-  @   }
-  @   function sendFeedback(value){
-  @     if(!sid || !lastReplyAcid) return;
-  @     if(feedbackStatus) feedbackStatus.textContent = 'Saving ' + value + '...';
-  @     fetch('agent-feedback', {
-  @       method: 'POST',
-  @       headers: {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'},
-  @       body: new URLSearchParams({sid: sid, acid: lastReplyAcid, feedback: value})
-  @     }).then(function(r){
-  @       return r.text().then(function(text){
-  @         var data;
-  @         try{
-  @           data = JSON.parse(text);
-  @         }catch(e){
-  @           throw new Error(text ? text.slice(0, 240) : ('HTTP ' + r.status));
-  @         }
-  @         if(!r.ok){
-  @           throw new Error(data.error || ('HTTP ' + r.status));
-  @         }
-  @         return data;
-  @       });
-  @     }).then(function(data){
-  @       setFeedbackState(data.acid || lastReplyAcid, data.feedback || value);
-  @       return refreshHistory();
-  @     }).catch(function(err){
-  @       if(feedbackStatus) feedbackStatus.textContent = 'Feedback failed: ' + err;
-  @     });
-  @   }
-  @   function refreshHistory(){
-  @     return fetch('agent-history?sid='+encodeURIComponent(sid)).then(function(r){
-  @       return r.json();
-  @     }).then(function(data){
-  @       renderHistory(data);
-  @       if(latestRetrievalQid>0){
-  @         loadRetrieval(latestRetrievalQid).catch(function(){});
-  @       }
-  @       return data;
-  @     });
-  @   }
-  @   function refreshEvents(){
-  @     if(!sid) return Promise.resolve();
-  @     return fetch('agent-events?sid='+encodeURIComponent(sid)+'&after='+encodeURIComponent(lastAcid))
-  @       .then(function(r){
-  @         return r.json();
-  @       }).then(function(data){
-  @         var i;
-  @         if(!data || !data.events) return data;
-  @         for(i=0; i<data.events.length; i++){
-  @           appendEvent(data.events[i]);
-  @         }
-  @         if(data.events.length) log.scrollTop = log.scrollHeight;
-  @         return data;
-  @       });
-  @   }
-  @   function restartPolling(){
-  @     if(pollHandle) clearInterval(pollHandle);
-  @     if(!sid) return;
-  @     pollHandle = setInterval(function(){
-  @       refreshEvents().catch(function(){});
-  @     }, 2000);
-  @   }
-  @   function addMsg(role, text){
-  @     var div = document.createElement('div');
-  @     div.style.marginBottom = '0.8em';
-  @     div.innerHTML = '<b>'+role+':</b> <pre style="white-space:pre-wrap;display:inline;margin:0">'
-  @       + esc(text)
-  @       + '</pre>';
-  @     log.appendChild(div);
-  @     log.scrollTop = log.scrollHeight;
-  @   }
-  @   log.scrollTop = log.scrollHeight;
-  @   fetch('agent-config?sid='+encodeURIComponent(sid)).then(function(r){
-  @     return r.json();
-  @   }).then(function(data){
-  @     applyConfig(data);
-  @   }).catch(function(){});
-  @   refreshPool();
-  @   refreshHistory().then(function(){
-  @     restartPolling();
-  @   }).catch(function(){});
-  @   log.addEventListener('click', function(e){
-  @     var target = e.target;
-  @     var qid;
-  @     if(!target || !target.getAttribute) return;
-  @     qid = target.getAttribute('data-retrieval-qid');
-  @     if(!qid) return;
-  @     e.preventDefault();
-  @     loadRetrieval(qid);
-  @   });
-  @   send.addEventListener('click', function(){
-  @     var msg = input.value.trim();
-  @     if(!msg) return;
-  @     setStatus('Sending request...');
-  @     addMsg('You', msg);
-  @     input.value = '';
-  @     fetch('agent-chat', {
-  @       method: 'POST',
-  @       headers: {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'},
-  @       body: new URLSearchParams({sid: sid, msg: msg, provider: provider.value, model: model.value, context: context.checked ? 1 : 0})
-  @     }).then(function(r){
-  @       return r.text().then(function(text){
-  @         var data;
-  @         try{
-  @           data = JSON.parse(text);
-  @         }catch(e){
-  @           throw new Error(text ? text.slice(0, 240) : ('HTTP ' + r.status));
-  @         }
-  @         if(!r.ok){
-  @           throw new Error(data.error || data.reply || ('HTTP ' + r.status));
-  @         }
-  @         return data;
-  @       });
-  @     }).then(function(data){
-  @       sid = data.sid || sid;
-  @       if(data.provider || data.model){
-  @         applyConfig({chat_provider: data.provider, chat_model: data.model});
-  @       }
-  @       restartPolling();
-  @       return refreshEvents().then(function(result){
-  @         return refreshPool().then(function(){ return result; });
-  @       }).catch(function(){
-  @         addMsg('Agent', data.reply || data.error || '(no reply)');
-  @       });
-  @     }).catch(function(err){
-  @       addMsg('Agent', 'Request failed: ' + err);
-  @     });
-  @   });
-  @   input.addEventListener('keydown', function(e){
-  @     if((e.ctrlKey || e.metaKey) && e.key==='Enter') send.click();
-  @   });
-  @   if(feedbackUseful){
-  @     feedbackUseful.addEventListener('click', function(){ sendFeedback('useful'); });
-  @   }
-  @   if(feedbackNotUseful){
-  @     feedbackNotUseful.addEventListener('click', function(){ sendFeedback('not-useful'); });
-  @   }
-  @   window.addEventListener('beforeunload', function(){
-  @     if(pollHandle) clearInterval(pollHandle);
-  @   });
-  @ })();
-  @ </script>
-  @ </div>
-  @ </div>
-  fossil_free(zModel);
-  fossil_free(zSessionProvider);
-  fossil_free(zCmd);
-  fossil_free(zEmbedModel);
-  fossil_free(zEmbedCmd);
-  fossil_free(zProvider);
-  fossil_free(zEmbedProvider);
-=======
   style_header("AI Agent");
   
   /* Set up dynamic variables for TH1 */
@@ -5771,7 +5209,12 @@ void agentui_page(void){
     blob_reset(&js);
   }
 
->>>>>>> Stashed changes
+  fossil_free(zModel);
+  fossil_free(zCmd);
+  fossil_free(zEmbedModel);
+  fossil_free(zEmbedCmd);
+  fossil_free(zProvider);
+  fossil_free(zEmbedProvider);
   fossil_free(zConfigSource);
   style_finish_page();
 }
@@ -5938,11 +5381,6 @@ void agent_feedback_page(void){
   CX("{\"sid\":%d,\"acid\":%d,\"feedback\":%!j}\n", sid, acid, zFeedback);
 }
 
-/*
-** WEBPAGE: agent-chat
-**
-** JSON endpoint for the configured agent chat UI.
-*/
 /*
 ** Builtin TH1 orchestration script for the AI agent.
 */
@@ -6181,7 +5619,7 @@ void agent_chat_stream_page(void){
 /*
 ** TH1 command: agent_json_extract JSON FIELD
 **
-** CRUDE: Extract a simple string value from a'flat' JSON object for the prototype.
+** CRUDE: Extract a simple string value from a 'flat' JSON object for the prototype.
 */
 static int agent_json_extract_th1(
   Th_Interp *interp,
@@ -6210,6 +5648,8 @@ static int agent_json_extract_th1(
 
 /*
 ** TH1 command: agent_json_quote STRING
+**
+** Returns a JSON-quoted version of the string.
 */
 static int agent_json_quote_th1(
   Th_Interp *interp,
@@ -6218,18 +5658,16 @@ static int agent_json_quote_th1(
   const char **argv,
   int *argl
 ){
-  Blob out = BLOB_INITIALIZER;
+  char *zEsc;
   if( argc!=2 ) return Th_WrongNumArgs(interp, "agent_json_quote STRING");
-  blob_appendf(&out, "%!j", argv[1]);
-  Th_SetResult(interp, blob_str(&out), blob_size(&out));
-  blob_reset(&out);
+  zEsc = mprintf("%!j", argv[1]);
+  Th_SetResult(interp, zEsc, -1);
+  fossil_free(zEsc);
   return TH_OK;
 }
 
 /*
 ** TH1 command: agent_context MESSAGE ?MODEL?
-**
-** Assembles the repository context for the given message and model.
 */
 static int agent_context_th1(
   Th_Interp *interp,
@@ -6240,25 +5678,18 @@ static int agent_context_th1(
 ){
   Blob out = BLOB_INITIALIZER;
   int qid = 0;
-  if( argc!=2 && argc!=3 ){
+  if( argc<2 || argc>3 ){
     return Th_WrongNumArgs(interp, "agent_context MESSAGE ?MODEL?");
   }
-  agentLastRetrievalQid = 0;
-  if( agent_assemble_context(&out, argc==3 ? argv[2] : 0, argv[1], &qid) ){
-    agentLastRetrievalQid = qid;
-    Th_SetResult(interp, blob_str(&out), blob_size(&out));
-  }else{
-    Th_SetResult(interp, "", 0);
-  }
+  agent_assemble_context(&out, argc==3 ? argv[2] : 0, argv[1], &qid);
+  Th_SetResult(interp, blob_str(&out), blob_size(&out));
+  g.ai_last_retrieval_qid = qid;
   blob_reset(&out);
   return TH_OK;
 }
 
 /*
 ** TH1 command: agent_last_retrieval_qid
-**
-** Returns the most recent retrieval qid assembled by agent_context in the
-** current interpreter flow, or 0 if none was recorded.
 */
 static int agent_last_retrieval_qid_th1(
   Th_Interp *interp,
@@ -6267,17 +5698,12 @@ static int agent_last_retrieval_qid_th1(
   const char **argv,
   int *argl
 ){
-  if( argc!=1 ){
-    return Th_WrongNumArgs(interp, "agent_last_retrieval_qid");
-  }
-  Th_SetResultInt(interp, agentLastRetrievalQid);
+  Th_SetResultInt(interp, g.ai_last_retrieval_qid);
   return TH_OK;
 }
 
 /*
 ** TH1 command: agent_run PROVIDER MODEL MSG
-**
-** Calls the configured AI backend and returns the raw response.
 */
 static int agent_run_th1(
   Th_Interp *interp,
@@ -6286,20 +5712,49 @@ static int agent_run_th1(
   const char **argv,
   int *argl
 ){
-  Blob reply = BLOB_INITIALIZER;
-  Blob err = BLOB_INITIALIZER;
+  Blob out = BLOB_INITIALIZER;
   int rc;
   if( argc!=4 ){
     return Th_WrongNumArgs(interp, "agent_run PROVIDER MODEL MSG");
   }
+  rc = agent_run_backend_core(argv[1], argv[2], argv[3], &out, 0, 0, 0);
+  Th_SetResult(interp, blob_str(&out), blob_size(&out));
+  blob_reset(&out);
+  return rc==0 ? TH_OK : TH_ERROR;
+}
+
+/*
+** TH1 command: agent_run_stream PROVIDER MODEL MSG
+*/
+static int agent_run_stream_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  Blob out = BLOB_INITIALIZER;
+  Blob err = BLOB_INITIALIZER;
+  int rc;
+  if( argc!=4 ){
+    return Th_WrongNumArgs(interp, "agent_run_stream PROVIDER MODEL MSG");
+  }
+  rc = agent_run_backend_core(
+    argv[1], argv[2], argv[3], &out, &err, agent_sse_handler, 0
+  );
+  if( rc!=0 ){
+    Th_SetResult(interp, blob_str(&err), blob_size(&err));
+    rc = TH_ERROR;
+  }else{
+    Th_SetResult(interp, blob_str(&out), blob_size(&out));
+  }
+  blob_reset(&out);
   blob_reset(&err);
   return rc;
 }
 
 /*
-** TH1 command: agent_mcp_call TOOL_NAME JSON_ARGS
-**
-** Invokes a tool on the internal or external MCP server.
+** TH1 command: agent_mcp_call TOOL_NAME ?ARGS...?
 */
 static int agent_mcp_call_th1(
   Th_Interp *interp,
@@ -6364,61 +5819,12 @@ static int agent_mcp_call_th1(
                    zPath, zReplace, zWith);
     }
   }else{
-    blob_appendf(&out, "Error: Unknown tool %s (External MCP client not yet fully piped)", zTool);
+    blob_appendf(&out, "Error: Unknown tool %s", zTool);
   }
 
   Th_SetResult(interp, blob_str(&out), blob_size(&out));
   blob_reset(&out);
   return TH_OK;
-}
-
-/*
-** Register all agent-related TH1 commands.
-*/
-void agent_register_th1(Th_Interp *interp){
-  static const struct {
-    const char *zName;
-    Th_CommandProc xProc;
-    void *pContext;
-  } aCmd[] = {
-    { "agent_context",     agent_context_th1,     0 },
-    { "agent_run",         agent_run_th1,         0 },
-    { "agent_run_stream",  agent_run_stream_th1,  0 },
-    { "agent_save",        agent_save_th1,        0 },
-    { "agent_mcp_call",    agent_mcp_call_th1,    0 },
-    { "agent_json_extract", agent_json_extract_th1, 0 },
-    { "agent_json_quote",   agent_json_quote_th1,   0 },
-  };
-  int i;
-  for(i=0; i<sizeof(aCmd)/sizeof(aCmd[0]); i++){
-    Th_CreateCommand(interp, aCmd[i].zName, aCmd[i].xProc, aCmd[i].pContext, 0);
-  }
-}
-
-/*
-** TH1 command: agent_run_stream PROVIDER MODEL MSG
-**
-** Calls the configured AI backend and streams the response as SSE.
-*/
-static int agent_run_stream_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  Blob err = BLOB_INITIALIZER;
-  int rc;
-  if( argc!=4 ){
-    return Th_WrongNumArgs(interp, "agent_run_stream PROVIDER MODEL MSG");
-  }
-  rc = agent_run_backend_core(argv[1], argv[2], argv[3], 0, &err, agent_sse_handler, 0);
-  if( rc!=0 ){
-    Th_SetResult(interp, blob_str(&err), blob_size(&err));
-    rc = TH_ERROR;
-  }
-  blob_reset(&err);
-  return rc;
 }
 
 /*
@@ -6444,9 +5850,7 @@ static int agent_save_th1(
     if( i>8 ) blob_append(&msg, " ", 1);
     blob_append(&msg, argv[i], argl[i]);
   }
-  acid = agent_chat_save(
-    sid, argv[2], argv[3], argv[4], argv[5], argv[6], argv[7], blob_str(&msg)
-  );
+  acid = agent_chat_save(sid, argv[2], argv[3], argv[4], argv[5], argv[6], argv[7], blob_str(&msg));
   blob_reset(&msg);
   Th_SetResultInt(interp, acid);
   return TH_OK;
@@ -6475,9 +5879,7 @@ static int agent_save_event_th1(
     if( i>7 ) blob_append(&msg, " ", 1);
     blob_append(&msg, argv[i], argl[i]);
   }
-  agent_chat_save_event(
-    sid, argv[2], argv[3], argv[4], argv[5], argv[6], blob_str(&msg)
-  );
+  agent_chat_save_event(sid, argv[2], argv[3], argv[4], argv[5], argv[6], blob_str(&msg));
   blob_reset(&msg);
   Th_SetResultInt(interp, db_last_insert_rowid());
   return TH_OK;
@@ -6496,9 +5898,7 @@ static int agent_config_th1(
   int *argl
 ){
   char *zVal;
-  if( argc!=2 ){
-    return Th_WrongNumArgs(interp, "agent_config KEY");
-  }
+  if( argc!=2 ) return Th_WrongNumArgs(interp, "agent_config KEY");
   zVal = agent_config_get(argv[1]);
   if( zVal ){
     Th_SetResult(interp, zVal, -1);
@@ -6521,32 +5921,8 @@ static int agent_eval_th1(
   const char **argv,
   int *argl
 ){
-  if( argc!=7 ){
-    return Th_WrongNumArgs(interp, "agent_eval SID ACID PROVIDER MODEL KIND MSG");
-  }
+  if( argc!=7 ) return Th_WrongNumArgs(interp, "agent_eval SID ACID PROVIDER MODEL KIND MSG");
   ai_chat_eval_record(atoi(argv[1]), atoi(argv[2]), argv[3], argv[4], argv[5], argv[6]);
-  return TH_OK;
-}
-
-/*
-** TH1 command: agent_json_quote MSG
-**
-** Returns a JSON-quoted version of the string.
-*/
-static int agent_json_quote_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  char *zEsc;
-  if( argc!=2 ){
-    return Th_WrongNumArgs(interp, "agent_json_quote MSG");
-  }
-  zEsc = mprintf("%!j", argv[1]);
-  Th_SetResult(interp, zEsc, -1);
-  fossil_free(zEsc);
   return TH_OK;
 }
 
@@ -6567,16 +5943,11 @@ static int pool_list_pending_th1(
   Stmt q;
   char *zRes = 0;
   int nRes = 0;
-  if( argc!=2 ){
-    return Th_WrongNumArgs(interp, "pool_list_pending TIER");
-  }
+  if( argc!=2 ) return Th_WrongNumArgs(interp, "pool_list_pending TIER");
   targetTier = atoi(argv[1]);
   if( targetTier<1 ) targetTier = 1;
   db_prepare(&q, 
-    "SELECT nid FROM repository.ai_note"
-    " WHERE tier=%d"
-    "   AND duplicate_of IS NULL"
-    "   AND process_level IS NOT NULL",
+    "SELECT nid FROM repository.ai_note WHERE tier=%d AND duplicate_of IS NULL AND process_level IS NOT NULL",
     targetTier - 1
   );
   while( db_step(&q)==SQLITE_ROW ){
@@ -6604,9 +5975,7 @@ static int pool_get_th1(
 ){
   int nid;
   char *zBody;
-  if( argc!=2 ){
-    return Th_WrongNumArgs(interp, "pool_get NID");
-  }
+  if( argc!=2 ) return Th_WrongNumArgs(interp, "pool_get NID");
   nid = atoi(argv[1]);
   zBody = db_text(0, "SELECT body FROM repository.ai_note WHERE nid=%d", nid);
   if( zBody ){
@@ -6635,15 +6004,12 @@ static int pool_put_th1(
   const char *zMeta = 0;
   Blob body = BLOB_INITIALIZER;
   int nid;
-  if( argc!=3 && argc!=4 ){
-    return Th_WrongNumArgs(interp, "pool_put TIER BODY ?METADATA?");
-  }
+  if( argc!=3 && argc!=4 ) return Th_WrongNumArgs(interp, "pool_put TIER BODY ?METADATA?");
   tier = atoi(argv[1]);
   zBody = argv[2];
   if( argc==4 ) zMeta = argv[3];
   blob_append(&body, zBody, argl[2]);
-  nid = ai_note_create(tier, 0, &body, "th1-pool", 0, 0, 0, zMeta,
-                       0, 0, 0, 0, 0);
+  nid = ai_note_create(tier, 0, &body, "th1-pool", 0, 0, 0, zMeta, 0, 0, 0, 0, 0);
   blob_reset(&body);
   Th_SetResultInt(interp, nid);
   return TH_OK;
@@ -6661,13 +6027,8 @@ static int pool_link_th1(
   const char **argv,
   int *argl
 ){
-  int fromNid, toNid;
-  if( argc!=4 ){
-    return Th_WrongNumArgs(interp, "pool_link FROM_NID TO_NID LINK_TYPE");
-  }
-  fromNid = atoi(argv[1]);
-  toNid = atoi(argv[2]);
-  ai_note_link_upsert(fromNid, toNid, argv[3], 1.0);
+  if( argc!=4 ) return Th_WrongNumArgs(interp, "pool_link FROM_NID TO_NID LINK_TYPE");
+  ai_note_link_upsert(atoi(argv[1]), atoi(argv[2]), argv[3], 1.0);
   return TH_OK;
 }
 
@@ -6685,9 +6046,7 @@ static int pool_related_th1(
 ){
   int nid, limit;
   char *zRes;
-  if( argc!=2 && argc!=3 ){
-    return Th_WrongNumArgs(interp, "pool_related NID ?LIMIT?");
-  }
+  if( argc!=2 && argc!=3 ) return Th_WrongNumArgs(interp, "pool_related NID ?LIMIT?");
   nid = atoi(argv[1]);
   limit = argc==3 ? atoi(argv[2]) : 5;
   zRes = ai_note_related_nids(nid, limit);
@@ -6701,34 +6060,41 @@ static int pool_related_th1(
 }
 
 /*
-** MCP Tool: list_files
+** Register all agent-related TH1 commands.
 */
 void agent_register_th1(Th_Interp *interp){
   static const struct {
     const char *zName;
     Th_CommandProc xProc;
+    void *pContext;
   } aCmd[] = {
-    {"agent_context",    agent_context_th1},
-    {"agent_last_retrieval_qid", agent_last_retrieval_qid_th1},
-    {"agent_run",        agent_run_th1},
-    {"agent_save",       agent_save_th1},
-    {"agent_save_event", agent_save_event_th1},
-    {"agent_config",     agent_config_th1},
-    {"agent_eval",       agent_eval_th1},
-    {"agent_json_quote", agent_json_quote_th1},
-    {"pool_list_pending", pool_list_pending_th1},
-    {"pool_get",          pool_get_th1},
-    {"pool_put",          pool_put_th1},
-    {"pool_link",         pool_link_th1},
-    {"pool_related",      pool_related_th1},
-    {0, 0}
+    {"agent_context",    agent_context_th1, 0},
+    {"agent_last_retrieval_qid", agent_last_retrieval_qid_th1, 0},
+    {"agent_run",        agent_run_th1, 0},
+    {"agent_run_stream", agent_run_stream_th1, 0},
+    {"agent_save",       agent_save_th1, 0},
+    {"agent_save_event", agent_save_event_th1, 0},
+    {"agent_config",     agent_config_th1, 0},
+    {"agent_eval",       agent_eval_th1, 0},
+    {"agent_mcp_call",   agent_mcp_call_th1, 0},
+    {"agent_json_extract", agent_json_extract_th1, 0},
+    {"agent_json_quote",   agent_json_quote_th1, 0},
+    {"pool_list_pending", pool_list_pending_th1, 0},
+    {"pool_get",          pool_get_th1, 0},
+    {"pool_put",          pool_put_th1, 0},
+    {"pool_link",         pool_link_th1, 0},
+    {"pool_related",      pool_related_th1, 0},
+    {0, 0, 0}
   };
   int i;
   for(i=0; aCmd[i].zName; i++){
-    Th_CreateCommand(interp, aCmd[i].zName, aCmd[i].xProc, 0, 0);
+    Th_CreateCommand(interp, aCmd[i].zName, aCmd[i].xProc, aCmd[i].pContext, 0);
   }
 }
 
+/*
+** MCP Tool: list_files
+*/
 static void agent_mcp_list_files(void){
   Stmt q;
   int vid = db_lget_int("checkout", 0);
@@ -6736,7 +6102,7 @@ static void agent_mcp_list_files(void){
   CX("{\"tools\":[{\"name\":\"list_files\",\"description\":\"List files in the repo\",\"content\":[");
   db_prepare(&q, "SELECT pathname FROM vfile WHERE vid=%d AND deleted=0 ORDER BY pathname LIMIT 100", vid);
   while( db_step(&q)==SQLITE_ROW ){
-    CX("%s%#j", first ? "" : ",", db_column_text(&q, 0));
+    CX("%s%!j", first ? "" : ",", db_column_text(&q, 0));
     first = 0;
   }
   db_finalize(&q);
