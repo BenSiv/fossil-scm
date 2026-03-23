@@ -293,7 +293,7 @@ const char *agent_chat_session_state(int sid){
     "   AND meta LIKE '%%\"status\":\"ok\"%%' THEN 'ok'"
     "  WHEN role='system' AND kind='progress'"
     "   AND meta LIKE '%%\"status\":\"error\"%%' THEN 'error'"
-    "  WHEN role='system' AND kind='tool' THEN 'tool'"
+    "  WHEN role='system' AND kind IN ('tool','tool_request','tool_result') THEN 'tool'"
     "  WHEN role='system' AND kind='progress' THEN 'progress'"
     "  WHEN role='user' AND kind='prompt' THEN 'prompt'"
     "  ELSE coalesce(kind, role, '') END"
@@ -578,12 +578,15 @@ void agent_emit_history_object_json(int sidCurrent){
         "         WHEN c.role='user' AND c.kind='prompt' THEN 'message'"
         "         WHEN c.role='agent' AND c.kind='reply' THEN 'message'"
         "         WHEN c.role='agent' AND c.kind='error' THEN 'error'"
-        "         WHEN c.role='system' AND c.kind='tool' THEN 'tool_request'"
+        "         WHEN c.role='system' AND c.kind IN ('tool','tool_request') THEN 'tool_request'"
+        "         WHEN c.role='system' AND c.kind='tool_result' THEN 'tool_result'"
         "         WHEN c.role='system' AND c.kind='progress' THEN 'progress'"
         "         WHEN c.role='system' AND c.kind='context' THEN 'context'"
         "         ELSE coalesce(c.kind, c.role, '')"
         "       END,"
-        "       coalesce(json_extract(c.meta,'$.request_id'),'')"
+        "       coalesce(json_extract(c.meta,'$.request_id'),''),"
+        "       coalesce(json_extract(c.meta,'$.tool'),''),"
+        "       coalesce(json_extract(c.meta,'$.phase'),'')"
         "  FROM agentchat AS c"
         "  LEFT JOIN ai_chat_eval AS e ON e.sid=c.sid AND e.acid=c.acid"
         " WHERE c.sid=%d"
@@ -597,12 +600,15 @@ void agent_emit_history_object_json(int sidCurrent){
         "         WHEN role='user' AND kind='prompt' THEN 'message'"
         "         WHEN role='agent' AND kind='reply' THEN 'message'"
         "         WHEN role='agent' AND kind='error' THEN 'error'"
-        "         WHEN role='system' AND kind='tool' THEN 'tool_request'"
+        "         WHEN role='system' AND kind IN ('tool','tool_request') THEN 'tool_request'"
+        "         WHEN role='system' AND kind='tool_result' THEN 'tool_result'"
         "         WHEN role='system' AND kind='progress' THEN 'progress'"
         "         WHEN role='system' AND kind='context' THEN 'context'"
         "         ELSE coalesce(kind, role, '')"
         "       END,"
-        "       coalesce(json_extract(meta,'$.request_id'),'')"
+        "       coalesce(json_extract(meta,'$.request_id'),''),"
+        "       coalesce(json_extract(meta,'$.tool'),''),"
+        "       coalesce(json_extract(meta,'$.phase'),'')"
         " FROM agentchat WHERE sid=%d"
         " ORDER BY acid ASC",
         sidCurrent
@@ -611,7 +617,8 @@ void agent_emit_history_object_json(int sidCurrent){
     while( db_step(&q)==SQLITE_ROW ){
       CX("%s{\"acid\":%d,\"role\":%!j,\"kind\":%!j,\"provider\":%!j,"
          "\"model\":%!j,\"meta\":%!j,\"msg\":%!j,\"feedback\":%!j,"
-         "\"event_type\":%!j,\"request_id\":%!j,\"is_terminal\":%s}",
+         "\"event_type\":%!j,\"request_id\":%!j,\"tool_name\":%!j,"
+         "\"tool_phase\":%!j,\"tool\":",
          first ? "" : ",",
          db_column_int(&q, 0),
          db_column_text(&q, 1),
@@ -623,6 +630,10 @@ void agent_emit_history_object_json(int sidCurrent){
          db_column_text(&q, 7),
          db_column_text(&q, 8),
          db_column_text(&q, 9),
+         db_column_text(&q, 10),
+         db_column_text(&q, 11));
+      agent_emit_tool_json(db_column_text(&q, 10));
+      CX(",\"is_terminal\":%s}",
          ((db_column_text(&q,1) && fossil_strcmp(db_column_text(&q,1),"agent")==0
            && db_column_text(&q,2) && (fossil_strcmp(db_column_text(&q,2),"reply")==0
                                     || fossil_strcmp(db_column_text(&q,2),"error")==0))
@@ -659,12 +670,15 @@ void agent_emit_events_array_json(int sidCurrent, int afterAcid, int *pLastAcid)
         "         WHEN c.role='user' AND c.kind='prompt' THEN 'message'"
         "         WHEN c.role='agent' AND c.kind='reply' THEN 'message'"
         "         WHEN c.role='agent' AND c.kind='error' THEN 'error'"
-        "         WHEN c.role='system' AND c.kind='tool' THEN 'tool_request'"
+        "         WHEN c.role='system' AND c.kind IN ('tool','tool_request') THEN 'tool_request'"
+        "         WHEN c.role='system' AND c.kind='tool_result' THEN 'tool_result'"
         "         WHEN c.role='system' AND c.kind='progress' THEN 'progress'"
         "         WHEN c.role='system' AND c.kind='context' THEN 'context'"
         "         ELSE coalesce(c.kind, c.role, '')"
         "       END,"
-        "       coalesce(json_extract(c.meta,'$.request_id'),'')"
+        "       coalesce(json_extract(c.meta,'$.request_id'),''),"
+        "       coalesce(json_extract(c.meta,'$.tool'),''),"
+        "       coalesce(json_extract(c.meta,'$.phase'),'')"
         "  FROM agentchat AS c"
         "  LEFT JOIN ai_chat_eval AS e ON e.sid=c.sid AND e.acid=c.acid"
         " WHERE c.sid=%d AND c.acid>%d"
@@ -678,12 +692,15 @@ void agent_emit_events_array_json(int sidCurrent, int afterAcid, int *pLastAcid)
         "         WHEN role='user' AND kind='prompt' THEN 'message'"
         "         WHEN role='agent' AND kind='reply' THEN 'message'"
         "         WHEN role='agent' AND kind='error' THEN 'error'"
-        "         WHEN role='system' AND kind='tool' THEN 'tool_request'"
+        "         WHEN role='system' AND kind IN ('tool','tool_request') THEN 'tool_request'"
+        "         WHEN role='system' AND kind='tool_result' THEN 'tool_result'"
         "         WHEN role='system' AND kind='progress' THEN 'progress'"
         "         WHEN role='system' AND kind='context' THEN 'context'"
         "         ELSE coalesce(kind, role, '')"
         "       END,"
-        "       coalesce(json_extract(meta,'$.request_id'),'')"
+        "       coalesce(json_extract(meta,'$.request_id'),''),"
+        "       coalesce(json_extract(meta,'$.tool'),''),"
+        "       coalesce(json_extract(meta,'$.phase'),'')"
         " FROM agentchat WHERE sid=%d AND acid>%d"
         " ORDER BY acid ASC",
         sidCurrent, afterAcid
@@ -702,7 +719,8 @@ void agent_emit_events_array_json(int sidCurrent, int afterAcid, int *pLastAcid)
                         || fossil_strcmp(zEventType, "finish")==0));
       CX("%s{\"acid\":%d,\"role\":%!j,\"kind\":%!j,\"provider\":%!j,"
        "\"model\":%!j,\"meta\":%!j,\"msg\":%!j,\"feedback\":%!j,"
-         "\"event_type\":%!j,\"request_id\":%!j,\"is_terminal\":%s}",
+         "\"event_type\":%!j,\"request_id\":%!j,\"tool_name\":%!j,"
+         "\"tool_phase\":%!j,\"tool\":",
          first ? "" : ",",
          acid,
          zRole,
@@ -714,6 +732,10 @@ void agent_emit_events_array_json(int sidCurrent, int afterAcid, int *pLastAcid)
          db_column_text(&q, 7),
          db_column_text(&q, 8),
          db_column_text(&q, 9),
+         db_column_text(&q, 10),
+         db_column_text(&q, 11));
+      agent_emit_tool_json(db_column_text(&q, 10));
+      CX(",\"is_terminal\":%s}",
          isTerminal ? "true" : "false");
       if( acid>lastAcid ) lastAcid = acid;
       first = 0;

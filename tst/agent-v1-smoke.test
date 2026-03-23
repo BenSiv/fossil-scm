@@ -109,6 +109,10 @@ test agent-v1-smoke-11 {[string first "\"event_type\":\"message\"" $RESULT]>=0 |
 test agent-v1-smoke-12 {[string first "\"request_id\":\"req-" $RESULT]>=0}
 test agent-v1-smoke-13 {[string first "\"is_terminal\":true" $RESULT]>=0}
 test agent-v1-smoke-14 {[string first "\"request\":" $RESULT]>=0 && [string first "\"rid\":" $RESULT]>=0}
+test agent-v1-smoke-14a {[string first "\"event_type\":\"tool_request\"" $RESULT]>=0}
+test agent-v1-smoke-14b {[string first "\"event_type\":\"tool_result\"" $RESULT]>=0}
+test agent-v1-smoke-14c {[string first "\"tool_name\":\"chat-backend\"" $RESULT]>=0}
+test agent-v1-smoke-14d {[regexp {"tool":\{"name":"chat-backend"} $RESULT]}
 
 set response [smoke_http_request $repository GET [subst {/agent-api-v1-session?sid=$apiSid}] {}]
 set RESULT [smoke_http_body $response]
@@ -116,5 +120,12 @@ test agent-v1-smoke-15 {[smoke_http_status $response] eq {200}}
 test agent-v1-smoke-16 {[string first "\"last_request_state\":\"finished\"" $RESULT]>=0}
 test agent-v1-smoke-17 {[string first "\"request_count\":1" $RESULT]>=0}
 test agent-v1-smoke-18 {[string first "\"is_terminal\":true" $RESULT]>=0}
+
+set response [smoke_http_request $repository GET /agent-api-v1-tools {}]
+set RESULT [smoke_http_body $response]
+test agent-v1-smoke-19 {[smoke_http_status $response] eq {200}}
+test agent-v1-smoke-20 {[regexp {"tools":\[} $RESULT]}
+test agent-v1-smoke-21 {[string first "\"name\":\"chat-backend\"" $RESULT]>=0}
+test agent-v1-smoke-22 {[string first "\"requires_confirmation\":true" $RESULT]>=0}
 
 test_cleanup

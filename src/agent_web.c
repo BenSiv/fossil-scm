@@ -65,7 +65,8 @@ static void agent_api_v1_emit_capabilities(void){
      "\"sessionCreate\":true,"
      "\"sessionRename\":true,"
      "\"sessionDelete\":false,"
-     "\"sessionFork\":false"
+     "\"sessionFork\":false,"
+     "\"toolRegistry\":true"
      "}");
 }
 
@@ -728,6 +729,34 @@ void agent_api_v1_capabilities_page(void){
 */
 void agent_api_v1_capabilities_flat_page(void){
   agent_api_v1_capabilities_page();
+}
+
+/*
+** WEBPAGE: agent-api/v1/tools
+**
+** Versioned tool registry descriptor for Fossil's internal agent tooling.
+*/
+void agent_api_v1_tools_page(void){
+  login_check_credentials();
+  cgi_set_content_type("application/json");
+  if( !g.perm.Read ){
+    agent_api_v1_emit_error("missing read permissions or not logged in", 0);
+    return;
+  }
+  CX("{\"api_version\":\"v1\",\"ok\":true,\"tools\":");
+  agent_emit_tool_array_json();
+  CX(",\"capabilities\":");
+  agent_api_v1_emit_capabilities();
+  CX("}\n");
+}
+
+/*
+** WEBPAGE: agent-api-v1-tools
+**
+** Fossil-native flat alias for tool registry discovery.
+*/
+void agent_api_v1_tools_flat_page(void){
+  agent_api_v1_tools_page();
 }
 
 /*

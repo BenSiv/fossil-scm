@@ -81,6 +81,33 @@ static int agent_asset_th1(
   return TH_OK;
 }
 
+static int agent_tool_info_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  const AgentToolDef *pTool;
+  char *zJson;
+  if( argc!=2 ) return Th_WrongNumArgs(interp, "agent_tool_info TOOL_NAME");
+  pTool = agent_tool_find(argv[1]);
+  if( pTool==0 ){
+    Th_SetResult(interp, "null", 4);
+    return TH_OK;
+  }
+  zJson = mprintf(
+    "{\"name\":%!j,\"description\":%!j,\"kind\":%!j,"
+    "\"requires_confirmation\":%s,\"builtin\":%s}",
+    pTool->zName, pTool->zDescription, pTool->zKind,
+    pTool->bRequiresConfirm ? "true" : "false",
+    pTool->bBuiltin ? "true" : "false"
+  );
+  Th_SetResult(interp, zJson, -1);
+  fossil_free(zJson);
+  return TH_OK;
+}
+
 static int agent_json_quote_th1(
   Th_Interp *interp,
   void *ctx,
@@ -185,6 +212,13 @@ static int agent_mcp_call_th1(
 
   {
     const char *zTool = argv[1];
+    const AgentToolDef *pTool = agent_tool_find(zTool);
+    if( pTool==0 ){
+      blob_appendf(&out, "Error: Unknown tool %s", zTool);
+      Th_SetResult(interp, blob_str(&out), blob_size(&out));
+      blob_reset(&out);
+      return TH_OK;
+    }
     if( fossil_strcmp(zTool, "list_files")==0 ){
       int vid = db_lget_int("checkout", 0);
       Stmt q;
@@ -236,8 +270,6 @@ static int agent_mcp_call_th1(
         blob_appendf(&out, "{\"type\":\"propose_edit\",\"path\":%!j,\"replace\":%!j,\"with\":%!j}",
                      zPath, zReplace, zWith);
       }
-    }else{
-      blob_appendf(&out, "Error: Unknown tool %s", zTool);
     }
   }
 
@@ -493,6 +525,7 @@ void agent_register_th1(Th_Interp *interp){
     {"agent_mcp_call",   agent_mcp_call_th1, 0},
     {"agent_json_extract", agent_json_extract_th1, 0},
     {"agent_asset",        agent_asset_th1, 0},
+    {"agent_tool_info",    agent_tool_info_th1, 0},
     {"agent_json_quote",   agent_json_quote_th1, 0},
     {"pool_list_pending", pool_list_pending_th1, 0},
     {"pool_get",          pool_get_th1, 0},

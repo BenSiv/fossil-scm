@@ -11,6 +11,49 @@ void blob_append_escaped_arg(Blob *pBlob, const char *zIn, int isFilename);
 void blob_resize(Blob *pBlob, unsigned int newSize);
 int fossil_strnicmp(const char *zA, const char *zB, int nByte);
 
+static const AgentToolDef aAgentTools[] = {
+  {"chat-backend", "Invoke the configured chat backend", "backend", 0, 1},
+  {"list_files", "List repository files from the current checkout", "repo", 0, 1},
+  {"read_file", "Read a file from the working tree", "file", 0, 1},
+  {"edit_file", "Apply a proposed file edit", "file", 1, 1},
+  {"semantic_search", "Search indexed repository knowledge", "knowledge", 0, 1},
+  {0, 0, 0, 0, 0}
+};
+
+const AgentToolDef *agent_tool_find(const char *zName){
+  int i;
+  if( zName==0 || zName[0]==0 ) return 0;
+  for(i=0; aAgentTools[i].zName; i++){
+    if( fossil_strcmp(aAgentTools[i].zName, zName)==0 ){
+      return &aAgentTools[i];
+    }
+  }
+  return 0;
+}
+
+void agent_emit_tool_json(const char *zName){
+  const AgentToolDef *pTool = agent_tool_find(zName);
+  if( pTool==0 ){
+    CX("null");
+    return;
+  }
+  CX("{\"name\":%!j,\"description\":%!j,\"kind\":%!j,"
+     "\"requires_confirmation\":%s,\"builtin\":%s}",
+     pTool->zName, pTool->zDescription, pTool->zKind,
+     pTool->bRequiresConfirm ? "true" : "false",
+     pTool->bBuiltin ? "true" : "false");
+}
+
+void agent_emit_tool_array_json(void){
+  int i;
+  CX("[");
+  for(i=0; aAgentTools[i].zName; i++){
+    if( i>0 ) CX(",");
+    agent_emit_tool_json(aAgentTools[i].zName);
+  }
+  CX("]");
+}
+
 /*
 ** Return non-zero if zModel looks like an Ollama-style local model name.
 */

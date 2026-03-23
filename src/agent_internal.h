@@ -6,6 +6,15 @@
 ** This header is for Fossil's C files only.
 */
 
+typedef struct AgentToolDef AgentToolDef;
+struct AgentToolDef {
+  const char *zName;
+  const char *zDescription;
+  const char *zKind;
+  int bRequiresConfirm;
+  int bBuiltin;
+};
+
 int agent_chat_session_create(
   const char *zUser,
   const char *zProvider,
@@ -54,6 +63,9 @@ void agent_emit_session_array_json(const char *zUser);
 void agent_emit_active_request_ids_json(int sidCurrent);
 void agent_emit_request_object_json(int sidCurrent, const char *zRequestId);
 void agent_emit_latest_request_json(int sidCurrent);
+const AgentToolDef *agent_tool_find(const char *zName);
+void agent_emit_tool_json(const char *zName);
+void agent_emit_tool_array_json(void);
 
 int agent_request_create(int sid, const char *zRequestId, const char *zState);
 void agent_request_set_state(int rid, const char *zState, int terminalAcid);

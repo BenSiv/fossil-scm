@@ -4539,13 +4539,11 @@ void agent_mcp_cmd(void){
     const char *zLine = blob_str(&line);
     if( strstr(zLine, "\"method\":\"tools/list\"") ){
       Blob schema = BLOB_INITIALIZER;
-      char *zPath = mprintf("%scfg/mcp_tools.json", g.zLocalRoot);
-      if( blob_read_from_file(&schema, zPath, ExtFILE)>=0 ){
+      if( agent_load_asset("cfg/mcp_tools.json", &schema) ){
         CX("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":%s}\n", blob_str(&schema));
       }else{
         CX("{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32000,\"message\":\"MCP schema not found\"}}\n");
       }
-      fossil_free(zPath);
       blob_reset(&schema);
       fflush(stdout);
     }else if( strstr(zLine, "\"method\":\"tools/call\"") && strstr(zLine, "\"name\":\"list_files\"") ){

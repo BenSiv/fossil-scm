@@ -118,6 +118,10 @@
     if(msg.event_type) html += ' <span class="agent-event-type">' + esc(msg.event_type) + '</span>';
     else if(msg.kind) html += ' <span class="dimmed">{' + esc(msg.kind) + '}</span>';
     if(msg.request_id) html += ' <span class="agent-request-ref dimmed">#' + esc(msg.request_id) + '</span>';
+    if(msg.tool && msg.tool.name){
+      html += ' <span class="agent-request-ref dimmed">tool=' + esc(msg.tool.name) + '</span>';
+      if(msg.tool_phase) html += ' <span class="agent-request-ref dimmed">phase=' + esc(msg.tool_phase) + '</span>';
+    }
     if(meta.thinking){
       html += ' <details class="thinking-details"><summary class="dimmed">Reasoning</summary><pre style="white-space:pre-wrap;margin:0.5em 0;padding:0.5em;border-left:3px solid #ccc;background:rgba(0,0,0,0.02)">' + esc(meta.thinking) + '</pre></details>';
     }
