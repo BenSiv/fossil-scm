@@ -198,6 +198,27 @@ static int agent_run_stream_th1(
   return rc;
 }
 
+static int agent_request_state_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  int sid;
+  int terminalAcid = 0;
+  if( argc!=3 && argc!=4 ){
+    return Th_WrongNumArgs(interp, "agent_request_state SID STATE ?TERMINAL_ACID?");
+  }
+  sid = atoi(argv[1]);
+  if( argc==4 ){
+    terminalAcid = atoi(argv[3]);
+  }
+  agent_request_set_latest_state(sid, argv[2], terminalAcid);
+  Th_SetResultInt(interp, agent_request_latest_rid(sid));
+  return TH_OK;
+}
+
 static int agent_mcp_call_th1(
   Th_Interp *interp,
   void *ctx,
@@ -247,28 +268,14 @@ static int agent_mcp_call_th1(
       bConfirmed = atoi(argv[6]);
 
       if( bConfirmed ){
-        Blob content = BLOB_INITIALIZER;
-        if( blob_read_from_file(&content, zPath, ExtFILE)>=0 ){
-          char *zOld = (char*)blob_str(&content);
-          char *zPos = strstr(zOld, zReplace);
-          if( zPos ){
-            Blob next = BLOB_INITIALIZER;
-            blob_append(&next, zOld, (int)(zPos - zOld));
-            blob_append(&next, zWith, -1);
-            blob_append(&next, zPos + strlen(zReplace), -1);
-            blob_write_to_file(&next, zPath);
-            blob_appendf(&out, "Successfully applied the edit to %s.", zPath);
-            blob_reset(&next);
-          }else{
-            blob_appendf(&out, "Error: The target text to replace was not found in %s.", zPath);
-          }
-          blob_reset(&content);
-        }else{
-          blob_appendf(&out, "Error: Could not read file %s for editing.", zPath);
-        }
+        agent_apply_edit_tool(zPath, zReplace, zWith, &out);
       }else{
-        blob_appendf(&out, "{\"type\":\"propose_edit\",\"path\":%!j,\"replace\":%!j,\"with\":%!j}",
-                     zPath, zReplace, zWith);
+        blob_appendf(&out,
+          "{\"type\":\"propose_edit\",\"tool\":\"edit_file\","
+          "\"requires_confirmation\":true,"
+          "\"path\":%!j,\"replace\":%!j,\"with\":%!j}",
+          zPath, zReplace, zWith
+        );
       }
     }
   }
@@ -276,6 +283,45 @@ static int agent_mcp_call_th1(
   Th_SetResult(interp, blob_str(&out), blob_size(&out));
   blob_reset(&out);
   return TH_OK;
+}
+
+int agent_apply_edit_tool(
+  const char *zPath,
+  const char *zReplace,
+  const char *zWith,
+  Blob *pOut
+){
+  Blob content = BLOB_INITIALIZER;
+  char *zOld;
+  char *zPos;
+  blob_zero(pOut);
+  if( zPath==0 || zPath[0]==0 ){
+    blob_appendf(pOut, "Error: Missing file path for edit.");
+    return 1;
+  }
+  if( blob_read_from_file(&content, zPath, ExtFILE)<0 ){
+    blob_appendf(pOut, "Error: Could not read file %s for editing.", zPath);
+    return 1;
+  }
+  zOld = (char*)blob_str(&content);
+  zPos = zReplace ? strstr(zOld, zReplace) : 0;
+  if( zPos ){
+    Blob next = BLOB_INITIALIZER;
+    blob_append(&next, zOld, (int)(zPos - zOld));
+    blob_append(&next, zWith ? zWith : "", -1);
+    blob_append(&next, zPos + strlen(zReplace), -1);
+    blob_write_to_file(&next, zPath);
+    blob_appendf(pOut, "Successfully applied the edit to %s.", zPath);
+    blob_reset(&next);
+    blob_reset(&content);
+    return 0;
+  }else{
+    blob_appendf(pOut,
+      "Error: The target text to replace was not found in %s.", zPath
+    );
+    blob_reset(&content);
+    return 1;
+  }
 }
 
 static int agent_save_th1(
@@ -517,6 +563,7 @@ void agent_register_th1(Th_Interp *interp){
     {"agent_last_retrieval_qid", agent_last_retrieval_qid_th1, 0},
     {"agent_run",        agent_run_th1, 0},
     {"agent_run_stream", agent_run_stream_th1, 0},
+    {"agent_request_state", agent_request_state_th1, 0},
     {"agent_save",       agent_save_th1, 0},
     {"agent_save_event", agent_save_event_th1, 0},
     {"agent_save_reasoning", agent_save_reasoning_th1, 0},

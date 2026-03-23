@@ -4525,9 +4525,7 @@ static void agent_mcp_list_files(void){
 }
 
 /*
-** COMMAND: agent
-**
-** Additional SUBCOMMAND for MCP:
+** Additional agent SUBCOMMAND for MCP:
 **
 **    fossil agent mcp
 **       Run Fossil as a Model Context Protocol (MCP) server on stdio.

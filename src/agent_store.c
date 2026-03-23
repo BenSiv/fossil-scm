@@ -139,6 +139,23 @@ void agent_request_set_state(int rid, const char *zState, int terminalAcid){
   );
 }
 
+int agent_request_latest_rid(int sid){
+  if( sid<=0 || !db_table_exists("repository","agent_request") ) return 0;
+  return db_int(0,
+    "SELECT rid FROM agent_request"
+    " WHERE sid=%d"
+    " ORDER BY mtime DESC, rid DESC LIMIT 1",
+    sid
+  );
+}
+
+void agent_request_set_latest_state(int sid, const char *zState, int terminalAcid){
+  int rid = agent_request_latest_rid(sid);
+  if( rid>0 ){
+    agent_request_set_state(rid, zState, terminalAcid);
+  }
+}
+
 int agent_chat_session_create(
   const char *zUser,
   const char *zProvider,

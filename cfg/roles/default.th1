@@ -32,8 +32,14 @@ if {[string compare [string range $msg 0 14] "CONFIRMED_EDIT:"] == 0} {
   set path [agent_json_extract $json "path"]
   set replace [agent_json_extract $json "replace"]
   set with [agent_json_extract $json "with"]
-  
+
+  set tool_info [agent_tool_info "edit_file"]
+  set event_meta "{\"tool\":\"edit_file\",\"phase\":\"request\",\"tool_info\":$tool_info}"
+  agent_save_event $sid $user "tool_request" $provider $model $event_meta "Applying approved edit"
   set res [agent_mcp_call edit_file $path "Applying approved edit" $replace $with 1]
+  set event_meta "{\"tool\":\"edit_file\",\"phase\":\"result\",\"tool_info\":$tool_info}"
+  agent_save_event $sid $user "tool_result" $provider $model $event_meta $res
+  agent_request_state $sid "finished"
   CX "data: [agent_json_quote $res]\n\n"
   agent_save $sid $user "agent" "reply" $provider $model "" $res
   return

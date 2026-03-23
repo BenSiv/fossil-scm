@@ -304,6 +304,20 @@
   function renderApprovalCard(data){
     var div = document.createElement('div');
     div.className = 'approval-card';
+    currentRequestState = 'waiting-approval';
+    currentRequestActive = true;
+    currentRequestTerminal = false;
+    setStatus('Waiting approval', 'running');
+    fetch('agent-api-v1-approval-waiting', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
+      body: new URLSearchParams({sid: sid, tool: data.tool || 'edit_file'}).toString()
+    }).then(function(response){
+      if(!response.ok) return null;
+      return response.json();
+    }).then(function(data){
+      if(data && data.request) updateRequestState(data.request);
+    }).catch(function(){});
     div.innerHTML = '<b>Proposed Edit:</b> <span class="dimmed">' + esc(data.path) + '</span>' +
       '<div class="diff-preview">' +
       '<div class="diff-del">' + esc(data.replace) + '</div>' +
@@ -324,15 +338,33 @@
   }
 
   function sendConfirmedEdit(data){
-    var confirmMsg = 'CONFIRMED_EDIT: ' + JSON.stringify({
+    var params = new URLSearchParams({
       tool: "edit_file",
+      sid: sid,
       path: data.path,
       replace: data.replace,
-      with: data.with,
-      confirmed: 1
+      with: data.with
     });
-    input.value = confirmMsg;
-    send.click();
+    setStatus('Applying approved edit...', 'running');
+    fetch('agent-api-v1-approval-apply', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
+      body: params.toString()
+    }).then(function(response){
+      if(!response.ok){
+        throw new Error('Approval failed: HTTP ' + response.status);
+      }
+      return response.json();
+    }).then(function(data){
+      if(data && data.request) updateRequestState(data.request);
+      if(data && data.approval && typeof data.approval.message === 'string'){
+        addMsg('Agent', data.approval.message);
+      }
+      schedulePoll(200);
+    }).catch(function(err){
+      setStatus('Approval failed', 'error');
+      addMsg('System', err && err.message ? err.message : 'Approval failed.');
+    });
   }
 
   var toggle = document.getElementById('theme-toggle');

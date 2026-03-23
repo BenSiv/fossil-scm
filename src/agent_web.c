@@ -457,6 +457,11 @@ void agent_chat_stream_page(void){
   const char *zProvider;
   const char *zUser;
   const char *zRoleParam;
+  const char *zRequestIdParam;
+  const char *zUseRequestId;
+  char *zRequestId = 0;
+  int rid = 0;
+  int terminalAcid = 0;
   int sid;
 
   login_check_credentials();
@@ -471,6 +476,7 @@ void agent_chat_stream_page(void){
   zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
   sid = atoi(PD("sid","0"));
   zRoleParam = PD("role", "");
+  zRequestIdParam = PD("request_id", "");
 
   cgi_set_content_type("text/event-stream");
   cgi_printf("Cache-Control: no-cache\nConnection: keep-alive\n\n");
@@ -488,6 +494,9 @@ void agent_chat_stream_page(void){
   if( sid<=0 || !agent_chat_session_exists(sid) ){
     sid = agent_chat_session_create(zUser, zProvider, zModel);
   }
+  rid = agent_request_create(sid, zRequestIdParam, "running");
+  zUseRequestId = agent_chat_session_request_id(sid);
+  zRequestId = mprintf("%s", zUseRequestId ? zUseRequestId : "");
 
   Th_FossilInit(TH_INIT_DEFAULT);
   Th_StoreInt("sid", sid);
@@ -495,9 +504,11 @@ void agent_chat_stream_page(void){
   Th_SetVar(g.interp, "provider", 8, zProvider, (int)strlen(zProvider));
   Th_SetVar(g.interp, "model", 5, zModel, (int)strlen(zModel));
   Th_SetVar(g.interp, "user", 4, zUser, (int)strlen(zUser));
+  Th_SetVar(g.interp, "request_id", 10, zRequestId, -1);
   Th_StoreInt("context_enabled", PB("context"));
 
   if( agent_orchestration_script(zRoleParam, &script)==0 ){
+    agent_request_set_state(rid, "failed", 0);
     CX("data: {\"error\":\"Role script not found: %s\"}\n\n",
        zRoleParam[0] ? zRoleParam : "default");
   }else{
@@ -505,11 +516,19 @@ void agent_chat_stream_page(void){
     if( thRc==TH_ERROR ){
       int nResult = 0;
       const char *zResult = Th_GetResult(g.interp, &nResult);
+      terminalAcid = agent_chat_latest_terminal_acid(sid);
+      agent_request_set_state(rid, "failed", terminalAcid);
       CX("data: {\"error\":%!j}\n\n", zResult ? zResult : "TH1 eval failed");
+    }else{
+      terminalAcid = agent_chat_latest_terminal_acid(sid);
+      if( fossil_strcmp(agent_chat_session_request_state(sid), "waiting-approval")!=0 ){
+        agent_request_set_state(rid, "finished", terminalAcid);
+      }
     }
   }
   db_end_transaction(0);
   blob_reset(&script);
+  fossil_free(zRequestId);
 }
 
 /*
@@ -821,6 +840,162 @@ void agent_api_v1_request_cancel_page(void){
 */
 void agent_api_v1_request_cancel_flat_page(void){
   agent_api_v1_request_cancel_page();
+}
+
+/*
+** WEBPAGE: agent-api/v1/approval/waiting
+**
+** Mark the latest request for a session as waiting for explicit approval.
+*/
+void agent_api_v1_approval_waiting_page(void){
+  const char *zTool;
+  int sid;
+  login_check_credentials();
+  cgi_set_content_type("application/json");
+  if( !g.perm.Read ){
+    agent_api_v1_emit_error("missing read permissions or not logged in", 0);
+    return;
+  }
+  sid = atoi(PD("sid","0"));
+  zTool = PD("tool", "");
+  if( sid<=0 || !agent_chat_session_exists(sid) ){
+    agent_api_v1_emit_error("missing or unknown sid parameter", "unknown_session");
+    return;
+  }
+  db_begin_write();
+  db_unprotect(PROTECT_READONLY);
+  agent_request_set_latest_state(sid, "waiting-approval", 0);
+  db_end_transaction(0);
+  CX("{\"api_version\":\"v1\",\"ok\":true,\"approval\":{\"tool\":%!j,"
+     "\"state\":\"waiting-approval\"},\"request\":", zTool);
+  agent_emit_latest_request_json(sid);
+  CX(",\"capabilities\":");
+  agent_api_v1_emit_capabilities();
+  CX("}\n");
+}
+
+/*
+** WEBPAGE: agent-api-v1-approval-waiting
+**
+** Fossil-native flat alias for marking a request as waiting approval.
+*/
+void agent_api_v1_approval_waiting_flat_page(void){
+  agent_api_v1_approval_waiting_page();
+}
+
+/*
+** WEBPAGE: agent-api/v1/approval/apply
+**
+** Apply an explicitly approved tool action. This currently supports the
+** built-in edit_file tool and records the action as a first-class request.
+*/
+void agent_api_v1_approval_apply_page(void){
+  Blob result = BLOB_INITIALIZER;
+  const char *zUser;
+  const char *zTool;
+  const char *zPath;
+  const char *zReplace;
+  const char *zWith;
+  const char *zRequestIdParam;
+  char *zRequestId = 0;
+  char *zMeta = 0;
+  char *zRowMeta = 0;
+  int sid;
+  int rid = 0;
+  int acid;
+  int rc;
+
+  login_check_credentials();
+  cgi_set_content_type("application/json");
+  if( !g.perm.Read ){
+    agent_api_v1_emit_error("missing read permissions or not logged in", 0);
+    return;
+  }
+  sid = atoi(PD("sid","0"));
+  zTool = PD("tool", "");
+  zPath = PD("path", "");
+  zReplace = PD("replace", "");
+  zWith = PD("with", "");
+  zRequestIdParam = PD("request_id", "");
+  zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
+  if( sid<=0 || !agent_chat_session_exists(sid) ){
+    agent_api_v1_emit_error("missing or unknown sid parameter", "unknown_session");
+    return;
+  }
+  if( fossil_strcmp(zTool, "edit_file")!=0 ){
+    agent_api_v1_emit_error("unsupported approval tool", "unsupported_tool");
+    return;
+  }
+  if( zPath[0]==0 || zReplace[0]==0 ){
+    agent_api_v1_emit_error("missing approval payload", "missing_parameter");
+    return;
+  }
+
+  db_begin_write();
+  db_unprotect(PROTECT_READONLY);
+  if( fossil_strcmp(agent_chat_session_request_state(sid), "waiting-approval")==0 ){
+    rid = agent_request_latest_rid(sid);
+    zRequestId = mprintf("%s", agent_chat_session_request_id(sid));
+    agent_request_set_state(rid, "running", 0);
+  }else{
+    rid = agent_request_create(sid, zRequestIdParam, "running");
+    zRequestId = mprintf("%s", agent_chat_session_request_id(sid));
+  }
+  zMeta = mprintf(
+    "{\"request_id\":%!j,\"tool\":\"edit_file\",\"phase\":\"request\"}",
+    zRequestId
+  );
+  agent_chat_save_event(sid, zUser, "tool_request",
+                        agent_chat_provider(), agent_chat_session_model(sid, ""),
+                        zMeta, "Applying approved edit");
+  fossil_free(zMeta);
+  zMeta = 0;
+
+  rc = agent_apply_edit_tool(zPath, zReplace, zWith, &result);
+  zMeta = mprintf(
+    "{\"request_id\":%!j,\"tool\":\"edit_file\",\"phase\":\"result\","
+    "\"status\":%!j}",
+    zRequestId,
+    rc==0 ? "ok" : "error"
+  );
+  agent_chat_save_event(sid, zUser, "tool_result",
+                        agent_chat_provider(), agent_chat_session_model(sid, ""),
+                        zMeta, blob_str(&result));
+  fossil_free(zMeta);
+  zMeta = 0;
+
+  acid = agent_chat_save(
+    sid, zUser, "agent", rc==0 ? "reply" : "error",
+    agent_chat_provider(), agent_chat_session_model(sid, ""),
+    (zRowMeta = mprintf("{\"request_id\":%!j}", zRequestId)), blob_str(&result)
+  );
+  fossil_free(zRowMeta);
+  agent_request_set_state(rid, rc==0 ? "finished" : "failed", acid);
+  CX("{\"api_version\":\"v1\",\"ok\":%s,\"approval\":{\"tool\":\"edit_file\","
+     "\"applied\":%s,\"message\":%!j},\"request\":",
+     rc==0 ? "true" : "false",
+     rc==0 ? "true" : "false",
+     blob_str(&result));
+  agent_emit_request_object_json(sid, zRequestId);
+  CX(",\"capabilities\":");
+  agent_api_v1_emit_capabilities();
+  if( rc!=0 ){
+    CX(",\"error\":%!j,\"error_code\":\"approval_failed\"", blob_str(&result));
+  }
+  CX("}\n");
+  db_end_transaction(0);
+
+  blob_reset(&result);
+  fossil_free(zRequestId);
+}
+
+/*
+** WEBPAGE: agent-api-v1-approval-apply
+**
+** Fossil-native flat alias for approval application.
+*/
+void agent_api_v1_approval_apply_flat_page(void){
+  agent_api_v1_approval_apply_page();
 }
 
 /*

@@ -85,6 +85,7 @@ write_file [file join $cfgDir agent.json] [subst -nocommands {
 
 fossil set agent-config-path [file join $cfgDir agent.json]
 fossil ai init
+write_file approval.txt "old-value\n"
 
 set response [smoke_http_request $repository POST /agent-api-v1-session-create {title=Smoke+Chat&provider=codex&model=test-chat-model}]
 set RESULT [smoke_http_body $response]
@@ -127,5 +128,17 @@ test agent-v1-smoke-19 {[smoke_http_status $response] eq {200}}
 test agent-v1-smoke-20 {[regexp {"tools":\[} $RESULT]}
 test agent-v1-smoke-21 {[string first "\"name\":\"chat-backend\"" $RESULT]>=0}
 test agent-v1-smoke-22 {[string first "\"requires_confirmation\":true" $RESULT]>=0}
+
+set response [smoke_http_request $repository POST /agent-api-v1-approval-waiting [subst {sid=$apiSid&tool=edit_file}]]
+set RESULT [smoke_http_body $response]
+test agent-v1-smoke-23 {[smoke_http_status $response] eq {200}}
+test agent-v1-smoke-24 {[string first "\"state\":\"waiting-approval\"" $RESULT]>=0}
+
+set response [smoke_http_request $repository POST /agent-api-v1-approval-apply [subst {sid=$apiSid&tool=edit_file&path=approval.txt&replace=old-value&with=new-value}]]
+set RESULT [smoke_http_body $response]
+test agent-v1-smoke-25 {[smoke_http_status $response] eq {200}}
+test agent-v1-smoke-26 {[regexp {"approval":\{"tool":"edit_file","applied":true} $RESULT]}
+test agent-v1-smoke-27 {[string first "\"state\":\"finished\"" $RESULT]>=0}
+test agent-v1-smoke-28 {[string first "new-value" [read_file approval.txt]]>=0}
 
 test_cleanup

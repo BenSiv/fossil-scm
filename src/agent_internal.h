@@ -66,9 +66,17 @@ void agent_emit_latest_request_json(int sidCurrent);
 const AgentToolDef *agent_tool_find(const char *zName);
 void agent_emit_tool_json(const char *zName);
 void agent_emit_tool_array_json(void);
+int agent_apply_edit_tool(
+  const char *zPath,
+  const char *zReplace,
+  const char *zWith,
+  Blob *pOut
+);
 
 int agent_request_create(int sid, const char *zRequestId, const char *zState);
 void agent_request_set_state(int rid, const char *zState, int terminalAcid);
+int agent_request_latest_rid(int sid);
+void agent_request_set_latest_state(int sid, const char *zState, int terminalAcid);
 
 const char *agent_chat_session_model(int sid, const char *zDefault);
 const char *agent_chat_session_provider(int sid, const char *zDefault);
