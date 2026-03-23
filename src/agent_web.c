@@ -1,0 +1,617 @@
+/*
+** Copyright (c) 2026
+**
+** Web-facing handlers for the Fossil agent surfaces.
+*/
+#include "config.h"
+#include "agent.h"
+#include "agent_internal.h"
+
+#define PROTECT_READONLY   0x08
+void cgi_set_content_type(const char *zType);
+void db_unprotect(unsigned flags);
+char *style_nonce(void);
+int Th_Render(const char *z);
+const unsigned char *builtin_file(const char *zFilename, int *piSize);
+
+void ai_chat_eval_feedback(int sid, int acid, const char *zFeedback);
+void agent_emit_pool_json(void);
+void agent_emit_retrieval_json(int qid);
+
+int agent_load_asset(const char *zAsset, Blob *pOut){
+  char *zPath = 0;
+  char *zBuiltin = 0;
+  const unsigned char *pData = 0;
+  int nData = 0;
+  blob_zero(pOut);
+  if( g.zLocalRoot && g.zLocalRoot[0] ){
+    zPath = mprintf("%s%s", g.zLocalRoot, zAsset);
+    if( blob_read_from_file(pOut, zPath, ExtFILE)>=0 ){
+      fossil_free(zPath);
+      return 1;
+    }
+    fossil_free(zPath);
+  }
+  zBuiltin = mprintf("../%s", zAsset);
+  pData = builtin_file(zBuiltin, &nData);
+  fossil_free(zBuiltin);
+  if( pData && nData>=0 ){
+    blob_append(pOut, (const char*)pData, nData);
+    return 1;
+  }
+  return 0;
+}
+
+const char *agent_orchestration_script(const char *zRole, Blob *pScript){
+  char *zAsset = 0;
+  const char *zUseRole = (zRole && zRole[0]) ? zRole : "default";
+  zAsset = mprintf("cfg/roles/%s.th1", zUseRole);
+  if( agent_load_asset(zAsset, pScript) ){
+    fossil_free(zAsset);
+    return blob_str(pScript);
+  }
+  fossil_free(zAsset);
+  return 0;
+}
+
+/*
+** WEBPAGE: agentui
+**
+** Main interactive agent console.
+*/
+void agentui_page(void){
+  int sidCurrent;
+  int sidRequested;
+  const char *zUser;
+  char *zProvider;
+  char *zModel;
+  char *zEmbedProvider;
+  char *zEmbedCmd;
+  char *zEmbedModel;
+  char *zConfigSource;
+  char *zCmd;
+  int chatProviderLocked;
+
+  login_check_credentials();
+  if( !g.perm.Read ){
+    login_needed(g.anon.Read);
+    return;
+  }
+  zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
+  sidRequested = atoi(PD("sid","0"));
+  sidCurrent = agent_chat_session_exists(sidRequested) ? sidRequested : 0;
+
+  zProvider = mprintf("%s", agent_chat_session_provider(sidCurrent, agent_chat_provider()));
+  zModel = mprintf("%s", agent_chat_session_model(sidCurrent, agent_default_model()));
+  zCmd = mprintf("%s", agent_command_template());
+  zEmbedProvider = mprintf("%s", agent_embedding_provider());
+  zEmbedCmd = mprintf("%s", agent_embedding_template());
+  zEmbedModel = mprintf("%s", agent_embedding_model());
+  zConfigSource = agent_config_source();
+  chatProviderLocked = agent_chat_provider_locked();
+
+  style_set_current_feature("agent");
+  agent_console_submenu(sidCurrent);
+  style_header("AI Agent");
+
+  Th_FossilInit(TH_INIT_DEFAULT);
+  Th_StoreInt("sid", sidCurrent);
+  Th_SetVar(g.interp, "user", 4, zUser, -1);
+  Th_SetVar(g.interp, "style_nonce", 11, style_nonce(), -1);
+  Th_SetVar(g.interp, "repo_url", 8, g.zTop, -1);
+  Th_SetVar(g.interp, "chat_provider", 13, zProvider, -1);
+  Th_SetVar(g.interp, "chat_model", 10, zModel ? zModel : "", -1);
+  Th_SetVar(g.interp, "embed_provider", 14, zEmbedProvider, -1);
+  Th_SetVar(g.interp, "embed_model", 11, zEmbedModel ? zEmbedModel : "", -1);
+  Th_SetVar(g.interp, "config_source", 13, zConfigSource, -1);
+  Th_SetVar(g.interp, "capabilities", 28, "chat-stream,context,roles", -1);
+  Th_SetVar(g.interp, "provider_disabled_attr", 22, chatProviderLocked ? "disabled" : "", -1);
+
+  {
+    Blob history = BLOB_INITIALIZER;
+    Blob sessions = BLOB_INITIALIZER;
+    Blob template = BLOB_INITIALIZER;
+    Blob css = BLOB_INITIALIZER;
+    Blob js = BLOB_INITIALIZER;
+
+    agent_chat_render_history_to_blob(sidCurrent, &history);
+    agent_chat_render_sessions_to_blob(zUser, sidCurrent, &sessions);
+    Th_SetVar(g.interp, "history_html", 12, blob_str(&history), blob_size(&history));
+    Th_SetVar(g.interp, "sessions_html", 13, blob_str(&sessions), blob_size(&sessions));
+
+    if( agent_load_asset("cfg/agentui.css", &css) ){
+      Th_SetVar(g.interp, "ui_css", 6, blob_str(&css), blob_size(&css));
+    }
+
+    if( agent_load_asset("cfg/agentui.js", &js) ){
+      Th_SetVar(g.interp, "ui_js", 5, blob_str(&js), blob_size(&js));
+    }
+
+    if( agent_load_asset("cfg/agentui.th1", &template) ){
+      Th_Render(blob_str(&template));
+    }else{
+      CX("<p class=\"error\">Error: agent UI template asset not found</p>");
+    }
+    blob_reset(&history);
+    blob_reset(&sessions);
+    blob_reset(&template);
+    blob_reset(&css);
+    blob_reset(&js);
+  }
+
+  fossil_free(zModel);
+  fossil_free(zCmd);
+  fossil_free(zEmbedModel);
+  fossil_free(zEmbedCmd);
+  fossil_free(zProvider);
+  fossil_free(zEmbedProvider);
+  fossil_free(zConfigSource);
+  style_finish_page();
+}
+
+/*
+** WEBPAGE: agent-config
+**
+** JSON config for the current agent session.
+*/
+void agent_config_page(void){
+  int sidRequested;
+  int sidCurrent;
+
+  login_check_credentials();
+  if( !g.perm.Read ){
+    cgi_set_content_type("application/json");
+    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
+    return;
+  }
+  sidRequested = atoi(PD("sid","0"));
+  sidCurrent = agent_chat_session_exists(sidRequested) ? sidRequested : 0;
+  cgi_set_content_type("application/json");
+  agent_emit_config_json(sidCurrent);
+}
+
+/*
+** WEBPAGE: agent-history
+**
+** JSON history for a chat session.
+*/
+void agent_history_page(void){
+  int sidRequested;
+  int sidCurrent;
+
+  login_check_credentials();
+  if( !g.perm.Read ){
+    cgi_set_content_type("application/json");
+    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
+    return;
+  }
+  sidRequested = atoi(PD("sid","0"));
+  sidCurrent = agent_chat_session_exists(sidRequested) ? sidRequested : 0;
+  cgi_set_content_type("application/json");
+  agent_emit_history_json(sidCurrent);
+}
+
+/*
+** WEBPAGE: agent-events
+**
+** JSON event log for a chat session.
+*/
+void agent_events_page(void){
+  int sidRequested;
+  int sidCurrent;
+  int afterAcid;
+
+  login_check_credentials();
+  if( !g.perm.Read ){
+    cgi_set_content_type("application/json");
+    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
+    return;
+  }
+  sidRequested = atoi(PD("sid","0"));
+  sidCurrent = agent_chat_session_exists(sidRequested) ? sidRequested : 0;
+  afterAcid = atoi(PD("after","0"));
+  if( afterAcid<0 ) afterAcid = 0;
+  cgi_set_content_type("application/json");
+  agent_emit_events_json(sidCurrent, afterAcid);
+}
+
+/*
+** WEBPAGE: agent-feedback
+**
+** Persist usefulness feedback for a terminal agent reply.
+*/
+void agent_feedback_page(void){
+  int sid;
+  int acid;
+  const char *zFeedback;
+
+  login_check_credentials();
+  cgi_set_content_type("application/json");
+  if( !g.perm.Read ){
+    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
+    return;
+  }
+  sid = atoi(PD("sid","0"));
+  if( !agent_chat_session_exists(sid) ){
+    CX("{\"error\":%!j}\n", "missing or unknown sid parameter");
+    return;
+  }
+  acid = atoi(PD("acid","0"));
+  if( acid<=0 ) acid = agent_chat_latest_terminal_acid(sid);
+  if( !agent_chat_is_terminal_acid(sid, acid) ){
+    CX("{\"error\":%!j}\n", "missing or invalid terminal reply target");
+    return;
+  }
+  if( !db_table_exists("repository","ai_chat_eval")
+   || !db_exists("SELECT 1 FROM ai_chat_eval WHERE sid=%d AND acid=%d", sid, acid) ){
+    CX("{\"error\":%!j}\n", "no evaluation row found for reply target");
+    return;
+  }
+  zFeedback = PD("feedback","");
+  if( fossil_strcmp(zFeedback, "useful")!=0
+   && fossil_strcmp(zFeedback, "not-useful")!=0 ){
+    CX("{\"error\":%!j}\n", "feedback must be 'useful' or 'not-useful'");
+    return;
+  }
+  db_begin_write();
+  db_unprotect(PROTECT_READONLY);
+  ai_chat_eval_feedback(sid, acid, zFeedback);
+  db_end_transaction(0);
+  CX("{\"sid\":%d,\"acid\":%d,\"feedback\":%!j}\n", sid, acid, zFeedback);
+}
+
+/*
+** WEBPAGE: agent-pool
+**
+** JSON view of the knowledge pool.
+*/
+void agent_pool_page(void){
+  login_check_credentials();
+  if( !g.perm.Read ){
+    cgi_set_content_type("application/json");
+    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
+    return;
+  }
+  cgi_set_content_type("application/json");
+  agent_emit_pool_json();
+}
+
+/*
+** WEBPAGE: agent-retrieval
+**
+** JSON view of a retrieval query and its matches.
+*/
+void agent_retrieval_page(void){
+  int qid;
+  login_check_credentials();
+  if( !g.perm.Read ){
+    cgi_set_content_type("application/json");
+    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
+    return;
+  }
+  qid = atoi(PD("qid","0"));
+  cgi_set_content_type("application/json");
+  agent_emit_retrieval_json(qid);
+}
+
+/*
+** WEBPAGE: agent-chat
+**
+** JSON endpoint for non-streaming agent chat.
+*/
+static void agent_chat_page_impl(int bApiV1){
+  Blob err = BLOB_INITIALIZER;
+  Blob script = BLOB_INITIALIZER;
+  const char *zMsg;
+  const char *zModel;
+  const char *zProvider;
+  const char *zUser;
+  int sid;
+
+  login_check_credentials();
+  if( !g.perm.Read ){
+    cgi_set_content_type("application/json");
+    if( bApiV1 ){
+      CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
+         "missing read permissions or not logged in");
+    }else{
+      CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
+    }
+    return;
+  }
+  zMsg = PD("msg", "");
+  zProvider = PD("provider", agent_chat_provider());
+  zModel = PD("model", agent_default_model());
+  zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
+  sid = atoi(PD("sid","0"));
+  cgi_set_content_type("application/json");
+
+  if( zMsg[0]==0 || zModel[0]==0 ){
+    if( bApiV1 ){
+      CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
+         "missing msg or model parameter");
+    }else{
+      CX("{\"error\":%!j}\n", "missing msg or model parameter");
+    }
+    return;
+  }
+  if( agent_validate_provider_model(zProvider, zModel, &err) ){
+    if( bApiV1 ){
+      CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n", blob_str(&err));
+    }else{
+      CX("{\"error\":%!j}\n", blob_str(&err));
+    }
+    blob_reset(&err);
+    return;
+  }
+
+  db_begin_write();
+  db_unprotect(PROTECT_READONLY);
+  if( sid<=0 || !agent_chat_session_exists(sid) ){
+    sid = agent_chat_session_create(zUser, zProvider, zModel);
+  }
+
+  Th_FossilInit(TH_INIT_DEFAULT);
+  Th_StoreInt("sid", sid);
+  Th_SetVar(g.interp, "msg", 3, zMsg, (int)strlen(zMsg));
+  Th_SetVar(g.interp, "provider", 8, zProvider, (int)strlen(zProvider));
+  Th_SetVar(g.interp, "model", 5, zModel, (int)strlen(zModel));
+  Th_SetVar(g.interp, "user", 4, zUser, (int)strlen(zUser));
+  Th_StoreInt("context_enabled", PB("context"));
+
+  if( agent_orchestration_script("json-default", &script)==0 ){
+    if( bApiV1 ){
+      CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
+         "missing default orchestration script");
+    }else{
+      CX("{\"error\":%!j}\n", "missing default orchestration script");
+    }
+  }else{
+    int thRc = Th_Eval(g.interp, 0, blob_str(&script), -1);
+    int nResult = 0;
+    const char *zResult = Th_GetResult(g.interp, &nResult);
+    if( thRc==TH_ERROR ){
+      if( bApiV1 ){
+        CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
+           zResult ? zResult : "TH1 eval failed");
+      }else{
+        CX("{\"error\":%!j}\n", zResult ? zResult : "TH1 eval failed");
+      }
+    }else{
+      if( bApiV1 ){
+        CX("{\"api_version\":\"v1\",\"ok\":true,\"chat\":");
+        CX("%.*s", nResult, zResult ? zResult : "{}");
+        CX("}\n");
+      }else{
+        CX("%.*s\n", nResult, zResult ? zResult : "{}");
+      }
+    }
+  }
+  db_end_transaction(0);
+  blob_reset(&script);
+  blob_reset(&err);
+}
+
+void agent_chat_page(void){
+  agent_chat_page_impl(0);
+}
+
+/*
+** WEBPAGE: agent-chat-stream
+**
+** SSE endpoint for streaming agent chat.
+*/
+void agent_chat_stream_page(void){
+  Blob script = BLOB_INITIALIZER;
+  const char *zMsg;
+  const char *zModel;
+  const char *zProvider;
+  const char *zUser;
+  const char *zRoleParam;
+  int sid;
+
+  login_check_credentials();
+  if( !g.perm.Read ){
+    cgi_set_content_type("text/plain");
+    CX("error: missing read permissions or not logged in\n");
+    return;
+  }
+  zMsg = PD("msg", "");
+  zProvider = PD("provider", agent_chat_provider());
+  zModel = PD("model", agent_default_model());
+  zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
+  sid = atoi(PD("sid","0"));
+  zRoleParam = PD("role", "");
+
+  cgi_set_content_type("text/event-stream");
+  cgi_printf("Cache-Control: no-cache\nConnection: keep-alive\n\n");
+  fflush(stdout);
+
+  if( zMsg[0]==0 || zModel[0]==0 ){
+    if( fossil_strcmp(zRoleParam, "reviewer")!=0 ){
+      CX("data: {\"error\":\"missing msg or model parameter\"}\n\n");
+      return;
+    }
+  }
+
+  db_begin_write();
+  db_unprotect(PROTECT_READONLY);
+  if( sid<=0 || !agent_chat_session_exists(sid) ){
+    sid = agent_chat_session_create(zUser, zProvider, zModel);
+  }
+
+  Th_FossilInit(TH_INIT_DEFAULT);
+  Th_StoreInt("sid", sid);
+  Th_SetVar(g.interp, "msg", 3, zMsg, (int)strlen(zMsg));
+  Th_SetVar(g.interp, "provider", 8, zProvider, (int)strlen(zProvider));
+  Th_SetVar(g.interp, "model", 5, zModel, (int)strlen(zModel));
+  Th_SetVar(g.interp, "user", 4, zUser, (int)strlen(zUser));
+  Th_StoreInt("context_enabled", PB("context"));
+
+  if( agent_orchestration_script(zRoleParam, &script)==0 ){
+    CX("data: {\"error\":\"Role script not found: %s\"}\n\n",
+       zRoleParam[0] ? zRoleParam : "default");
+  }else{
+    int thRc = Th_Eval(g.interp, 0, blob_str(&script), -1);
+    if( thRc==TH_ERROR ){
+      int nResult = 0;
+      const char *zResult = Th_GetResult(g.interp, &nResult);
+      CX("data: {\"error\":%!j}\n\n", zResult ? zResult : "TH1 eval failed");
+    }
+  }
+  db_end_transaction(0);
+  blob_reset(&script);
+}
+
+/*
+** WEBPAGE: agent-api/v1/sessions
+**
+** Versioned session list API.
+*/
+void agent_api_v1_sessions_page(void){
+  const char *zUser;
+  login_check_credentials();
+  cgi_set_content_type("application/json");
+  if( !g.perm.Read ){
+    CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
+       "missing read permissions or not logged in");
+    return;
+  }
+  zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
+  CX("{\"api_version\":\"v1\",\"ok\":true,\"user\":%!j,\"sessions\":", zUser);
+  agent_emit_session_array_json(zUser);
+  CX("}\n");
+}
+
+/*
+** WEBPAGE: agent-api/v1/session
+**
+** Versioned session detail API. Query parameter: sid.
+*/
+void agent_api_v1_session_page(void){
+  int sidRequested;
+  int sidCurrent;
+  login_check_credentials();
+  cgi_set_content_type("application/json");
+  if( !g.perm.Read ){
+    CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
+       "missing read permissions or not logged in");
+    return;
+  }
+  sidRequested = atoi(PD("sid","0"));
+  if( sidRequested<=0 || !agent_chat_session_exists(sidRequested) ){
+    CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
+       "missing or unknown sid parameter");
+    return;
+  }
+  sidCurrent = sidRequested;
+  CX("{\"api_version\":\"v1\",\"ok\":true,\"session\":");
+  agent_emit_history_object_json(sidCurrent);
+  CX("}\n");
+}
+
+/*
+** WEBPAGE: agent-api/v1/session/create
+**
+** Versioned session creation API.
+*/
+void agent_api_v1_session_create_page(void){
+  const char *zProvider;
+  const char *zModel;
+  const char *zUser;
+  const char *zTitle;
+  int sid;
+  login_check_credentials();
+  cgi_set_content_type("application/json");
+  if( !g.perm.Read ){
+    CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
+       "missing read permissions or not logged in");
+    return;
+  }
+  zProvider = PD("provider", agent_chat_provider());
+  zModel = PD("model", agent_default_model());
+  zTitle = PD("title", "");
+  zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
+  db_begin_write();
+  db_unprotect(PROTECT_READONLY);
+  sid = agent_chat_session_create(zUser, zProvider, zModel);
+  if( zTitle[0] ){
+    agent_chat_session_rename(sid, zTitle);
+  }
+  db_end_transaction(0);
+  CX("{\"api_version\":\"v1\",\"ok\":true,\"session\":");
+  agent_emit_history_object_json(sid);
+  CX("}\n");
+}
+
+/*
+** WEBPAGE: agent-api/v1/session/name
+**
+** Versioned session rename API. Parameters: sid, name.
+*/
+void agent_api_v1_session_name_page(void){
+  int sidRequested;
+  const char *zName;
+  login_check_credentials();
+  cgi_set_content_type("application/json");
+  if( !g.perm.Read ){
+    CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
+       "missing read permissions or not logged in");
+    return;
+  }
+  sidRequested = atoi(PD("sid","0"));
+  if( sidRequested<=0 || !agent_chat_session_exists(sidRequested) ){
+    CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
+       "missing or unknown sid parameter");
+    return;
+  }
+  zName = PD("name", "");
+  db_begin_write();
+  db_unprotect(PROTECT_READONLY);
+  agent_chat_session_rename(sidRequested, zName);
+  db_end_transaction(0);
+  CX("{\"api_version\":\"v1\",\"ok\":true,\"session\":");
+  agent_emit_history_object_json(sidRequested);
+  CX("}\n");
+}
+
+/*
+** WEBPAGE: agent-api/v1/events
+**
+** Versioned event stream/list API. Query parameters: sid, after.
+*/
+void agent_api_v1_events_page(void){
+  int sidRequested;
+  int sidCurrent;
+  int afterAcid;
+  int lastAcid;
+  login_check_credentials();
+  cgi_set_content_type("application/json");
+  if( !g.perm.Read ){
+    CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
+       "missing read permissions or not logged in");
+    return;
+  }
+  sidRequested = atoi(PD("sid","0"));
+  if( sidRequested<=0 || !agent_chat_session_exists(sidRequested) ){
+    CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
+       "missing or unknown sid parameter");
+    return;
+  }
+  sidCurrent = sidRequested;
+  afterAcid = atoi(PD("after","0"));
+  if( afterAcid<0 ) afterAcid = 0;
+  CX("{\"api_version\":\"v1\",\"ok\":true,\"sid\":%d,\"after\":%d,\"events\":",
+     sidCurrent, afterAcid);
+  agent_emit_events_array_json(sidCurrent, afterAcid, &lastAcid);
+  CX(",\"last_acid\":%d}\n", lastAcid);
+}
+
+/*
+** WEBPAGE: agent-api/v1/chat
+**
+** Versioned chat submission API.
+*/
+void agent_api_v1_chat_page(void){
+  agent_chat_page_impl(1);
+}

@@ -18,6 +18,10 @@ TESTFLAGS := -quiet
 SRC = \
   $(SRCDIR)/add.c \
   $(SRCDIR)/agent.c \
+  $(SRCDIR)/agent_runtime.c \
+  $(SRCDIR)/agent_store.c \
+  $(SRCDIR)/agent_th1.c \
+  $(SRCDIR)/agent_web.c \
   $(SRCDIR)/ai.c \
   $(SRCDIR)/ajax.c \
   $(SRCDIR)/alerts.c \
@@ -170,6 +174,13 @@ SRC = \
   $(SRCDIR)/zip.c
 
 EXTRA_FILES = \
+  $(SRCDIR)/../cfg/agentui.css \
+  $(SRCDIR)/../cfg/agentui.js \
+  $(SRCDIR)/../cfg/agentui.th1 \
+  $(SRCDIR)/../cfg/mcp_tools.json \
+  $(SRCDIR)/../cfg/roles/default.th1 \
+  $(SRCDIR)/../cfg/roles/json-default.th1 \
+  $(SRCDIR)/../cfg/roles/reviewer.th1 \
   $(SRCDIR)/../dep/vendor/extsrc/pikchr-worker.js \
   $(SRCDIR)/../dep/vendor/extsrc/pikchr.js \
   $(SRCDIR)/../dep/vendor/extsrc/pikchr.wasm \
@@ -289,6 +300,10 @@ EXTRA_FILES = \
 TRANS_SRC = \
   $(OBJDIR)/add_.c \
   $(OBJDIR)/agent_.c \
+  $(OBJDIR)/agent_runtime_.c \
+  $(OBJDIR)/agent_store_.c \
+  $(OBJDIR)/agent_th1_.c \
+  $(OBJDIR)/agent_web_.c \
   $(OBJDIR)/ai_.c \
   $(OBJDIR)/ajax_.c \
   $(OBJDIR)/alerts_.c \
@@ -443,6 +458,10 @@ TRANS_SRC = \
 OBJ = \
  $(OBJDIR)/add.o \
  $(OBJDIR)/agent.o \
+ $(OBJDIR)/agent_runtime.o \
+ $(OBJDIR)/agent_store.o \
+ $(OBJDIR)/agent_th1.o \
+ $(OBJDIR)/agent_web.o \
  $(OBJDIR)/ai.o \
  $(OBJDIR)/ajax.o \
  $(OBJDIR)/alerts.o \
@@ -597,47 +616,7 @@ all:	$(APPNAME)
 
 install:	all
 	mkdir -p $(INSTALLDIR)
-	fsl_tmp_app="$(INSTALLDIR)/.$(notdir $(APPNAME)).tmp.$$"; \
-	rm -f "$$fsl_tmp_app"; \
-	install -m 755 $(APPNAME) "$$fsl_tmp_app"; \
-	mv -f "$$fsl_tmp_app" "$(INSTALLDIR)/$(notdir $(APPNAME))"
-	if test -z "$(DESTDIR)"; then \
-		fsl_user_home="$$HOME"; \
-		fsl_user_name=""; \
-		if test -n "$$SUDO_USER"; then \
-			fsl_user_name="$$SUDO_USER"; \
-			fsl_user_home="$$(getent passwd "$$SUDO_USER" | cut -d: -f6)"; \
-		fi; \
-		fsl_cfg_root="$${XDG_CONFIG_HOME:-$$fsl_user_home/.config}/fossil"; \
-		fsl_agent_dir="$$fsl_cfg_root/agents"; \
-		mkdir -p "$$fsl_agent_dir"; \
-		cp $(TOPDIR)/dev/agents/fossil-claude-agent.sh "$$fsl_agent_dir/"; \
-		cp $(TOPDIR)/dev/agents/fossil-codex-agent.sh "$$fsl_agent_dir/"; \
-		cp $(TOPDIR)/dev/agents/fossil-gemini-agent.sh "$$fsl_agent_dir/"; \
-		cp $(TOPDIR)/dev/agents/fossil-ollama-agent.sh "$$fsl_agent_dir/"; \
-		chmod 755 "$$fsl_agent_dir"/fossil-claude-agent.sh "$$fsl_agent_dir"/fossil-codex-agent.sh "$$fsl_agent_dir"/fossil-gemini-agent.sh "$$fsl_agent_dir"/fossil-ollama-agent.sh; \
-		sed "s#\\.\\/dev\\/agents#$$fsl_agent_dir#g" $(TOPDIR)/cfg/ai-agent.json \
-		  > "$$fsl_cfg_root/ai-agent.json"; \
-		sed "s#\\.\\/dev\\/agents#$$fsl_agent_dir#g" $(TOPDIR)/cfg/ai-agent.json \
-		  > "$$fsl_agent_dir/ai-agent.json"; \
-		sed "s#\\.\\/dev\\/agents#$$fsl_agent_dir#g" $(TOPDIR)/cfg/ai-agent-claude.json \
-		  > "$$fsl_agent_dir/ai-agent-claude.json"; \
-		sed "s#\\.\\/dev\\/agents#$$fsl_agent_dir#g" $(TOPDIR)/cfg/ai-agent-codex.json \
-		  > "$$fsl_agent_dir/ai-agent-codex.json"; \
-		sed "s#\\.\\/dev\\/agents#$$fsl_agent_dir#g" $(TOPDIR)/cfg/ai-agent-gemini.json \
-		  > "$$fsl_agent_dir/ai-agent-gemini.json"; \
-		if test -n "$$fsl_user_name"; then \
-			chown "$$fsl_user_name" "$$fsl_cfg_root/ai-agent.json" \
-			  "$$fsl_agent_dir/fossil-claude-agent.sh" \
-			  "$$fsl_agent_dir/fossil-codex-agent.sh" \
-			  "$$fsl_agent_dir/fossil-gemini-agent.sh" \
-			  "$$fsl_agent_dir/fossil-ollama-agent.sh" \
-			  "$$fsl_agent_dir/ai-agent-claude.json" \
-			  "$$fsl_agent_dir/ai-agent.json" \
-			  "$$fsl_agent_dir/ai-agent-codex.json" \
-			  "$$fsl_agent_dir/ai-agent-gemini.json"; \
-		fi; \
-	fi
+	cp $(APPNAME) $(INSTALLDIR)
 
 codecheck:	$(TRANS_SRC) $(OBJDIR)/codecheck1
 	$(OBJDIR)/codecheck1 $(TRANS_SRC)
@@ -811,13 +790,12 @@ EXTRAOBJ = \
 
 $(APPNAME):	$(OBJDIR)/headers $(OBJDIR)/codecheck1 $(EXTRAOBJ) $(OBJ)
 	$(OBJDIR)/codecheck1 $(TRANS_SRC)
-	mkdir -p $(dir $(APPNAME))
 	$(TCC) $(TCCFLAGS) -o $(APPNAME) $(EXTRAOBJ) $(OBJ) $(LIB)
 
 # This rule prevents make from using its default rules to try build
 # an executable named "manifest" out of the file named "manifest.c"
 #
-$(SRCDIR)/../scm/manifest:
+$(SRCDIR)/../manifest:
 	# noop
 
 clean:
@@ -833,6 +811,10 @@ $(OBJDIR)/builtin_data.h: $(OBJDIR)/mkbuiltin $(EXTRA_FILES)
 $(OBJDIR)/headers:	$(OBJDIR)/page_index.h $(OBJDIR)/builtin_data.h $(OBJDIR)/makeheaders $(OBJDIR)/VERSION.h
 	$(OBJDIR)/makeheaders $(OBJDIR)/add_.c:$(OBJDIR)/add.h \
 	$(OBJDIR)/agent_.c:$(OBJDIR)/agent.h \
+	$(OBJDIR)/agent_runtime_.c:$(OBJDIR)/agent_runtime.h \
+	$(OBJDIR)/agent_store_.c:$(OBJDIR)/agent_store.h \
+	$(OBJDIR)/agent_th1_.c:$(OBJDIR)/agent_th1.h \
+	$(OBJDIR)/agent_web_.c:$(OBJDIR)/agent_web.h \
 	$(OBJDIR)/ai_.c:$(OBJDIR)/ai.h \
 	$(OBJDIR)/ajax_.c:$(OBJDIR)/ajax.h \
 	$(OBJDIR)/alerts_.c:$(OBJDIR)/alerts.h \
@@ -1006,6 +988,38 @@ $(OBJDIR)/agent.o:	$(OBJDIR)/agent_.c $(OBJDIR)/agent.h $(SRCDIR)/config.h
 	$(XTCC) -o $(OBJDIR)/agent.o -c $(OBJDIR)/agent_.c
 
 $(OBJDIR)/agent.h:	$(OBJDIR)/headers
+
+$(OBJDIR)/agent_runtime_.c:	$(SRCDIR)/agent_runtime.c $(OBJDIR)/translate
+	$(OBJDIR)/translate $(SRCDIR)/agent_runtime.c >$@
+
+$(OBJDIR)/agent_runtime.o:	$(OBJDIR)/agent_runtime_.c $(OBJDIR)/agent_runtime.h $(SRCDIR)/config.h
+	$(XTCC) -o $(OBJDIR)/agent_runtime.o -c $(OBJDIR)/agent_runtime_.c
+
+$(OBJDIR)/agent_runtime.h:	$(OBJDIR)/headers
+
+$(OBJDIR)/agent_store_.c:	$(SRCDIR)/agent_store.c $(OBJDIR)/translate
+	$(OBJDIR)/translate $(SRCDIR)/agent_store.c >$@
+
+$(OBJDIR)/agent_store.o:	$(OBJDIR)/agent_store_.c $(OBJDIR)/agent_store.h $(SRCDIR)/config.h
+	$(XTCC) -o $(OBJDIR)/agent_store.o -c $(OBJDIR)/agent_store_.c
+
+$(OBJDIR)/agent_store.h:	$(OBJDIR)/headers
+
+$(OBJDIR)/agent_th1_.c:	$(SRCDIR)/agent_th1.c $(OBJDIR)/translate
+	$(OBJDIR)/translate $(SRCDIR)/agent_th1.c >$@
+
+$(OBJDIR)/agent_th1.o:	$(OBJDIR)/agent_th1_.c $(OBJDIR)/agent_th1.h $(SRCDIR)/config.h
+	$(XTCC) -o $(OBJDIR)/agent_th1.o -c $(OBJDIR)/agent_th1_.c
+
+$(OBJDIR)/agent_th1.h:	$(OBJDIR)/headers
+
+$(OBJDIR)/agent_web_.c:	$(SRCDIR)/agent_web.c $(OBJDIR)/translate
+	$(OBJDIR)/translate $(SRCDIR)/agent_web.c >$@
+
+$(OBJDIR)/agent_web.o:	$(OBJDIR)/agent_web_.c $(OBJDIR)/agent_web.h $(SRCDIR)/config.h
+	$(XTCC) -o $(OBJDIR)/agent_web.o -c $(OBJDIR)/agent_web_.c
+
+$(OBJDIR)/agent_web.h:	$(OBJDIR)/headers
 
 $(OBJDIR)/ai_.c:	$(SRCDIR)/ai.c $(OBJDIR)/translate
 	$(OBJDIR)/translate $(SRCDIR)/ai.c >$@

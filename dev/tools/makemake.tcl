@@ -53,6 +53,10 @@ set src {
   add
   ai
   agent
+  agent_runtime
+  agent_store
+  agent_th1
+  agent_web
   ajax
   alerts
   allrepo
@@ -222,6 +226,11 @@ set extra_files {
   *.js
   default.css
   style.*.css
+  ../cfg/agentui.css
+  ../cfg/agentui.js
+  ../cfg/agentui.th1
+  ../cfg/mcp_tools.json
+  ../cfg/roles/*.th1
   ../pub/skins/*/*.txt
   sounds/*.wav
   alerts/*.wav

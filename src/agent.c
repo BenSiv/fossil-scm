@@ -19,6 +19,7 @@
 */
 #include "config.h"
 #include "agent.h"
+#include "agent_internal.h"
 #include <assert.h>
 #ifdef FOSSIL_ENABLE_JSON
 #include "cson_amalgamation.h"
@@ -69,10 +70,10 @@ static int agent_generate_embedding(
   const char *zText,
   Blob *pOut
 );
-static const char *agent_chat_session_model(int sid, const char *zDefault);
-static const char *agent_chat_session_provider(int sid, const char *zDefault);
-static const char *agent_command_template(void);
-static const char *agent_embedding_template(void);
+const char *agent_chat_session_model(int sid, const char *zDefault);
+const char *agent_chat_session_provider(int sid, const char *zDefault);
+const char *agent_command_template(void);
+const char *agent_embedding_template(void);
 static char *agent_command_executable(const char *zCmdTmpl);
 #ifdef FOSSIL_ENABLE_JSON
 static cson_object *agent_config_parse_object(cson_value **ppRoot, Blob *pJson);
@@ -93,12 +94,6 @@ static int agent_provider_match_command(
   const char *zCmdExec
 );
 #endif
-static void agent_strip_prefix_noise(Blob *pText);
-static int agent_validate_provider_model(
-  const char *zProvider,
-  const char *zModel,
-  Blob *pErr
-);
 static int agent_run_backend(
   const char *zProvider,
   const char *zModel,
@@ -220,31 +215,6 @@ static int agentLastRetrievalQid = 0;
 */
 
 /*
-** Expand zTemplate into pOut. Replaces %m with the shell-escaped model name
-** and %% with a literal percent sign.
-*/
-static void agent_expand_command(
-  Blob *pOut,
-  const char *zTemplate,
-  const char *zModel
-){
-  const char *z = zTemplate;
-  blob_zero(pOut);
-  while( z && z[0] ){
-    if( z[0]=='%' && z[1]=='m' ){
-      blob_append_escaped_arg(pOut, zModel ? zModel : "", 0);
-      z += 2;
-    }else if( z[0]=='%' && z[1]=='%' ){
-      blob_append(pOut, "%", 1);
-      z += 2;
-    }else{
-      blob_append(pOut, z, 1);
-      z++;
-    }
-  }
-}
-
-/*
 ** Return a freshly-allocated absolute path to cfg/ai-agent.json if the
 ** current process has an open checkout root. The caller must fossil_free()
 ** the result.
@@ -266,7 +236,7 @@ static char *agent_user_config_path(void){
 #endif
 }
 
-static char *agent_config_source(void){
+char *agent_config_source(void){
   const char *zPath = fossil_getenv("FOSSIL_AGENT_CONFIG");
   char *zUserPath = 0;
   if( zAgentConfigPath && zAgentConfigPath[0] ){
@@ -308,7 +278,7 @@ static char *agent_config_path(void){
   return mprintf("%s%s", g.zLocalRoot, zAgentConfigFile);
 }
 #else
-static char *agent_config_source(void){
+char *agent_config_source(void){
   return mprintf("repo settings fallback (JSON disabled)");
 }
 #endif
@@ -346,23 +316,6 @@ static const char *agent_infer_provider(const char *zCmd){
   if( zCached ) return zCached;
 #endif
   return "custom";
-}
-
-/*
-** Return non-zero if zModel looks like an Ollama-style local model name.
-*/
-static int agent_model_looks_ollama(const char *zModel){
-  static const char *const azPrefix[] = {
-    "llama", "qwen", "mxbai", "deepseek", "phi", "gemma", "nomic"
-  };
-  int i;
-  if( zModel==0 || zModel[0]==0 ) return 0;
-  if( strchr(zModel, ':')!=0 ) return 1;
-  for(i=0; i<(int)(sizeof(azPrefix)/sizeof(azPrefix[0])); i++){
-    size_t n = strlen(azPrefix[i]);
-    if( fossil_strnicmp(zModel, azPrefix[i], (int)n)==0 ) return 1;
-  }
-  return 0;
 }
 
 #ifdef FOSSIL_ENABLE_JSON
@@ -587,7 +540,7 @@ static int agent_provider_bool_property(
 ** string on success or NULL if the config file/key is missing or invalid.
 ** The caller must fossil_free() the result.
 */
-static char *agent_config_get(const char *zKey){
+char *agent_config_get(const char *zKey){
 #ifdef FOSSIL_ENABLE_JSON
   Blob json = BLOB_INITIALIZER;
   cson_value *pRoot = 0;
@@ -639,7 +592,7 @@ static int agent_config_get_boolean(const char *zKey, int dflt){
 /*
 ** Return the configured chat model, with legacy fallback.
 */
-static const char *agent_default_model(void){
+const char *agent_default_model(void){
   static char *zCached = 0;
   fossil_free(zCached);
   zCached = agent_config_get("model");
@@ -651,7 +604,7 @@ static const char *agent_default_model(void){
 /*
 ** Return the configured chat provider, with legacy inference fallback.
 */
-static const char *agent_chat_provider(void){
+const char *agent_chat_provider(void){
   static char *zCached = 0;
   char *zCmd = 0;
   fossil_free(zCached);
@@ -669,7 +622,7 @@ static const char *agent_chat_provider(void){
 /*
 ** Return the configured embedding model, with fallback to the chat model.
 */
-static const char *agent_embedding_model(void){
+const char *agent_embedding_model(void){
   static char *zCached = 0;
   fossil_free(zCached);
   zCached = agent_config_get("embedding_model");
@@ -681,7 +634,7 @@ static const char *agent_embedding_model(void){
 /*
 ** Return the configured embedding provider, with legacy inference fallback.
 */
-static const char *agent_embedding_provider(void){
+const char *agent_embedding_provider(void){
   static char *zCached = 0;
   char *zCmd = 0;
   fossil_free(zCached);
@@ -703,7 +656,7 @@ static const char *agent_embedding_provider(void){
 /*
 ** Return the configured chat command template, with legacy fallback.
 */
-static const char *agent_command_template(void){
+const char *agent_command_template(void){
   static char *zCached = 0;
   fossil_free(zCached);
   zCached = agent_config_get("command");
@@ -713,7 +666,7 @@ static const char *agent_command_template(void){
 /*
 ** Return the configured embedding command template, if any.
 */
-static const char *agent_embedding_template(void){
+const char *agent_embedding_template(void){
   static char *zCached = 0;
   fossil_free(zCached);
   zCached = agent_config_get("embedding_command");
@@ -759,7 +712,7 @@ static int agent_provider_is_known(const char *zProvider){
 ** Return non-zero if zProvider may use "auto" to defer model selection to
 ** an external CLI.
 */
-static int agent_provider_accepts_auto(const char *zProvider){
+int agent_provider_accepts_auto(const char *zProvider){
   return agent_provider_bool_property(zProvider, "accepts_auto", 0);
 }
 
@@ -767,7 +720,7 @@ static int agent_provider_accepts_auto(const char *zProvider){
 ** Return non-zero if zProvider should reject obvious Ollama-style model names
 ** before backend launch.
 */
-static int agent_provider_rejects_ollama_models(const char *zProvider){
+int agent_provider_rejects_ollama_models(const char *zProvider){
   return agent_provider_bool_property(zProvider, "rejects_ollama_models", 0);
 }
 
@@ -776,7 +729,7 @@ static int agent_provider_rejects_ollama_models(const char *zProvider){
 ** This stays locked until provider switching has a complete server-side
 ** implementation.
 */
-static int agent_chat_provider_locked(void){
+int agent_chat_provider_locked(void){
   int rc = 1;
 #ifdef FOSSIL_ENABLE_JSON
   cson_value *pRoot = 0;
@@ -1101,7 +1054,7 @@ static void agent_emit_phase_registry_json(void){
 ** sidCurrent. If sidCurrent refers to an existing session, chat provider/model
 ** reflect that session rather than the current default.
 */
-static void agent_emit_config_json(int sidCurrent){
+void agent_emit_config_json(int sidCurrent){
   char *zChatProvider = mprintf("%s", agent_chat_session_provider(
     sidCurrent, agent_chat_provider()
   ));
@@ -1223,70 +1176,6 @@ static void agent_emit_config_json(int sidCurrent){
   fossil_free(zEmbedModel);
   fossil_free(zCmd);
   fossil_free(zEmbedCmd);
-}
-
-/*
-** Wrap zCmd in a stable shell invocation with exported agent env vars.
-*/
-static void agent_prepare_command(
-  Blob *pOut,
-  const char *zMode,
-  const char *zProvider,
-  const char *zModel,
-  Blob *pCmd
-){
-  Blob model = BLOB_INITIALIZER;
-  Blob mode = BLOB_INITIALIZER;
-  Blob provider = BLOB_INITIALIZER;
-  Blob cmd = BLOB_INITIALIZER;
-  blob_append_escaped_arg(&model, zModel ? zModel : "", 0);
-  blob_append_escaped_arg(&mode, zMode ? zMode : "", 0);
-  blob_append_escaped_arg(&provider, zProvider ? zProvider : "", 0);
-  blob_append_escaped_arg(&cmd, blob_str(pCmd), 0);
-  blob_zero(pOut);
-  blob_appendf(
-    pOut,
-    "env FOSSIL_AGENT_MODEL=%s FOSSIL_AGENT_MODE=%s FOSSIL_AGENT_PROVIDER=%s"
-    " sh -lc %s 2>&1",
-    blob_str(&model), blob_str(&mode), blob_str(&provider), blob_str(&cmd)
-  );
-  blob_reset(&model);
-  blob_reset(&mode);
-  blob_reset(&provider);
-  blob_reset(&cmd);
-}
-
-/*
-** Validate a provider/model pair before invoking the backend.
-*/
-static int agent_validate_provider_model(
-  const char *zProvider,
-  const char *zModel,
-  Blob *pErr
-){
-  if( zModel==0 || zModel[0]==0 ){
-    blob_appendf(pErr, "missing model parameter");
-    return 1;
-  }
-  if( zProvider==0 || zProvider[0]==0 ) return 0;
-  if( fossil_stricmp(zModel, "auto")==0 && !agent_provider_accepts_auto(zProvider) ){
-    blob_appendf(pErr,
-      "model \"auto\" is not valid for provider %s", zProvider
-    );
-    return 1;
-  }
-  if( agent_provider_accepts_auto(zProvider) ){
-    if( agent_provider_rejects_ollama_models(zProvider)
-     && agent_model_looks_ollama(zModel)
-    ){
-      blob_appendf(pErr,
-        "model \"%s\" looks like an Ollama model but provider is %s",
-        zModel, zProvider
-      );
-      return 1;
-    }
-  }
-  return 0;
 }
 
 /*
@@ -1679,421 +1568,7 @@ static int agent_guidance_load(
   return 1;
 }
 
-/*
-** Repository storage for agent chat messages.
-*/
-static const char zAgentChatSchema[] =
-@ CREATE TABLE repository.agentchat_session(
-@   sid INTEGER PRIMARY KEY AUTOINCREMENT,
-@   ctime JULIANDAY DEFAULT (julianday('now')),
-@   mtime JULIANDAY DEFAULT (julianday('now')),
-@   xfrom TEXT,
-@   provider TEXT,
-@   model TEXT,
-@   title TEXT
-@ );
-@ CREATE TABLE repository.agentchat(
-@   acid INTEGER PRIMARY KEY AUTOINCREMENT,
-@   sid INTEGER REFERENCES agentchat_session,
-@   mtime JULIANDAY DEFAULT (julianday('now')),
-@   xfrom TEXT,
-@   role TEXT NOT NULL,
-@   kind TEXT,
-@   provider TEXT,
-@   model TEXT,
-@   meta TEXT,
-@   msg TEXT NOT NULL
-@ );
-;
-
-/*
-** Ensure the repository table used by /agentui exists.
-*/
-static void agent_chat_create_tables(void){
-  if( !db_table_exists("repository","agentchat") ){
-    db_multi_exec(zAgentChatSchema/*works-like:""*/);
-  }else{
-    if( !db_table_exists("repository","agentchat_session") ){
-      db_multi_exec(
-        "CREATE TABLE repository.agentchat_session("
-        "  sid INTEGER PRIMARY KEY AUTOINCREMENT,"
-        "  ctime JULIANDAY DEFAULT (julianday('now')),"
-        "  mtime JULIANDAY DEFAULT (julianday('now')),"
-        "  xfrom TEXT,"
-        "  provider TEXT,"
-        "  model TEXT,"
-        "  title TEXT"
-        ");"
-      );
-    }
-    if( !db_table_has_column("repository","agentchat","sid") ){
-      db_multi_exec("ALTER TABLE agentchat ADD COLUMN sid INTEGER");
-    }
-    if( !db_table_has_column("repository","agentchat","kind") ){
-      db_multi_exec("ALTER TABLE agentchat ADD COLUMN kind TEXT");
-    }
-    if( !db_table_has_column("repository","agentchat","meta") ){
-      db_multi_exec("ALTER TABLE agentchat ADD COLUMN meta TEXT");
-    }
-    if( !db_table_has_column("repository","agentchat_session","provider") ){
-      db_multi_exec("ALTER TABLE agentchat_session ADD COLUMN provider TEXT");
-    }
-    if( !db_table_has_column("repository","agentchat_session","model") ){
-      db_multi_exec("ALTER TABLE agentchat_session ADD COLUMN model TEXT");
-    }
-    if( !db_table_has_column("repository","agentchat","provider") ){
-      db_multi_exec("ALTER TABLE agentchat ADD COLUMN provider TEXT");
-    }
-  }
-}
-
-/*
-** Create and return a new chat session id.
-*/
-static int agent_chat_session_create(
-  const char *zUser,
-  const char *zProvider,
-  const char *zModel
-){
-  agent_chat_create_tables();
-  db_multi_exec(
-    "INSERT INTO agentchat_session(ctime,mtime,xfrom,provider,model,title)"
-    " VALUES(julianday('now'),julianday('now'),%Q,%Q,%Q,'New Chat')",
-    zUser ? zUser : "",
-    zProvider ? zProvider : "",
-    zModel ? zModel : ""
-  );
-  return db_last_insert_rowid();
-}
-
-/*
-** Return non-zero if sid exists.
-*/
-static int agent_chat_session_exists(int sid){
-  return sid>0 && db_exists("SELECT 1 FROM agentchat_session WHERE sid=%d", sid);
-}
-
-static int agent_chat_latest_session_user(const char *zUser){
-  return db_int(0, "SELECT max(sid) FROM repository.ai_chat_session"
-                   " WHERE user=%Q", zUser);
-}
-
-static int agent_chat_current_session_user(const char *zUser){
-  int cur = db_int(0, "SELECT current_sid FROM repository.ai_chat_user"
-                      " WHERE user=%Q", zUser);
-  return cur ? cur : agent_chat_latest_session_user(zUser);
-}
-
-static int agent_chat_current_session(const char *zUser){
-  int sid;
-  agent_chat_create_tables();
-  sid = atoi(PD("sid","0"));
-  if( sid>0 && agent_chat_session_exists(sid) ){
-    return sid;
-  }
-  if( PB("new") ){
-    return agent_chat_session_create(zUser, agent_chat_provider(), agent_default_model());
-  }
-  sid = db_int(0,
-    "SELECT sid FROM agentchat_session"
-    " WHERE xfrom=%Q OR (%Q='' AND xfrom='')"
-    " ORDER BY mtime DESC, sid DESC LIMIT 1",
-    zUser ? zUser : "", zUser ? zUser : ""
-  );
-  return sid>0 ? sid : agent_chat_session_create(zUser, agent_chat_provider(), agent_default_model());
-}
-
-static int agent_chat_latest_session(const char *zUser){
-  if( !db_table_exists("repository","agentchat_session") ) return 0;
-  return db_int(0,
-    "SELECT sid FROM agentchat_session"
-    " WHERE xfrom=%Q OR (%Q='' AND xfrom='')"
-    " ORDER BY mtime DESC, sid DESC LIMIT 1",
-    zUser ? zUser : "", zUser ? zUser : ""
-  );
-}
-
-/*
-** Update session metadata after a new message.
-*/
-static void agent_chat_session_touch(
-  int sid,
-  const char *zMsg,
-  const char *zProvider,
-  const char *zModel
-){
-  Blob title = BLOB_INITIALIZER;
-  int n;
-  if( sid<=0 ) return;
-  if( zMsg==0 ) zMsg = "";
-  while( fossil_isspace(zMsg[0]) ) zMsg++;
-  n = (int)strlen(zMsg);
-  if( n>60 ) n = 60;
-  blob_append(&title, zMsg, n);
-  blob_trim(&title);
-  db_multi_exec(
-    "UPDATE agentchat_session"
-    " SET mtime=julianday('now'),"
-    " provider=coalesce(nullif(%Q,''),provider),"
-    " model=coalesce(nullif(%Q,''),model),"
-    " title=CASE"
-    "   WHEN title IS NULL OR title='' OR title='New Chat'"
-    "   THEN %Q ELSE title END"
-    " WHERE sid=%d",
-    zProvider ? zProvider : "",
-    zModel ? zModel : "",
-    blob_size(&title)>0 ? blob_str(&title) : "New Chat",
-    sid
-  );
-  blob_reset(&title);
-}
-
-/*
-** Persist a single agent chat message.
-*/
-static int agent_chat_save(
-  int sid,
-  const char *zUser,
-  const char *zRole,
-  const char *zKind,
-  const char *zProvider,
-  const char *zModel,
-  const char *zMeta,
-  const char *zMsg
-){
-  const char *zTitleMsg = zMsg;
-  int acid;
-  if( zMsg==0 || zMsg[0]==0 ) return 0;
-  agent_chat_create_tables();
-  db_multi_exec(
-    "INSERT INTO agentchat(sid,mtime,xfrom,role,kind,provider,model,meta,msg)"
-    " VALUES(%d,julianday('now'),%Q,%Q,%Q,%Q,%Q,%Q,%Q)",
-    sid,
-    zUser ? zUser : "",
-    zRole ? zRole : "agent",
-    zKind ? zKind : "message",
-    zProvider ? zProvider : "",
-    zModel ? zModel : "",
-    zMeta ? zMeta : "",
-    zMsg
-  );
-  acid = db_last_insert_rowid();
-  if( zRole && fossil_strcmp(zRole,"system")==0 ){
-    zTitleMsg = "";
-  }
-  agent_chat_session_touch(sid, zTitleMsg, zProvider, zModel);
-  return acid;
-}
-
-/*
-** Persist a system event for a chat session.
-*/
-static void agent_chat_save_event(
-  int sid,
-  const char *zUser,
-  const char *zKind,
-  const char *zProvider,
-  const char *zModel,
-  const char *zMeta,
-  const char *zMsg
-){
-  (void)agent_chat_save(
-    sid, zUser, "system", zKind, zProvider, zModel, zMeta, zMsg
-  );
-}
-
-/*
-** Return a compact state label for the latest stored event in sid.
-*/
-static const char *agent_chat_session_state(int sid){
-  if( sid<=0 || !db_table_exists("repository","agentchat") ) return "";
-  return db_text("",
-    "SELECT CASE"
-    "  WHEN role='agent' AND kind='reply' THEN 'reply'"
-    "  WHEN role='agent' AND kind='error' THEN 'error'"
-    "  WHEN role='system' AND kind='progress'"
-    "   AND meta LIKE '%%\"status\":\"running\"%%' THEN 'running'"
-    "  WHEN role='system' AND kind='progress'"
-    "   AND meta LIKE '%%\"status\":\"ok\"%%' THEN 'ok'"
-    "  WHEN role='system' AND kind='progress'"
-    "   AND meta LIKE '%%\"status\":\"error\"%%' THEN 'error'"
-    "  WHEN role='system' AND kind='tool' THEN 'tool'"
-    "  WHEN role='system' AND kind='progress' THEN 'progress'"
-    "  WHEN role='user' AND kind='prompt' THEN 'prompt'"
-    "  ELSE coalesce(kind, role, '') END"
-    " FROM agentchat WHERE sid=%d ORDER BY acid DESC LIMIT 1",
-    sid
-  );
-}
-
-/*
-** Return the latest terminal agent event acid for sid, or 0 if none.
-*/
-static int agent_chat_latest_terminal_acid(int sid){
-  if( sid<=0 || !db_table_exists("repository","agentchat") ) return 0;
-  return db_int(0,
-    "SELECT acid FROM agentchat"
-    " WHERE sid=%d"
-    "   AND role='agent'"
-    "   AND kind IN ('reply','error')"
-    " ORDER BY acid DESC LIMIT 1",
-    sid
-  );
-}
-
-/*
-** True if acid is a terminal agent event for sid.
-*/
-static int agent_chat_is_terminal_acid(int sid, int acid){
-  return sid>0 && acid>0 && db_exists(
-    "SELECT 1 FROM agentchat"
-    " WHERE sid=%d AND acid=%d"
-    "   AND role='agent'"
-    "   AND kind IN ('reply','error')",
-    sid, acid
-  );
-}
-
-/*
-** Emit session list for the current user.
-*/
-static void agent_chat_render_sessions_to_blob(const char *zUser, int sidCurrent, Blob *pOut){
-  Stmt q;
-  int nLimit = db_get_int("agent-history-count", 50);
-  if( nLimit<=0 ) return;
-  if( !db_table_exists("repository","agentchat_session") ) return;
-  db_prepare(&q,
-    "SELECT sid, coalesce(nullif(title,''),'New Chat'),"
-    "       coalesce(nullif(provider,''),'?'),"
-    "       coalesce(nullif(model,''),'')"
-    " FROM agentchat_session"
-    " WHERE xfrom=%Q OR (%Q='' AND xfrom='')"
-    " ORDER BY mtime DESC, sid DESC LIMIT %d",
-    zUser ? zUser : "", zUser ? zUser : "", nLimit
-  );
-  while( db_step(&q)==SQLITE_ROW ){
-    int sid = db_column_int(&q, 0);
-    const char *zTitle = db_column_text(&q, 1);
-    const char *zProvider = db_column_text(&q, 2);
-    const char *zModel = db_column_text(&q, 3);
-    const char *zState = agent_chat_session_state(sid);
-    blob_appendf(pOut, "<div>\n");
-    if( sid==sidCurrent ){
-      blob_appendf(pOut, "<b>%h</b> <span class=\"dimmed\">[%h%s%h%s%h]</span>",
-                   zTitle, zProvider, (zModel&&zModel[0]?" / ":""), zModel,
-                   (zState&&zState[0]?" | ":""), zState);
-    }else{
-      blob_appendf(pOut, "<a href=\"%%R/agentui?sid=%d\">%h</a> <span class=\"dimmed\">[%h%s%h%s%h]</span>",
-                   sid, zTitle, zProvider, (zModel&&zModel[0]?" / ":""), zModel,
-                   (zState&&zState[0]?" | ":""), zState);
-    }
-    blob_appendf(pOut, "</div>\n");
-  }
-  db_finalize(&q);
-}
-
-static void agent_chat_render_sessions(const char *zUser, int sidCurrent){
-  Blob out = BLOB_INITIALIZER;
-  agent_chat_render_sessions_to_blob(zUser, sidCurrent, &out);
-  CX("%s", blob_str(&out));
-  blob_reset(&out);
-}
-
-/*
-** Return non-zero if zMeta indicates that pool context was enabled.
-*/
-static int agent_chat_meta_context_enabled(const char *zMeta){
-  return zMeta && strstr(zMeta, "\"context\":true")!=0;
-}
-
-/*
-** Extract retrieval_qid from a small JSON-ish meta string. Returns 0 if absent.
-*/
-static int agent_chat_meta_retrieval_qid(const char *zMeta){
-  const char *z;
-  if( zMeta==0 ) return 0;
-  z = strstr(zMeta, "\"retrieval_qid\":");
-  if( z==0 ) return 0;
-  z += 16;
-  while( fossil_isspace(z[0]) ) z++;
-  return atoi(z);
-}
-
-/*
-** Emit recent saved agent chat messages for a session into the page log.
-*/
-static void agent_chat_render_history_to_blob(int sidCurrent, Blob *pOut){
-  Stmt q;
-  int nLimit = db_get_int("agent-history-count", 50);
-  if( nLimit<=0 || sidCurrent<=0 ) return;
-  if( !db_table_exists("repository","agentchat") ) return;
-  if( db_table_exists("repository","ai_chat_eval") ){
-    db_prepare(&q,
-      "SELECT c.role, c.kind, c.provider, c.model, c.meta, c.msg,"
-      "       coalesce(e.user_feedback,'')"
-      "  FROM agentchat AS c"
-      "  LEFT JOIN ai_chat_eval AS e ON e.sid=c.sid AND e.acid=c.acid"
-      " WHERE c.sid=%d"
-      " ORDER BY c.acid ASC LIMIT %d",
-      sidCurrent, nLimit
-    );
-  }else{
-    db_prepare(&q,
-      "SELECT role, kind, provider, model, meta, msg, ''"
-      " FROM agentchat WHERE sid=%d"
-      " ORDER BY acid ASC LIMIT %d",
-      sidCurrent, nLimit
-    );
-  }
-  while( db_step(&q)==SQLITE_ROW ){
-    const char *zRole = db_column_text(&q, 0);
-    const char *zRoleLabel =
-      zRole && fossil_strcmp(zRole,"user")==0 ? "You" :
-      zRole && fossil_strcmp(zRole,"system")==0 ? "System" : "Agent";
-    const char *zKind = db_column_text(&q, 1);
-    const char *zProvider = db_column_text(&q, 2);
-    const char *zModel = db_column_text(&q, 3);
-    const char *zMeta = db_column_text(&q, 4);
-    const char *zMsg = db_column_text(&q, 5);
-    const char *zFeedback = db_column_text(&q, 6);
-    int bPromptMeta = zRole && zKind
-      && fossil_strcmp(zRole,"user")==0
-      && fossil_strcmp(zKind,"prompt")==0
-      && agent_chat_meta_context_enabled(zMeta);
-    int retrievalQid = bPromptMeta ? agent_chat_meta_retrieval_qid(zMeta) : 0;
-    blob_appendf(pOut, "<div style=\"margin-bottom:0.8em;\">\n");
-    blob_appendf(pOut, "<b>%h:</b>", zRoleLabel);
-    if( zProvider && zProvider[0] ){
-      blob_appendf(pOut, " <span class=\"dimmed\">[%h%s%h]</span>", 
-                   zProvider, (zModel&&zModel[0]?" / ":""), zModel);
-    }
-    if( zKind && zKind[0] ){
-      blob_appendf(pOut, " <span class=\"dimmed\">{%h}</span>", zKind);
-    }
-    if( bPromptMeta ){
-      blob_appendf(pOut, " <span class=\"dimmed\">[context=pool]</span>");
-      if( retrievalQid>0 ){
-        blob_appendf(pOut, " <span class=\"dimmed\">[<a href=\"%%R/agentui?sid=%d#retrieval-%d\" data-retrieval-qid=\"%d\">retrieval #%d</a>]</span>",
-                     sidCurrent, retrievalQid, retrievalQid, retrievalQid);
-      }
-    }else if( zMeta && zMeta[0] ){
-      blob_appendf(pOut, " <span class=\"dimmed\">meta=%h</span>", zMeta);
-    }
-    if( zFeedback && zFeedback[0] ){
-      blob_appendf(pOut, " <span class=\"dimmed\">feedback=%h</span>", zFeedback);
-    }
-    blob_appendf(pOut, " <pre style=\"white-space:pre-wrap;display:inline;margin:0\">%h</pre>\n", zMsg);
-    blob_appendf(pOut, "</div>\n");
-  }
-  db_finalize(&q);
-}
-
-static void agent_chat_render_history(int sidCurrent){
-  Blob out = BLOB_INITIALIZER;
-  agent_chat_render_history_to_blob(sidCurrent, &out);
-  CX("%s", blob_str(&out));
-  blob_reset(&out);
-}
+/* Session and event storage helpers live in agent_store.c. */
 
 /*
 ** Add common submenu entries for the software management surfaces.
@@ -2122,7 +1597,7 @@ static void agent_knowledge_submenu(void){
 /*
 ** Add common submenu entries for the interactive agent surfaces.
 */
-static void agent_console_submenu(int sidCurrent){
+void agent_console_submenu(int sidCurrent){
   style_submenu_element("Agent", "%R/agentui");
   if( sidCurrent>0 ){
     style_submenu_element("Session", "%R/agentui?sid=%d", sidCurrent);
@@ -2937,114 +2412,13 @@ void knowledge_run_page(void){
   style_finish_page();
 }
 
-/*
-** Emit a JSON object describing a chat session and its stored messages.
-*/
-static void agent_emit_history_json(int sidCurrent){
-  Stmt q;
-  const char *zTitle = "New Chat";
-  const char *zProvider = agent_chat_session_provider(sidCurrent, "");
-  const char *zModel = agent_chat_session_model(sidCurrent, "");
-  if( sidCurrent>0 && db_table_exists("repository","agentchat_session") ){
-    zTitle = db_text("New Chat",
-      "SELECT coalesce(nullif(title,''),'New Chat') FROM agentchat_session"
-      " WHERE sid=%d",
-      sidCurrent
-    );
-  }
-  CX("{\"sid\":%d,\"title\":%!j,\"provider\":%!j,\"model\":%!j,\"messages\":[",
-     sidCurrent, zTitle, zProvider, zModel);
-  if( sidCurrent>0 && db_table_exists("repository","agentchat") ){
-    int first = 1;
-    if( db_table_exists("repository","ai_chat_eval") ){
-      db_prepare(&q,
-        "SELECT c.acid, c.role, c.kind, c.provider, c.model, c.meta, c.msg,"
-        "       coalesce(e.user_feedback,'')"
-        "  FROM agentchat AS c"
-        "  LEFT JOIN ai_chat_eval AS e ON e.sid=c.sid AND e.acid=c.acid"
-        " WHERE c.sid=%d"
-        " ORDER BY c.acid ASC",
-        sidCurrent
-      );
-    }else{
-      db_prepare(&q,
-        "SELECT acid, role, kind, provider, model, meta, msg, ''"
-        " FROM agentchat WHERE sid=%d"
-        " ORDER BY acid ASC",
-        sidCurrent
-      );
-    }
-    while( db_step(&q)==SQLITE_ROW ){
-      CX("%s{\"acid\":%d,\"role\":%!j,\"kind\":%!j,\"provider\":%!j,"
-         "\"model\":%!j,\"meta\":%!j,\"msg\":%!j,\"feedback\":%!j}",
-         first ? "" : ",",
-         db_column_int(&q, 0),
-         db_column_text(&q, 1),
-         db_column_text(&q, 2),
-         db_column_text(&q, 3),
-         db_column_text(&q, 4),
-         db_column_text(&q, 5),
-         db_column_text(&q, 6),
-         db_column_text(&q, 7));
-      first = 0;
-    }
-    db_finalize(&q);
-  }
-  CX("]}\n");
-}
-
-/*
-** Emit a JSON object describing ordered chat events for sidCurrent. If
-** afterAcid is greater than zero, only events with acid>afterAcid are
-** returned.
-*/
-static void agent_emit_events_json(int sidCurrent, int afterAcid){
-  Stmt q;
-  int first = 1;
-  CX("{\"sid\":%d,\"after\":%d,\"events\":[", sidCurrent, afterAcid);
-  if( sidCurrent>0 && db_table_exists("repository","agentchat") ){
-    if( db_table_exists("repository","ai_chat_eval") ){
-      db_prepare(&q,
-        "SELECT c.acid, c.role, c.kind, c.provider, c.model, c.meta, c.msg,"
-        "       coalesce(e.user_feedback,'')"
-        "  FROM agentchat AS c"
-        "  LEFT JOIN ai_chat_eval AS e ON e.sid=c.sid AND e.acid=c.acid"
-        " WHERE c.sid=%d AND c.acid>%d"
-        " ORDER BY c.acid ASC",
-        sidCurrent, afterAcid
-      );
-    }else{
-      db_prepare(&q,
-        "SELECT acid, role, kind, provider, model, meta, msg, ''"
-        " FROM agentchat WHERE sid=%d AND acid>%d"
-        " ORDER BY acid ASC",
-        sidCurrent, afterAcid
-      );
-    }
-    while( db_step(&q)==SQLITE_ROW ){
-      CX("%s{\"acid\":%d,\"role\":%!j,\"kind\":%!j,\"provider\":%!j,"
-         "\"model\":%!j,\"meta\":%!j,\"msg\":%!j,\"feedback\":%!j}",
-         first ? "" : ",",
-         db_column_int(&q, 0),
-         db_column_text(&q, 1),
-         db_column_text(&q, 2),
-         db_column_text(&q, 3),
-         db_column_text(&q, 4),
-         db_column_text(&q, 5),
-         db_column_text(&q, 6),
-         db_column_text(&q, 7));
-      first = 0;
-    }
-    db_finalize(&q);
-  }
-  CX("]}\n");
-}
+/* History and events JSON emitters live in agent_store.c. */
 
 /*
 ** Emit a JSON summary of the data pool by processing tier, including a small
 ** recent-note sample for each tier and duplicate/merge totals.
 */
-static void agent_emit_pool_json(void){
+void agent_emit_pool_json(void){
   int tier;
   int dupCount = db_table_exists("repository","ai_note")
     ? db_int(0, "SELECT count(*) FROM ai_note WHERE coalesce(duplicate_of,0)!=0")
@@ -3111,7 +2485,7 @@ static void agent_emit_pool_json(void){
 /*
 ** Emit JSON details for a single retrieval history row and its retrieved notes.
 */
-static void agent_emit_retrieval_json(int qid){
+void agent_emit_retrieval_json(int qid){
   Stmt q;
   int first = 1;
   const char *zQuery = 0;
@@ -3178,7 +2552,7 @@ static void agent_emit_retrieval_json(int qid){
 /*
 ** Return the most recent non-empty model recorded for sid, or zDefault.
 */
-static const char *agent_chat_session_model(int sid, const char *zDefault){
+const char *agent_chat_session_model(int sid, const char *zDefault){
   const char *zFromSession;
   if( sid<=0 ) return zDefault;
   if( db_table_exists("repository","agentchat_session") ){
@@ -3201,7 +2575,7 @@ static const char *agent_chat_session_model(int sid, const char *zDefault){
 /*
 ** Return the most recent non-empty provider recorded for sid, or zDefault.
 */
-static const char *agent_chat_session_provider(int sid, const char *zDefault){
+const char *agent_chat_session_provider(int sid, const char *zDefault){
   const char *zFromSession;
   if( sid<=0 ) return zDefault;
   if( db_table_exists("repository","agentchat_session") ){
@@ -3684,7 +3058,7 @@ static const char *agent_prompt_fragment(const char *zKey, const char *zDefault)
   return zDefault;
 }
 
-static int agent_assemble_context(
+int agent_assemble_context(
   Blob *pOut,
   const char *zModel,
   const char *zQuery,
@@ -3760,112 +3134,6 @@ static int agent_assemble_context(
     blob_reset(pOut);
   }
   return nAdded;
-}
-
-/*
-** Invoke the configured agent backend and store its reply in pReply.
-**
-** Returns 0 on success and non-zero on error.
-*/
-static void agent_strip_ansi(Blob *pText);
-/*
-** Chunk handler for streaming output.
-*/
-typedef void (*agent_chunk_handler)(const char *zChunk, int nChunk, void *pApp);
-
-/*
-** SSE chunk handler: emits text as a "data:" SSE event.
-*/
-static void agent_sse_handler(const char *zChunk, int nChunk, void *pApp){
-  if( nChunk<=0 ) return;
-  if( zChunk && nChunk>0 ){
-    Blob tmp = BLOB_INITIALIZER;
-    blob_append(&tmp, zChunk, nChunk);
-    agent_strip_ansi(&tmp);
-    if( blob_size(&tmp)>0 ){
-      CX("data: %!j\n\n", blob_str(&tmp));
-      fflush(stdout);
-    }
-    blob_reset(&tmp);
-  }
-}
-
-static int agent_run_backend_core(
-  const char *zProvider,
-  const char *zModel,
-  const char *zPrompt,
-  Blob *pReply,
-  Blob *pErr,
-  agent_chunk_handler xChunk,
-  void *pApp
-){
-  Blob cmd = BLOB_INITIALIZER;
-  Blob envCmd = BLOB_INITIALIZER;
-  Blob err = BLOB_INITIALIZER;
-  Blob *pErrUse = pErr ? pErr : &err;
-  FILE *in;
-  FILE *out = 0;
-  int fdIn = -1;
-  int childPid = 0;
-  int rc;
-  const char *zCmdTmpl = agent_command_template();
-
-  if( pReply ) blob_zero(pReply);
-  blob_zero(pErrUse);
-  if( agent_validate_provider_model(zProvider, zModel, pErrUse) ){
-    if( pErr==0 ) blob_reset(&err);
-    return 1;
-  }
-  agent_expand_command(&cmd, zCmdTmpl, zModel);
-  agent_prepare_command(&envCmd, "chat", zProvider, zModel, &cmd);
-  rc = popen2(blob_str(&envCmd), &fdIn, &out, &childPid, 0);
-  if( rc!=0 || fdIn<0 || out==0 ){
-    blob_appendf(pErrUse, "unable to run configured agent command");
-    blob_reset(&cmd);
-    blob_reset(&envCmd);
-    if( pErr==0 ) blob_reset(&err);
-    return 1;
-  }
-  fprintf(out, "%s", zPrompt);
-  fclose(out);
-  out = 0;
-  in = fdopen(fdIn, "rb");
-  if( in==0 ){
-    pclose2(fdIn, out, childPid);
-    blob_appendf(pErrUse, "unable to read output from configured agent command");
-    blob_reset(&cmd);
-    blob_reset(&envCmd);
-    if( pErr==0 ) blob_reset(&err);
-    return 1;
-  }
-  if( xChunk ){
-    char zBuf[1024];
-    int n;
-    while( (n = fread(zBuf, 1, sizeof(zBuf)-1, in))>0 ){
-      zBuf[n] = 0;
-      xChunk(zBuf, n, pApp);
-      if( pReply ) blob_append(pReply, zBuf, n);
-    }
-  }else{
-    blob_read_from_channel(pReply, in, -1);
-  }
-  pclose2(fdIn, out, childPid);
-  if( pReply ){
-    agent_strip_ansi(pReply);
-    agent_strip_prefix_noise(pReply);
-    blob_trim(pReply);
-    if( blob_size(pReply)==0 ){
-      blob_appendf(pErrUse, "agent backend returned an empty reply");
-      blob_reset(&cmd);
-      blob_reset(&envCmd);
-      if( pErr==0 ) blob_reset(&err);
-      return 1;
-    }
-  }
-  blob_reset(&cmd);
-  blob_reset(&envCmd);
-  if( pErr==0 ) blob_reset(&err);
-  return 0;
 }
 
 static int agent_run_backend(
@@ -4055,67 +3323,6 @@ static void agent_verify_cmd(void){
   fossil_free(zEmbedProvider);
   fossil_free(zEmbedModel);
   fossil_free(zEmbedCmd);
-}
-
-/*
-** Remove ANSI/VT100 escape sequences from CLI output so the web UI gets
-** readable text instead of terminal control codes.
-*/
-static void agent_strip_ansi(Blob *pText){
-  char *z = blob_buffer(pText);
-  int n = blob_size(pText);
-  int i;
-  int j = 0;
-
-  for(i=0; i<n; i++){
-    unsigned char c = (unsigned char)z[i];
-    if( c==0x1b && i+1<n ){
-      unsigned char c1 = (unsigned char)z[i+1];
-      if( c1=='[' ){
-        i += 2;
-        while( i<n ){
-          c = (unsigned char)z[i];
-          if( c>=0x40 && c<=0x7e ) break;
-          i++;
-        }
-        continue;
-      }else if( c1==']' ){
-        i += 2;
-        while( i<n ){
-          c = (unsigned char)z[i];
-          if( c==0x07 ) break;
-          if( c==0x1b && i+1<n && z[i+1]=='\\' ){
-            i++;
-            break;
-          }
-          i++;
-        }
-        continue;
-      }
-    }
-    z[j++] = z[i];
-  }
-  blob_resize(pText, j);
-}
-
-/*
-** Drop any leading spinner glyphs or other console noise which may remain
-** after ANSI escapes are removed.
-*/
-static void agent_strip_prefix_noise(Blob *pText){
-  char *z = blob_buffer(pText);
-  int n = blob_size(pText);
-  int i = 0;
-
-  while( i<n ){
-    unsigned char c = (unsigned char)z[i];
-    if( c>0x20 && c<0x7f ) break;
-    i++;
-  }
-  if( i>0 && i<n ){
-    memmove(z, z+i, n-i);
-    blob_resize(pText, n-i);
-  }
 }
 
 /*
@@ -5298,1046 +4505,9 @@ void agent_cmd(void){
   }
 }
 
-/*
-** WEBPAGE: agentui
-**
-** Knowledge console for interactive orchestration and retrieval tracing.
-*/
-void agentui_page(void){
-  int sidCurrent;
-  int sidRequested;
-  const char *zUser;
-  char *zProvider;
-  char *zModel;
-  char *zEmbedProvider;
-  char *zEmbedCmd;
-  char *zEmbedModel;
-  char *zConfigSource;
-  char *zCmd;
-  int chatProviderLocked;
+/* Agent web handlers live in agent_web.c. */
 
-  login_check_credentials();
-  if( !g.perm.Read ){
-    login_needed(g.anon.Read);
-    return;
-  }
-  zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
-  sidRequested = atoi(PD("sid","0"));
-  sidCurrent = agent_chat_session_exists(sidRequested) ? sidRequested : 0;
-
-  zProvider = mprintf("%s", agent_chat_session_provider(sidCurrent, agent_chat_provider()));
-  zModel = mprintf("%s", agent_chat_session_model(sidCurrent, agent_default_model()));
-  zCmd = mprintf("%s", agent_command_template());
-  zEmbedProvider = mprintf("%s", agent_embedding_provider());
-  zEmbedCmd = mprintf("%s", agent_embedding_template());
-  zEmbedModel = mprintf("%s", agent_embedding_model());
-  zConfigSource = agent_config_source();
-  chatProviderLocked = agent_chat_provider_locked();
-
-  style_set_current_feature("agent");
-  agent_console_submenu(sidCurrent);
-  style_header("AI Agent");
-  
-  /* Set up dynamic variables for TH1 */
-  Th_FossilInit(TH_INIT_DEFAULT);
-  Th_StoreInt("sid", sidCurrent);
-  Th_SetVar(g.interp, "user", 4, zUser, -1);
-  Th_SetVar(g.interp, "style_nonce", 11, style_nonce(), -1);
-  Th_SetVar(g.interp, "repo_url", 8, g.zTop, -1);
-  Th_SetVar(g.interp, "chat_provider", 13, zProvider, -1);
-  Th_SetVar(g.interp, "chat_model", 10, zModel ? zModel : "", -1);
-  Th_SetVar(g.interp, "embed_provider", 14, zEmbedProvider, -1);
-  Th_SetVar(g.interp, "embed_model", 11, zEmbedModel ? zEmbedModel : "", -1);
-  Th_SetVar(g.interp, "config_source", 13, zConfigSource, -1);
-  Th_SetVar(g.interp, "capabilities", 28, "chat-stream,context,roles", -1);
-  Th_SetVar(g.interp, "provider_disabled_attr", 22, chatProviderLocked ? "disabled" : "", -1);
-  
-  /* Render history into a variable */
-  {
-    Blob history = BLOB_INITIALIZER;
-    agent_chat_render_history_to_blob(sidCurrent, &history);
-    Th_SetVar(g.interp, "history_html", 12, blob_str(&history), blob_size(&history));
-    blob_reset(&history);
-  }
-
-  /* Render sessions into a variable */
-  {
-    Blob sessions = BLOB_INITIALIZER;
-    agent_chat_render_sessions_to_blob(zUser, sidCurrent, &sessions);
-    Th_SetVar(g.interp, "sessions_html", 13, blob_str(&sessions), blob_size(&sessions));
-    blob_reset(&sessions);
-  }
-
-  /* Load and render the template and resources */
-  {
-    Blob template = BLOB_INITIALIZER;
-    Blob css = BLOB_INITIALIZER;
-    Blob js = BLOB_INITIALIZER;
-    char *zPath;
-    
-    zPath = mprintf("%scfg/agentui.css", g.zLocalRoot);
-    if( blob_read_from_file(&css, zPath, ExtFILE)>=0 ){
-      Th_SetVar(g.interp, "ui_css", 6, blob_str(&css), blob_size(&css));
-    }
-    fossil_free(zPath);
-
-    zPath = mprintf("%scfg/agentui.js", g.zLocalRoot);
-    if( blob_read_from_file(&js, zPath, ExtFILE)>=0 ){
-      Th_SetVar(g.interp, "ui_js", 5, blob_str(&js), blob_size(&js));
-    }
-    fossil_free(zPath);
-
-    zPath = mprintf("%scfg/agentui.th1", g.zLocalRoot);
-    if( blob_read_from_file(&template, zPath, ExtFILE)>=0 ){
-      Th_Render(blob_str(&template));
-    }else{
-      CX("<p class=\"error\">Error: cfg/agentui.th1 not found at %h</p>", zPath);
-    }
-    fossil_free(zPath);
-    blob_reset(&template);
-    blob_reset(&css);
-    blob_reset(&js);
-  }
-
-  fossil_free(zModel);
-  fossil_free(zCmd);
-  fossil_free(zEmbedModel);
-  fossil_free(zEmbedCmd);
-  fossil_free(zProvider);
-  fossil_free(zEmbedProvider);
-  fossil_free(zConfigSource);
-  style_finish_page();
-}
-
-/*
-** WEBPAGE: agent-config
-**
-** JSON description of the effective chat and embedding configuration used by
-** /agentui. Optional query parameter: sid.
-*/
-void agent_config_page(void){
-  int sidRequested;
-  int sidCurrent;
-
-  login_check_credentials();
-  if( !g.perm.Read ){
-    cgi_set_content_type("application/json");
-    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
-    return;
-  }
-  sidRequested = atoi(PD("sid","0"));
-  sidCurrent = agent_chat_session_exists(sidRequested) ? sidRequested : 0;
-  cgi_set_content_type("application/json");
-  agent_emit_config_json(sidCurrent);
-}
-
-/*
-** WEBPAGE: agent-history
-**
-** JSON description of a stored chat session and its ordered messages.
-** Query parameter: sid.
-*/
-void agent_history_page(void){
-  int sidRequested;
-  int sidCurrent;
-
-  login_check_credentials();
-  if( !g.perm.Read ){
-    cgi_set_content_type("application/json");
-    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
-    return;
-  }
-  sidRequested = atoi(PD("sid","0"));
-  sidCurrent = agent_chat_session_exists(sidRequested) ? sidRequested : 0;
-  cgi_set_content_type("application/json");
-  agent_emit_history_json(sidCurrent);
-}
-
-/*
-** WEBPAGE: agent-events
-**
-** JSON description of ordered stored chat events for a session.
-** Query parameters:
-**
-**    sid=SID      Session id
-**    after=ACID   Optional lower bound for incremental polling
-*/
-void agent_events_page(void){
-  int sidRequested;
-  int sidCurrent;
-  int afterAcid;
-
-  login_check_credentials();
-  if( !g.perm.Read ){
-    cgi_set_content_type("application/json");
-    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
-    return;
-  }
-  sidRequested = atoi(PD("sid","0"));
-  sidCurrent = agent_chat_session_exists(sidRequested) ? sidRequested : 0;
-  afterAcid = atoi(PD("after","0"));
-  if( afterAcid<0 ) afterAcid = 0;
-  cgi_set_content_type("application/json");
-  agent_emit_events_json(sidCurrent, afterAcid);
-}
-
-/*
-** WEBPAGE: agent-pool
-**
-** JSON summary of the current note pool grouped by processing tier.
-*/
-void agent_pool_page(void){
-  login_check_credentials();
-  if( !g.perm.Read ){
-    cgi_set_content_type("application/json");
-    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
-    return;
-  }
-  cgi_set_content_type("application/json");
-  agent_emit_pool_json();
-}
-
-/*
-** WEBPAGE: agent-retrieval
-**
-** JSON description of one retrieval run and its retrieved notes.
-**
-** Query parameters:
-**
-**    qid=QID
-*/
-void agent_retrieval_page(void){
-  int qid;
-  login_check_credentials();
-  if( !g.perm.Read ){
-    cgi_set_content_type("application/json");
-    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
-    return;
-  }
-  qid = atoi(PD("qid","0"));
-  cgi_set_content_type("application/json");
-  agent_emit_retrieval_json(qid);
-}
-
-/*
-** WEBPAGE: agent-feedback
-**
-** JSON endpoint to record user feedback for the latest terminal agent reply
-** in a session, or for a specific acid if provided.
-**
-** Parameters:
-**
-**    sid=SID
-**    acid=ACID      Optional target reply/error row
-**    feedback=TEXT  One of: useful, not-useful
-*/
-void agent_feedback_page(void){
-  int sid;
-  int acid;
-  const char *zFeedback;
-
-  login_check_credentials();
-  cgi_set_content_type("application/json");
-  if( !g.perm.Read ){
-    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
-    return;
-  }
-  sid = atoi(PD("sid","0"));
-  if( !agent_chat_session_exists(sid) ){
-    CX("{\"error\":%!j}\n", "missing or unknown sid parameter");
-    return;
-  }
-  acid = atoi(PD("acid","0"));
-  if( acid<=0 ) acid = agent_chat_latest_terminal_acid(sid);
-  if( !agent_chat_is_terminal_acid(sid, acid) ){
-    CX("{\"error\":%!j}\n", "missing or invalid terminal reply target");
-    return;
-  }
-  if( !db_table_exists("repository","ai_chat_eval")
-   || !db_exists("SELECT 1 FROM ai_chat_eval WHERE sid=%d AND acid=%d", sid, acid) ){
-    CX("{\"error\":%!j}\n", "no evaluation row found for reply target");
-    return;
-  }
-  zFeedback = PD("feedback","");
-  if( fossil_strcmp(zFeedback, "useful")!=0
-   && fossil_strcmp(zFeedback, "not-useful")!=0 ){
-    CX("{\"error\":%!j}\n", "feedback must be 'useful' or 'not-useful'");
-    return;
-  }
-  db_begin_write();
-  db_unprotect(PROTECT_READONLY);
-  ai_chat_eval_feedback(sid, acid, zFeedback);
-  db_end_transaction(0);
-  CX("{\"sid\":%d,\"acid\":%d,\"feedback\":%!j}\n", sid, acid, zFeedback);
-}
-
-/*
-** Builtin TH1 orchestration script for the AI agent.
-*/
-static const char zAgentOrchestrateBuiltin[] =
-"set thinking_tag [agent_config thinking_tag]\n"
-"if {[string compare $thinking_tag \"\"] == 0} {set thinking_tag \"thought\"}\n"
-"\n"
-"set system_prompt \"You are the Fossil AI Agent. Provide concise, direct answers. Do not include chain-of-thought. If you need to reason, put it inside <$thinking_tag>...</$thinking_tag> and do not include it in the final answer.\"\n"
-"set full_prompt \"$system_prompt\\n\\nUser request:\\n$msg\"\n"
-"set context \"\"\n"
-"set retrieval_qid 0\n"
-"\n"
-"if {$context_enabled} {\n"
-"  set event_meta \"{\\\"stage\\\":\\\"context\\\",\\\"status\\\":\\\"running\\\"}\"\n"
-"  set event_msg \"Assembling repository context...\"\n"
-"  agent_save_event $sid $user \"progress\" $provider $model $event_meta $event_msg\n"
-"  set context [agent_context $msg $model]\n"
-"  set retrieval_qid [agent_last_retrieval_qid]\n"
-"  if {[string compare $context \"\"] != 0} {\n"
-"    if {$retrieval_qid > 0} {\n"
-"      set event_meta \"{\\\"stage\\\":\\\"context\\\",\\\"hidden\\\":true,\\\"retrieval_qid\\\":$retrieval_qid}\"\n"
-"    } else {\n"
-"      set event_meta \"{\\\"stage\\\":\\\"context\\\",\\\"hidden\\\":true}\"\n"
-"    }\n"
-"    agent_save_event $sid $user \"context\" $provider $model $event_meta $context\n"
-"    set full_prompt \"$system_prompt\\n\\nContext:\\n$context\\n\\nUser request:\\n$msg\"\n"
-"  }\n"
-"  set event_meta \"{\\\"stage\\\":\\\"context\\\",\\\"status\\\":\\\"ok\\\"}\"\n"
-"  set event_msg \"Repository context assembled\"\n"
-"  agent_save_event $sid $user \"progress\" $provider $model $event_meta $event_msg\n"
-"}\n"
-"\n"
-"set event_meta \"{\\\"tool\\\":\\\"chat-backend\\\",\\\"provider\\\":\\\"$provider\\\"}\"\n"
-"set event_msg \"Invoking $provider backend\"\n"
-"agent_save_event $sid $user \"tool\" $provider $model $event_meta $event_msg\n"
-"set event_meta \"{\\\"stage\\\":\\\"backend\\\",\\\"status\\\":\\\"running\\\"}\"\n"
-"set event_msg \"Waiting for backend reply...\"\n"
-"agent_save_event $sid $user \"progress\" $provider $model $event_meta $event_msg\n"
-"\n"
-"if {[string compare $context \"\"] != 0} {\n"
-"  if {$retrieval_qid > 0} {\n"
-"    set prompt_meta \"{\\\"context\\\":true,\\\"retrieval_qid\\\":$retrieval_qid}\"\n"
-"  } else {\n"
-"    set prompt_meta \"{\\\"context\\\":true}\"\n"
-"  }\n"
-"} else {\n"
-"  set prompt_meta \"{\\\"context\\\":false}\"\n"
-"}\n"
-"agent_save $sid $user \"user\" \"prompt\" $provider $model $prompt_meta $msg\n"
-"\n"
-"if {[catch {agent_run $provider $model $full_prompt} reply]} {\n"
-"  set event_meta \"{\\\"stage\\\":\\\"backend\\\",\\\"status\\\":\\\"error\\\"}\"\n"
-"  set event_msg \"Backend reply failed\"\n"
-"  agent_save_event $sid $user \"progress\" $provider $model $event_meta $event_msg\n"
-"  set acid [agent_save $sid $user \"agent\" \"error\" $provider $model \"\" $reply]\n"
-"  agent_eval $sid $acid $provider $model \"error\" $reply\n"
-"  return \"{\\\"error\\\":[agent_json_quote $reply]}\"\n"
-"}\n"
-"\n"
-"set start_tag \"<$thinking_tag>\"\n"
-"set end_tag \"</$thinking_tag>\"\n"
-"set s [string first $start_tag $reply]\n"
-"set e [string first $end_tag $reply]\n"
-"set thinking \"\"\n"
-"set clean_reply $reply\n"
-"if {$s != -1} {\n"
-"  if {$e != -1} {\n"
-"    set s_end [expr {$s + [string length $start_tag]}]\n"
-"    set thinking [string range $reply $s_end [expr {$e - 1}]]\n"
-"    if {$s == 0} {\n"
-"      set pre \"\"\n"
-"    } else {\n"
-"      set pre [string range $reply 0 [expr {$s - 1}]]\n"
-"    }\n"
-"    set post [string range $reply [expr {$e + [string length $end_tag]}] [expr {[string length $reply] - 1}]]\n"
-"    if {[string length $pre] == 0} {\n"
-"      set clean_reply $post\n"
-"    } elseif {[string length $post] == 0} {\n"
-"      set clean_reply $pre\n"
-"    } else {\n"
-"      set clean_reply \"$pre $post\"\n"
-"    }\n"
-"  }\n"
-"}\n"
-"\n"
-"set event_meta \"{\\\"stage\\\":\\\"backend\\\",\\\"status\\\":\\\"ok\\\"}\"\n"
-"set event_msg \"Backend reply received\"\n"
-"agent_save_event $sid $user \"progress\" $provider $model $event_meta $event_msg\n"
-"\n"
-"set meta \"\"\n"
-"set acid [agent_save $sid $user \"agent\" \"reply\" $provider $model $meta $clean_reply]\n"
-"if {[string compare $thinking \"\"] != 0} {\n"
-"  agent_save_reasoning $sid $acid $provider $model $thinking\n"
-"}\n"
-"agent_eval $sid $acid $provider $model \"reply\" $reply\n"
-"return \"{\\\"sid\\\":$sid,\\\"provider\\\":[agent_json_quote $provider],\\\"model\\\":[agent_json_quote $model],\\\"reply\\\":[agent_json_quote $clean_reply]}\"\n"
-;
-
-/*
-** WEBPAGE: agent-chat
-**
-** JSON endpoint for the configured agent chat UI. Refactored to use TH1 orchestration.
-*/
-void agent_chat_page(void){
-  Blob err = BLOB_INITIALIZER;
-  const char *zMsg;
-  const char *zModel;
-  const char *zProvider;
-  const char *zUser;
-  int sid;
-
-  login_check_credentials();
-  if( !g.perm.Read ){
-    cgi_set_content_type("application/json");
-    CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
-    return;
-  }
-  zMsg = PD("msg", "");
-  zProvider = PD("provider", agent_chat_provider());
-  zModel = PD("model", agent_default_model());
-  zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
-  sid = atoi(PD("sid","0"));
-  cgi_set_content_type("application/json");
-
-  if( zMsg[0]==0 || zModel[0]==0 ){
-    CX("{\"error\":%!j}\n", "missing msg or model parameter");
-    return;
-  }
-  if( agent_validate_provider_model(zProvider, zModel, &err) ){
-    CX("{\"error\":%!j}\n", blob_str(&err));
-    blob_reset(&err);
-    return;
-  }
-
-  db_begin_write();
-  db_unprotect(PROTECT_READONLY);
-  if( sid<=0 || !agent_chat_session_exists(sid) ){
-    sid = agent_chat_session_create(zUser, zProvider, zModel);
-  }
-
-  /* Execute TH1 orchestration */
-  Th_FossilInit(TH_INIT_DEFAULT);
-  Th_StoreInt("sid", sid);
-  Th_SetVar(g.interp, "msg",       3, zMsg,      (int)strlen(zMsg));
-  Th_SetVar(g.interp, "provider",  8, zProvider, (int)strlen(zProvider));
-  Th_SetVar(g.interp, "model",     5, zModel,    (int)strlen(zModel));
-  Th_SetVar(g.interp, "user",      4, zUser,     (int)strlen(zUser));
-  Th_StoreInt("context_enabled", PB("context"));
-
-  {
-    int thRc = Th_Eval(g.interp, 0, zAgentOrchestrateBuiltin, -1);
-    int nResult = 0;
-    const char *zResult = Th_GetResult(g.interp, &nResult);
-    if( thRc==TH_ERROR ){
-      CX("{\"error\":%!j}\n", zResult ? zResult : "TH1 eval failed");
-    }else{
-      /* TH_OK or TH_RETURN are both success; script result is the JSON */
-      CX("%.*s\n", nResult, zResult ? zResult : "{}");
-    }
-  }
-  
-  db_end_transaction(0);
-  blob_reset(&err);
-}
-
-/*
-** WEBPAGE: agent-chat-stream
-**
-** SSE (Server-Sent Events) endpoint for streaming agent chat.
-*/
-void agent_chat_stream_page(void){
-  const char *zMsg;
-  const char *zModel;
-  const char *zProvider;
-  const char *zUser;
-  int sid;
-
-  login_check_credentials();
-  if( !g.perm.Read ){
-    cgi_set_content_type("text/plain");
-    CX("error: missing read permissions or not logged in\n");
-    return;
-  }
-  zMsg = PD("msg", "");
-  zProvider = PD("provider", agent_chat_provider());
-  zModel = PD("model", agent_default_model());
-  zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
-  sid = atoi(PD("sid","0"));
-  const char *zRoleParam = PD("role", "");
-  
-  /* Disable Fossil's standard output buffering for SSE */
-  cgi_set_content_type("text/event-stream");
-  cgi_printf("Cache-Control: no-cache\nConnection: keep-alive\n\n");
-  fflush(stdout);
-
-  if( zMsg[0]==0 || zModel[0]==0 ){
-    if( fossil_strcmp(zRoleParam, "reviewer")!=0 ){
-      CX("data: {\"error\":\"missing msg or model parameter\"}\n\n");
-      return;
-    }
-  }
-
-  db_begin_write();
-  db_unprotect(PROTECT_READONLY);
-  if( sid<=0 || !agent_chat_session_exists(sid) ){
-    sid = agent_chat_session_create(zUser, zProvider, zModel);
-  }
-
-  Th_FossilInit(TH_INIT_DEFAULT);
-  Th_StoreInt("sid", sid);
-  Th_SetVar(g.interp, "msg",       3, zMsg,      (int)strlen(zMsg));
-  Th_SetVar(g.interp, "provider",  8, zProvider, (int)strlen(zProvider));
-  Th_SetVar(g.interp, "model",     5, zModel,    (int)strlen(zModel));
-  Th_SetVar(g.interp, "user",      4, zUser,     (int)strlen(zUser));
-  Th_StoreInt("context_enabled", PB("context"));
-
-  /* Direct TH1 run with streaming */
-  {
-    Blob script = BLOB_INITIALIZER;
-    char *zPath;
-    if( zRoleParam[0] ){
-      zPath = mprintf("%scfg/roles/%s.th1", g.zLocalRoot, zRoleParam);
-    }else{
-      zPath = mprintf("%scfg/roles/default.th1", g.zLocalRoot);
-    }
-    if( blob_read_from_file(&script, zPath, ExtFILE)>=0 ){
-      int thRc = Th_Eval(g.interp, 0, blob_str(&script), -1);
-      if( thRc==TH_ERROR ){
-        int nResult = 0;
-        const char *zResult = Th_GetResult(g.interp, &nResult);
-        CX("data: {\"error\":%!j}\n\n", zResult ? zResult : "TH1 eval failed");
-      }
-    }else{
-      CX("data: {\"error\":\"Role script not found: %s\"}\n\n", zRoleParam[0] ? zRoleParam : "default");
-    }
-    fossil_free(zPath);
-    blob_reset(&script);
-  }
-  db_end_transaction(0);
-}
-
-/*
-** TH1 command: agent_json_extract JSON FIELD
-**
-** CRUDE: Extract a simple string value from a 'flat' JSON object for the prototype.
-*/
-static int agent_json_extract_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  const char *zJson = argv[1];
-  const char *zField = argv[2];
-  char *zKey;
-  char *zStart, *zEnd;
-  if( argc!=3 ) return Th_WrongNumArgs(interp, "agent_json_extract JSON FIELD");
-  zKey = mprintf("\"%s\":\"", zField);
-  zStart = strstr(zJson, zKey);
-  if( zStart ){
-    zStart += strlen(zKey);
-    zEnd = strchr(zStart, '\"');
-    if( zEnd ){
-      Th_SetResult(interp, zStart, (int)(zEnd - zStart));
-    }
-  }
-  fossil_free(zKey);
-  return TH_OK;
-}
-
-/*
-** TH1 command: agent_json_quote STRING
-**
-** Returns a JSON-quoted version of the string.
-*/
-static int agent_json_quote_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  char *zEsc;
-  if( argc!=2 ) return Th_WrongNumArgs(interp, "agent_json_quote STRING");
-  zEsc = mprintf("%!j", argv[1]);
-  Th_SetResult(interp, zEsc, -1);
-  fossil_free(zEsc);
-  return TH_OK;
-}
-
-/*
-** TH1 command: agent_context MESSAGE ?MODEL?
-*/
-static int agent_context_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  Blob out = BLOB_INITIALIZER;
-  int qid = 0;
-  if( argc<2 || argc>3 ){
-    return Th_WrongNumArgs(interp, "agent_context MESSAGE ?MODEL?");
-  }
-  agent_assemble_context(&out, argc==3 ? argv[2] : 0, argv[1], &qid);
-  Th_SetResult(interp, blob_str(&out), blob_size(&out));
-  g.ai_last_retrieval_qid = qid;
-  blob_reset(&out);
-  return TH_OK;
-}
-
-/*
-** TH1 command: agent_last_retrieval_qid
-*/
-static int agent_last_retrieval_qid_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  Th_SetResultInt(interp, g.ai_last_retrieval_qid);
-  return TH_OK;
-}
-
-/*
-** TH1 command: agent_run PROVIDER MODEL MSG
-*/
-static int agent_run_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  Blob out = BLOB_INITIALIZER;
-  int rc;
-  if( argc!=4 ){
-    return Th_WrongNumArgs(interp, "agent_run PROVIDER MODEL MSG");
-  }
-  rc = agent_run_backend_core(argv[1], argv[2], argv[3], &out, 0, 0, 0);
-  Th_SetResult(interp, blob_str(&out), blob_size(&out));
-  blob_reset(&out);
-  return rc==0 ? TH_OK : TH_ERROR;
-}
-
-/*
-** TH1 command: agent_run_stream PROVIDER MODEL MSG
-*/
-static int agent_run_stream_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  Blob out = BLOB_INITIALIZER;
-  Blob err = BLOB_INITIALIZER;
-  int rc;
-  if( argc!=4 ){
-    return Th_WrongNumArgs(interp, "agent_run_stream PROVIDER MODEL MSG");
-  }
-  rc = agent_run_backend_core(
-    argv[1], argv[2], argv[3], &out, &err, agent_sse_handler, 0
-  );
-  if( rc!=0 ){
-    Th_SetResult(interp, blob_str(&err), blob_size(&err));
-    rc = TH_ERROR;
-  }else{
-    Th_SetResult(interp, blob_str(&out), blob_size(&out));
-  }
-  blob_reset(&out);
-  blob_reset(&err);
-  return rc;
-}
-
-/*
-** TH1 command: agent_mcp_call TOOL_NAME ?ARGS...?
-*/
-static int agent_mcp_call_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  Blob out = BLOB_INITIALIZER;
-  if( argc<2 ){
-    return Th_WrongNumArgs(interp, "agent_mcp_call TOOL_NAME ?ARGS...?");
-  }
-  
-  const char *zTool = argv[1];
-  if( fossil_strcmp(zTool, "list_files")==0 ){
-    int vid = db_lget_int("checkout", 0);
-    Stmt q;
-    int first = 1;
-    blob_appendf(&out, "Files:\n");
-    db_prepare(&q, "SELECT pathname FROM vfile WHERE vid=%d AND deleted=0 ORDER BY pathname LIMIT 50", vid);
-    while( db_step(&q)==SQLITE_ROW ){
-      blob_appendf(&out, "%s  %s", first ? "" : "\n", db_column_text(&q, 0));
-      first = 0;
-    }
-    db_finalize(&q);
-  }else if( fossil_strcmp(zTool, "read_file")==0 ){
-    if( argc<3 ) return Th_WrongNumArgs(interp, "agent_mcp_call read_file PATH");
-    if( blob_read_from_file(&out, argv[2], ExtFILE)<0 ){
-       blob_appendf(&out, "Error: could not read file %s", argv[2]);
-    }
-  }else if( fossil_strcmp(zTool, "edit_file")==0 ){
-    /* edit_file PATH EXPL REPLACE WITH CONFIRMED */
-    if( argc<6 ) return Th_WrongNumArgs(interp, "agent_mcp_call edit_file PATH EXPL REPLACE WITH CONFIRMED");
-    const char *zPath = argv[2];
-    const char *zReplace = argv[4];
-    const char *zWith = argv[5];
-    int bConfirmed = atoi(argv[6]);
-
-    if( bConfirmed ){
-       Blob content = BLOB_INITIALIZER;
-       if( blob_read_from_file(&content, zPath, ExtFILE)>=0 ){
-         char *zOld = (char*)blob_str(&content);
-         char *zPos = strstr(zOld, zReplace);
-         if( zPos ){
-           Blob next = BLOB_INITIALIZER;
-           blob_append(&next, zOld, (int)(zPos - zOld));
-           blob_append(&next, zWith, -1);
-           blob_append(&next, zPos + strlen(zReplace), -1);
-           blob_write_to_file(&next, zPath);
-           blob_appendf(&out, "Successfully applied the edit to %s.", zPath);
-           blob_reset(&next);
-         }else{
-           blob_appendf(&out, "Error: The target text to replace was not found in %s.", zPath);
-         }
-         blob_reset(&content);
-       }else{
-         blob_appendf(&out, "Error: Could not read file %s for editing.", zPath);
-       }
-    }else{
-      /* Propose phase */
-      blob_appendf(&out, "{\"type\":\"propose_edit\",\"path\":%!j,\"replace\":%!j,\"with\":%!j}", 
-                   zPath, zReplace, zWith);
-    }
-  }else{
-    blob_appendf(&out, "Error: Unknown tool %s", zTool);
-  }
-
-  Th_SetResult(interp, blob_str(&out), blob_size(&out));
-  blob_reset(&out);
-  return TH_OK;
-}
-
-/*
-** TH1 command: agent_save SID USER ROLE KIND PROVIDER MODEL META MSG
-**
-** Persists a chat record to the database. Returns the acid.
-*/
-static int agent_save_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  Blob msg = BLOB_INITIALIZER;
-  int sid, acid;
-  int i;
-  if( argc<9 ){
-    return Th_WrongNumArgs(interp, "agent_save SID USER ROLE KIND PROVIDER MODEL META MSG");
-  }
-  sid = atoi(argv[1]);
-  for(i=8; i<argc; i++){
-    if( i>8 ) blob_append(&msg, " ", 1);
-    blob_append(&msg, argv[i], argl[i]);
-  }
-  acid = agent_chat_save(sid, argv[2], argv[3], argv[4], argv[5], argv[6], argv[7], blob_str(&msg));
-  blob_reset(&msg);
-  Th_SetResultInt(interp, acid);
-  return TH_OK;
-}
-
-/*
-** TH1 command: agent_save_event SID USER KIND PROVIDER MODEL META MSG
-**
-** Persists a system event to the database.
-*/
-static int agent_save_event_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  Blob msg = BLOB_INITIALIZER;
-  int sid;
-  int i;
-  if( argc<8 ){
-    return Th_WrongNumArgs(interp, "agent_save_event SID USER KIND PROVIDER MODEL META MSG");
-  }
-  sid = atoi(argv[1]);
-  for(i=7; i<argc; i++){
-    if( i>7 ) blob_append(&msg, " ", 1);
-    blob_append(&msg, argv[i], argl[i]);
-  }
-  agent_chat_save_event(sid, argv[2], argv[3], argv[4], argv[5], argv[6], blob_str(&msg));
-  blob_reset(&msg);
-  Th_SetResultInt(interp, db_last_insert_rowid());
-  return TH_OK;
-}
-
-/*
-** TH1 command: agent_save_reasoning SID ACID PROVIDER MODEL MSG
-**
-** Persist model reasoning as a tier-0 note in the AI pool.
-*/
-static int agent_save_reasoning_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  int sid;
-  int acid;
-  const char *zProvider;
-  const char *zModel;
-  const char *zMsg;
-  Blob body = BLOB_INITIALIZER;
-  char *zTitle = 0;
-  char *zMeta = 0;
-  int nid = 0;
-
-  if( argc!=6 ){
-    return Th_WrongNumArgs(interp, "agent_save_reasoning SID ACID PROVIDER MODEL MSG");
-  }
-  if( !ai_is_enabled() ) return TH_OK;
-  sid = atoi(argv[1]);
-  acid = atoi(argv[2]);
-  zProvider = argv[3];
-  zModel = argv[4];
-  zMsg = argv[5];
-  if( zMsg==0 || zMsg[0]==0 ) return TH_OK;
-
-  ai_schema_ensure();
-  blob_init(&body, zMsg, -1);
-  zTitle = mprintf("Agent reasoning sid %d acid %d", sid, acid);
-  zMeta = mprintf("{\"source\":\"agentchat\",\"sid\":%d,\"acid\":%d,"
-                  "\"provider\":%!j,\"model\":%!j}",
-                  sid, acid, zProvider ? zProvider : "", zModel ? zModel : "");
-  nid = ai_note_create(
-    0, zTitle, &body, "reasoning", 0, "agentchat", "raw", zMeta,
-    0, 0, 0, 0, 0
-  );
-  fossil_free(zTitle);
-  fossil_free(zMeta);
-  blob_reset(&body);
-  Th_SetResultInt(interp, nid);
-  return TH_OK;
-}
-
-/*
-** TH1 command: agent_config KEY
-**
-** Returns a setting from cfg/ai-agent.json.
-*/
-static int agent_config_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  char *zVal;
-  if( argc!=2 ) return Th_WrongNumArgs(interp, "agent_config KEY");
-  zVal = agent_config_get(argv[1]);
-  if( zVal ){
-    Th_SetResult(interp, zVal, -1);
-    fossil_free(zVal);
-  }else{
-    Th_SetResult(interp, "", 0);
-  }
-  return TH_OK;
-}
-
-/*
-** TH1 command: agent_eval SID ACID PROVIDER MODEL KIND MSG
-**
-** Records an evaluation row for a message.
-*/
-static int agent_eval_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  if( argc!=7 ) return Th_WrongNumArgs(interp, "agent_eval SID ACID PROVIDER MODEL KIND MSG");
-  ai_chat_eval_record(atoi(argv[1]), atoi(argv[2]), argv[3], argv[4], argv[5], argv[6]);
-  return TH_OK;
-}
-
-/*
-** TH1 command: pool_list_pending TIER
-**
-** Returns a Tcl list of nids for items that need processing to reach TIER.
-** (e.g. tier 2 gets items currently at tier 1).
-*/
-static int pool_list_pending_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  int targetTier;
-  Stmt q;
-  char *zRes = 0;
-  int nRes = 0;
-  if( argc!=2 ) return Th_WrongNumArgs(interp, "pool_list_pending TIER");
-  targetTier = atoi(argv[1]);
-  if( targetTier<1 ) targetTier = 1;
-  db_prepare(&q, 
-    "SELECT nid FROM repository.ai_note WHERE tier=%d AND duplicate_of IS NULL AND process_level IS NOT NULL",
-    targetTier - 1
-  );
-  while( db_step(&q)==SQLITE_ROW ){
-    char zBuf[32];
-    sqlite3_snprintf(sizeof(zBuf), zBuf, "%d", db_column_int(&q, 0));
-    Th_ListAppend(interp, &zRes, &nRes, zBuf, -1);
-  }
-  db_finalize(&q);
-  Th_SetResult(interp, zRes ? zRes : "", nRes);
-  if( zRes ) fossil_free(zRes);
-  return TH_OK;
-}
-
-/*
-** TH1 command: pool_get NID
-**
-** Returns the text body of an ai_note.
-*/
-static int pool_get_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  int nid;
-  char *zBody;
-  if( argc!=2 ) return Th_WrongNumArgs(interp, "pool_get NID");
-  nid = atoi(argv[1]);
-  zBody = db_text(0, "SELECT body FROM repository.ai_note WHERE nid=%d", nid);
-  if( zBody ){
-    Th_SetResult(interp, zBody, -1);
-    fossil_free(zBody);
-  }else{
-    Th_SetResult(interp, "", 0);
-  }
-  return TH_OK;
-}
-
-/*
-** TH1 command: pool_put TIER BODY [METADATA]
-**
-** Creates a new AI note at TIER, returning the new NID.
-*/
-static int pool_put_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  int tier;
-  const char *zBody;
-  const char *zMeta = 0;
-  Blob body = BLOB_INITIALIZER;
-  int nid;
-  if( argc!=3 && argc!=4 ) return Th_WrongNumArgs(interp, "pool_put TIER BODY ?METADATA?");
-  tier = atoi(argv[1]);
-  zBody = argv[2];
-  if( argc==4 ) zMeta = argv[3];
-  blob_append(&body, zBody, argl[2]);
-  nid = ai_note_create(tier, 0, &body, "th1-pool", 0, 0, 0, zMeta, 0, 0, 0, 0, 0);
-  blob_reset(&body);
-  Th_SetResultInt(interp, nid);
-  return TH_OK;
-}
-
-/*
-** TH1 command: pool_link FROM_NID TO_NID LINK_TYPE
-**
-** Creates or bumps a relationship between notes.
-*/
-static int pool_link_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  if( argc!=4 ) return Th_WrongNumArgs(interp, "pool_link FROM_NID TO_NID LINK_TYPE");
-  ai_note_link_upsert(atoi(argv[1]), atoi(argv[2]), argv[3], 1.0);
-  return TH_OK;
-}
-
-/*
-** TH1 command: pool_related NID LIMIT
-**
-** Returns a Tcl list of NIDs related to the given note via the Knowledge Graph.
-*/
-static int pool_related_th1(
-  Th_Interp *interp,
-  void *ctx,
-  int argc,
-  const char **argv,
-  int *argl
-){
-  int nid, limit;
-  char *zRes;
-  if( argc!=2 && argc!=3 ) return Th_WrongNumArgs(interp, "pool_related NID ?LIMIT?");
-  nid = atoi(argv[1]);
-  limit = argc==3 ? atoi(argv[2]) : 5;
-  zRes = ai_note_related_nids(nid, limit);
-  if( zRes ){
-    Th_SetResult(interp, zRes, -1);
-    fossil_free(zRes);
-  }else{
-    Th_SetResult(interp, "", 0);
-  }
-  return TH_OK;
-}
-
-/*
-** Register all agent-related TH1 commands.
-*/
-void agent_register_th1(Th_Interp *interp){
-  static const struct {
-    const char *zName;
-    Th_CommandProc xProc;
-    void *pContext;
-  } aCmd[] = {
-    {"agent_context",    agent_context_th1, 0},
-    {"agent_last_retrieval_qid", agent_last_retrieval_qid_th1, 0},
-    {"agent_run",        agent_run_th1, 0},
-    {"agent_run_stream", agent_run_stream_th1, 0},
-    {"agent_save",       agent_save_th1, 0},
-    {"agent_save_event", agent_save_event_th1, 0},
-    {"agent_save_reasoning", agent_save_reasoning_th1, 0},
-    {"agent_config",     agent_config_th1, 0},
-    {"agent_eval",       agent_eval_th1, 0},
-    {"agent_mcp_call",   agent_mcp_call_th1, 0},
-    {"agent_json_extract", agent_json_extract_th1, 0},
-    {"agent_json_quote",   agent_json_quote_th1, 0},
-    {"pool_list_pending", pool_list_pending_th1, 0},
-    {"pool_get",          pool_get_th1, 0},
-    {"pool_put",          pool_put_th1, 0},
-    {"pool_link",         pool_link_th1, 0},
-    {"pool_related",      pool_related_th1, 0},
-    {0, 0, 0}
-  };
-  int i;
-  for(i=0; aCmd[i].zName; i++){
-    Th_CreateCommand(interp, aCmd[i].zName, aCmd[i].xProc, aCmd[i].pContext, 0);
-  }
-}
+/* TH1 bridge lives in agent_th1.c. */
 
 /*
 ** MCP Tool: list_files

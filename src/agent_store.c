@@ -1,0 +1,535 @@
+/*
+** Copyright (c) 2026
+**
+** Session and event persistence helpers for the Fossil agent stack.
+*/
+#include "config.h"
+#include "agent.h"
+#include "agent_internal.h"
+
+int db_get_int(const char *zName, int dflt);
+
+/*
+** Repository storage for agent chat messages.
+*/
+static const char zAgentChatSchema[] =
+@ CREATE TABLE repository.agentchat_session(
+@   sid INTEGER PRIMARY KEY AUTOINCREMENT,
+@   ctime JULIANDAY DEFAULT (julianday('now')),
+@   mtime JULIANDAY DEFAULT (julianday('now')),
+@   xfrom TEXT,
+@   provider TEXT,
+@   model TEXT,
+@   title TEXT
+@ );
+@ CREATE TABLE repository.agentchat(
+@   acid INTEGER PRIMARY KEY AUTOINCREMENT,
+@   sid INTEGER REFERENCES agentchat_session,
+@   mtime JULIANDAY DEFAULT (julianday('now')),
+@   xfrom TEXT,
+@   role TEXT NOT NULL,
+@   kind TEXT,
+@   provider TEXT,
+@   model TEXT,
+@   meta TEXT,
+@   msg TEXT NOT NULL
+@ );
+;
+
+/*
+** Ensure the repository table used by /agentui exists.
+*/
+static void agent_chat_create_tables(void){
+  if( !db_table_exists("repository","agentchat") ){
+    db_multi_exec(zAgentChatSchema/*works-like:""*/);
+  }else{
+    if( !db_table_exists("repository","agentchat_session") ){
+      db_multi_exec(
+        "CREATE TABLE repository.agentchat_session("
+        "  sid INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  ctime JULIANDAY DEFAULT (julianday('now')),"
+        "  mtime JULIANDAY DEFAULT (julianday('now')),"
+        "  xfrom TEXT,"
+        "  provider TEXT,"
+        "  model TEXT,"
+        "  title TEXT"
+        ");"
+      );
+    }
+    if( !db_table_has_column("repository","agentchat","sid") ){
+      db_multi_exec("ALTER TABLE agentchat ADD COLUMN sid INTEGER");
+    }
+    if( !db_table_has_column("repository","agentchat","kind") ){
+      db_multi_exec("ALTER TABLE agentchat ADD COLUMN kind TEXT");
+    }
+    if( !db_table_has_column("repository","agentchat","meta") ){
+      db_multi_exec("ALTER TABLE agentchat ADD COLUMN meta TEXT");
+    }
+    if( !db_table_has_column("repository","agentchat_session","provider") ){
+      db_multi_exec("ALTER TABLE agentchat_session ADD COLUMN provider TEXT");
+    }
+    if( !db_table_has_column("repository","agentchat_session","model") ){
+      db_multi_exec("ALTER TABLE agentchat_session ADD COLUMN model TEXT");
+    }
+    if( !db_table_has_column("repository","agentchat","provider") ){
+      db_multi_exec("ALTER TABLE agentchat ADD COLUMN provider TEXT");
+    }
+  }
+}
+
+int agent_chat_session_create(
+  const char *zUser,
+  const char *zProvider,
+  const char *zModel
+){
+  agent_chat_create_tables();
+  db_multi_exec(
+    "INSERT INTO agentchat_session(ctime,mtime,xfrom,provider,model,title)"
+    " VALUES(julianday('now'),julianday('now'),%Q,%Q,%Q,'New Chat')",
+    zUser ? zUser : "",
+    zProvider ? zProvider : "",
+    zModel ? zModel : ""
+  );
+  return db_last_insert_rowid();
+}
+
+void agent_chat_session_rename(int sid, const char *zTitle){
+  Blob title = BLOB_INITIALIZER;
+  if( sid<=0 || !agent_chat_session_exists(sid) ) return;
+  if( zTitle==0 ) zTitle = "";
+  blob_init(&title, zTitle, -1);
+  blob_trim(&title);
+  db_multi_exec(
+    "UPDATE agentchat_session"
+    " SET mtime=julianday('now'),"
+    " title=%Q"
+    " WHERE sid=%d",
+    blob_size(&title)>0 ? blob_str(&title) : "New Chat",
+    sid
+  );
+  blob_reset(&title);
+}
+
+int agent_chat_session_exists(int sid){
+  return sid>0 && db_exists("SELECT 1 FROM agentchat_session WHERE sid=%d", sid);
+}
+
+int agent_chat_latest_session(const char *zUser){
+  if( !db_table_exists("repository","agentchat_session") ) return 0;
+  return db_int(0,
+    "SELECT sid FROM agentchat_session"
+    " WHERE xfrom=%Q OR (%Q='' AND xfrom='')"
+    " ORDER BY mtime DESC, sid DESC LIMIT 1",
+    zUser ? zUser : "", zUser ? zUser : ""
+  );
+}
+
+static void agent_chat_session_touch(
+  int sid,
+  const char *zMsg,
+  const char *zProvider,
+  const char *zModel
+){
+  Blob title = BLOB_INITIALIZER;
+  int n;
+  if( sid<=0 ) return;
+  if( zMsg==0 ) zMsg = "";
+  while( fossil_isspace(zMsg[0]) ) zMsg++;
+  n = (int)strlen(zMsg);
+  if( n>60 ) n = 60;
+  blob_append(&title, zMsg, n);
+  blob_trim(&title);
+  db_multi_exec(
+    "UPDATE agentchat_session"
+    " SET mtime=julianday('now'),"
+    " provider=coalesce(nullif(%Q,''),provider),"
+    " model=coalesce(nullif(%Q,''),model),"
+    " title=CASE"
+    "   WHEN title IS NULL OR title='' OR title='New Chat'"
+    "   THEN %Q ELSE title END"
+    " WHERE sid=%d",
+    zProvider ? zProvider : "",
+    zModel ? zModel : "",
+    blob_size(&title)>0 ? blob_str(&title) : "New Chat",
+    sid
+  );
+  blob_reset(&title);
+}
+
+int agent_chat_save(
+  int sid,
+  const char *zUser,
+  const char *zRole,
+  const char *zKind,
+  const char *zProvider,
+  const char *zModel,
+  const char *zMeta,
+  const char *zMsg
+){
+  const char *zTitleMsg = zMsg;
+  int acid;
+  if( zMsg==0 || zMsg[0]==0 ) return 0;
+  agent_chat_create_tables();
+  db_multi_exec(
+    "INSERT INTO agentchat(sid,mtime,xfrom,role,kind,provider,model,meta,msg)"
+    " VALUES(%d,julianday('now'),%Q,%Q,%Q,%Q,%Q,%Q,%Q)",
+    sid,
+    zUser ? zUser : "",
+    zRole ? zRole : "agent",
+    zKind ? zKind : "message",
+    zProvider ? zProvider : "",
+    zModel ? zModel : "",
+    zMeta ? zMeta : "",
+    zMsg
+  );
+  acid = db_last_insert_rowid();
+  if( zRole && fossil_strcmp(zRole,"system")==0 ){
+    zTitleMsg = "";
+  }
+  agent_chat_session_touch(sid, zTitleMsg, zProvider, zModel);
+  return acid;
+}
+
+void agent_chat_save_event(
+  int sid,
+  const char *zUser,
+  const char *zKind,
+  const char *zProvider,
+  const char *zModel,
+  const char *zMeta,
+  const char *zMsg
+){
+  (void)agent_chat_save(
+    sid, zUser, "system", zKind, zProvider, zModel, zMeta, zMsg
+  );
+}
+
+const char *agent_chat_session_state(int sid){
+  if( sid<=0 || !db_table_exists("repository","agentchat") ) return "";
+  return db_text("",
+    "SELECT CASE"
+    "  WHEN role='agent' AND kind='reply' THEN 'reply'"
+    "  WHEN role='agent' AND kind='error' THEN 'error'"
+    "  WHEN role='system' AND kind='progress'"
+    "   AND meta LIKE '%%\"status\":\"running\"%%' THEN 'running'"
+    "  WHEN role='system' AND kind='progress'"
+    "   AND meta LIKE '%%\"status\":\"ok\"%%' THEN 'ok'"
+    "  WHEN role='system' AND kind='progress'"
+    "   AND meta LIKE '%%\"status\":\"error\"%%' THEN 'error'"
+    "  WHEN role='system' AND kind='tool' THEN 'tool'"
+    "  WHEN role='system' AND kind='progress' THEN 'progress'"
+    "  WHEN role='user' AND kind='prompt' THEN 'prompt'"
+    "  ELSE coalesce(kind, role, '') END"
+    " FROM agentchat WHERE sid=%d ORDER BY acid DESC LIMIT 1",
+    sid
+  );
+}
+
+int agent_chat_latest_terminal_acid(int sid){
+  if( sid<=0 || !db_table_exists("repository","agentchat") ) return 0;
+  return db_int(0,
+    "SELECT acid FROM agentchat"
+    " WHERE sid=%d"
+    "   AND role='agent'"
+    "   AND kind IN ('reply','error')"
+    " ORDER BY acid DESC LIMIT 1",
+    sid
+  );
+}
+
+int agent_chat_is_terminal_acid(int sid, int acid){
+  return sid>0 && acid>0 && db_exists(
+    "SELECT 1 FROM agentchat"
+    " WHERE sid=%d AND acid=%d"
+    "   AND role='agent'"
+    "   AND kind IN ('reply','error')",
+    sid, acid
+  );
+}
+
+void agent_chat_render_sessions_to_blob(
+  const char *zUser,
+  int sidCurrent,
+  Blob *pOut
+){
+  Stmt q;
+  int nLimit = db_get_int("agent-history-count", 50);
+  if( nLimit<=0 ) return;
+  if( !db_table_exists("repository","agentchat_session") ) return;
+  db_prepare(&q,
+    "SELECT sid, coalesce(nullif(title,''),'New Chat'),"
+    "       coalesce(nullif(provider,''),'?'),"
+    "       coalesce(nullif(model,''),'')"
+    " FROM agentchat_session"
+    " WHERE xfrom=%Q OR (%Q='' AND xfrom='')"
+    " ORDER BY mtime DESC, sid DESC LIMIT %d",
+    zUser ? zUser : "", zUser ? zUser : "", nLimit
+  );
+  while( db_step(&q)==SQLITE_ROW ){
+    int sid = db_column_int(&q, 0);
+    const char *zTitle = db_column_text(&q, 1);
+    const char *zProvider = db_column_text(&q, 2);
+    const char *zModel = db_column_text(&q, 3);
+    const char *zState = agent_chat_session_state(sid);
+    blob_appendf(pOut, "<div>\n");
+    if( sid==sidCurrent ){
+      blob_appendf(pOut, "<b>%h</b> <span class=\"dimmed\">[%h%s%h%s%h]</span>",
+                   zTitle, zProvider, (zModel&&zModel[0]?" / ":""), zModel,
+                   (zState&&zState[0]?" | ":""), zState);
+    }else{
+      blob_appendf(pOut, "<a href=\"%%R/agentui?sid=%d\">%h</a> <span class=\"dimmed\">[%h%s%h%s%h]</span>",
+                   sid, zTitle, zProvider, (zModel&&zModel[0]?" / ":""), zModel,
+                   (zState&&zState[0]?" | ":""), zState);
+    }
+    blob_appendf(pOut, "</div>\n");
+  }
+  db_finalize(&q);
+}
+
+static int agent_chat_meta_context_enabled(const char *zMeta){
+  return zMeta && strstr(zMeta, "\"context\":true")!=0;
+}
+
+static int agent_chat_meta_retrieval_qid(const char *zMeta){
+  const char *z;
+  if( zMeta==0 ) return 0;
+  z = strstr(zMeta, "\"retrieval_qid\":");
+  if( z==0 ) return 0;
+  z += 16;
+  while( fossil_isspace(z[0]) ) z++;
+  return atoi(z);
+}
+
+void agent_chat_render_history_to_blob(int sidCurrent, Blob *pOut){
+  Stmt q;
+  int nLimit = db_get_int("agent-history-count", 50);
+  if( nLimit<=0 || sidCurrent<=0 ) return;
+  if( !db_table_exists("repository","agentchat") ) return;
+  if( db_table_exists("repository","ai_chat_eval") ){
+    db_prepare(&q,
+      "SELECT c.role, c.kind, c.provider, c.model, c.meta, c.msg,"
+      "       coalesce(e.user_feedback,'')"
+      "  FROM agentchat AS c"
+      "  LEFT JOIN ai_chat_eval AS e ON e.sid=c.sid AND e.acid=c.acid"
+      " WHERE c.sid=%d"
+      " ORDER BY c.acid ASC LIMIT %d",
+      sidCurrent, nLimit
+    );
+  }else{
+    db_prepare(&q,
+      "SELECT role, kind, provider, model, meta, msg, ''"
+      " FROM agentchat WHERE sid=%d"
+      " ORDER BY acid ASC LIMIT %d",
+      sidCurrent, nLimit
+    );
+  }
+  while( db_step(&q)==SQLITE_ROW ){
+    const char *zRole = db_column_text(&q, 0);
+    const char *zRoleLabel =
+      zRole && fossil_strcmp(zRole,"user")==0 ? "You" :
+      zRole && fossil_strcmp(zRole,"system")==0 ? "System" : "Agent";
+    const char *zKind = db_column_text(&q, 1);
+    const char *zProvider = db_column_text(&q, 2);
+    const char *zModel = db_column_text(&q, 3);
+    const char *zMeta = db_column_text(&q, 4);
+    const char *zMsg = db_column_text(&q, 5);
+    const char *zFeedback = db_column_text(&q, 6);
+    int bPromptMeta = zRole && zKind
+      && fossil_strcmp(zRole,"user")==0
+      && fossil_strcmp(zKind,"prompt")==0
+      && agent_chat_meta_context_enabled(zMeta);
+    int retrievalQid = bPromptMeta ? agent_chat_meta_retrieval_qid(zMeta) : 0;
+    blob_appendf(pOut, "<div style=\"margin-bottom:0.8em;\">\n");
+    blob_appendf(pOut, "<b>%h:</b>", zRoleLabel);
+    if( zProvider && zProvider[0] ){
+      blob_appendf(pOut, " <span class=\"dimmed\">[%h%s%h]</span>",
+                   zProvider, (zModel&&zModel[0]?" / ":""), zModel);
+    }
+    if( zKind && zKind[0] ){
+      blob_appendf(pOut, " <span class=\"dimmed\">{%h}</span>", zKind);
+    }
+    if( bPromptMeta ){
+      blob_appendf(pOut, " <span class=\"dimmed\">[context=pool]</span>");
+      if( retrievalQid>0 ){
+        blob_appendf(pOut, " <span class=\"dimmed\">[<a href=\"%%R/agentui?sid=%d#retrieval-%d\" data-retrieval-qid=\"%d\">retrieval #%d</a>]</span>",
+                     sidCurrent, retrievalQid, retrievalQid, retrievalQid);
+      }
+    }else if( zMeta && zMeta[0] ){
+      blob_appendf(pOut, " <span class=\"dimmed\">meta=%h</span>", zMeta);
+    }
+    if( zFeedback && zFeedback[0] ){
+      blob_appendf(pOut, " <span class=\"dimmed\">feedback=%h</span>", zFeedback);
+    }
+    blob_appendf(pOut, " <pre style=\"white-space:pre-wrap;display:inline;margin:0\">%h</pre>\n", zMsg);
+    blob_appendf(pOut, "</div>\n");
+  }
+  db_finalize(&q);
+}
+
+void agent_emit_history_object_json(int sidCurrent){
+  Stmt q;
+  const char *zTitle = "New Chat";
+  const char *zProvider = agent_chat_session_provider(sidCurrent, "");
+  const char *zModel = agent_chat_session_model(sidCurrent, "");
+  char *zCtime = 0;
+  char *zMtime = 0;
+  int nMsg = 0;
+  if( sidCurrent>0 && db_table_exists("repository","agentchat_session") ){
+    zTitle = db_text("New Chat",
+      "SELECT coalesce(nullif(title,''),'New Chat') FROM agentchat_session"
+      " WHERE sid=%d",
+      sidCurrent
+    );
+    zCtime = db_text(0,
+      "SELECT datetime(ctime,toLocal()) FROM agentchat_session WHERE sid=%d",
+      sidCurrent
+    );
+    zMtime = db_text(0,
+      "SELECT datetime(mtime,toLocal()) FROM agentchat_session WHERE sid=%d",
+      sidCurrent
+    );
+    nMsg = db_int(0, "SELECT count(*) FROM agentchat WHERE sid=%d", sidCurrent);
+  }
+  CX("{\"sid\":%d,\"title\":%!j,\"provider\":%!j,\"model\":%!j,"
+     "\"ctime\":%!j,\"mtime\":%!j,\"message_count\":%d,\"messages\":[",
+     sidCurrent, zTitle, zProvider, zModel,
+     zCtime ? zCtime : "", zMtime ? zMtime : "", nMsg);
+  if( sidCurrent>0 && db_table_exists("repository","agentchat") ){
+    int first = 1;
+    if( db_table_exists("repository","ai_chat_eval") ){
+      db_prepare(&q,
+        "SELECT c.acid, c.role, c.kind, c.provider, c.model, c.meta, c.msg,"
+        "       coalesce(e.user_feedback,'')"
+        "  FROM agentchat AS c"
+        "  LEFT JOIN ai_chat_eval AS e ON e.sid=c.sid AND e.acid=c.acid"
+        " WHERE c.sid=%d"
+        " ORDER BY c.acid ASC",
+        sidCurrent
+      );
+    }else{
+      db_prepare(&q,
+        "SELECT acid, role, kind, provider, model, meta, msg, ''"
+        " FROM agentchat WHERE sid=%d"
+        " ORDER BY acid ASC",
+        sidCurrent
+      );
+    }
+    while( db_step(&q)==SQLITE_ROW ){
+      CX("%s{\"acid\":%d,\"role\":%!j,\"kind\":%!j,\"provider\":%!j,"
+         "\"model\":%!j,\"meta\":%!j,\"msg\":%!j,\"feedback\":%!j}",
+         first ? "" : ",",
+         db_column_int(&q, 0),
+         db_column_text(&q, 1),
+         db_column_text(&q, 2),
+         db_column_text(&q, 3),
+         db_column_text(&q, 4),
+         db_column_text(&q, 5),
+         db_column_text(&q, 6),
+         db_column_text(&q, 7));
+      first = 0;
+    }
+    db_finalize(&q);
+  }
+  CX("]}");
+  fossil_free(zCtime);
+  fossil_free(zMtime);
+}
+
+void agent_emit_history_json(int sidCurrent){
+  agent_emit_history_object_json(sidCurrent);
+  CX("\n");
+}
+
+void agent_emit_events_array_json(int sidCurrent, int afterAcid, int *pLastAcid){
+  Stmt q;
+  int first = 1;
+  int lastAcid = afterAcid;
+  CX("[");
+  if( sidCurrent>0 && db_table_exists("repository","agentchat") ){
+    if( db_table_exists("repository","ai_chat_eval") ){
+      db_prepare(&q,
+        "SELECT c.acid, c.role, c.kind, c.provider, c.model, c.meta, c.msg,"
+        "       coalesce(e.user_feedback,'')"
+        "  FROM agentchat AS c"
+        "  LEFT JOIN ai_chat_eval AS e ON e.sid=c.sid AND e.acid=c.acid"
+        " WHERE c.sid=%d AND c.acid>%d"
+        " ORDER BY c.acid ASC",
+        sidCurrent, afterAcid
+      );
+    }else{
+      db_prepare(&q,
+        "SELECT acid, role, kind, provider, model, meta, msg, ''"
+        " FROM agentchat WHERE sid=%d AND acid>%d"
+        " ORDER BY acid ASC",
+        sidCurrent, afterAcid
+      );
+    }
+    while( db_step(&q)==SQLITE_ROW ){
+      int acid = db_column_int(&q, 0);
+      CX("%s{\"acid\":%d,\"role\":%!j,\"kind\":%!j,\"provider\":%!j,"
+         "\"model\":%!j,\"meta\":%!j,\"msg\":%!j,\"feedback\":%!j}",
+         first ? "" : ",",
+         acid,
+         db_column_text(&q, 1),
+         db_column_text(&q, 2),
+         db_column_text(&q, 3),
+         db_column_text(&q, 4),
+         db_column_text(&q, 5),
+         db_column_text(&q, 6),
+         db_column_text(&q, 7));
+      if( acid>lastAcid ) lastAcid = acid;
+      first = 0;
+    }
+    db_finalize(&q);
+  }
+  CX("]");
+  if( pLastAcid ) *pLastAcid = lastAcid;
+}
+
+void agent_emit_events_json(int sidCurrent, int afterAcid){
+  int lastAcid = afterAcid;
+  CX("{\"sid\":%d,\"after\":%d,\"events\":", sidCurrent, afterAcid);
+  agent_emit_events_array_json(sidCurrent, afterAcid, &lastAcid);
+  CX("}\n");
+}
+
+void agent_emit_session_array_json(const char *zUser){
+  Stmt q;
+  int first = 1;
+  CX("[");
+  if( db_table_exists("repository","agentchat_session") ){
+    db_prepare(&q,
+      "SELECT sid, coalesce(nullif(title,''),'New Chat'),"
+      "       coalesce(nullif(provider,''),''),"
+      "       coalesce(nullif(model,''),''),"
+      "       datetime(ctime,toLocal()),"
+      "       datetime(mtime,toLocal()),"
+      "       (SELECT count(*) FROM agentchat AS c WHERE c.sid=agentchat_session.sid)"
+      "  FROM agentchat_session"
+      " WHERE xfrom=%Q OR (%Q='' AND xfrom='')"
+      " ORDER BY mtime DESC, sid DESC",
+      zUser ? zUser : "", zUser ? zUser : ""
+    );
+    while( db_step(&q)==SQLITE_ROW ){
+      CX("%s{\"sid\":%d,\"title\":%!j,\"provider\":%!j,\"model\":%!j,"
+         "\"ctime\":%!j,\"mtime\":%!j,\"message_count\":%d}",
+         first ? "" : ",",
+         db_column_int(&q, 0),
+         db_column_text(&q, 1),
+         db_column_text(&q, 2),
+         db_column_text(&q, 3),
+         db_column_text(&q, 4),
+         db_column_text(&q, 5),
+         db_column_int(&q, 6));
+      first = 0;
+    }
+    db_finalize(&q);
+  }
+  CX("]");
+}
+
+void agent_emit_session_list_json(const char *zUser){
+  CX("{\"sessions\":");
+  agent_emit_session_array_json(zUser);
+  CX("}\n");
+}

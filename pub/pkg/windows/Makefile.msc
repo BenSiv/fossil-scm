@@ -368,6 +368,10 @@ PIKCHR_OPTIONS = /DPIKCHR_TOKEN_LIMIT=10000
 
 SRC   = "$(OX)\add_.c" \
         "$(OX)\agent_.c" \
+        "$(OX)\agent_runtime_.c" \
+        "$(OX)\agent_store_.c" \
+        "$(OX)\agent_th1_.c" \
+        "$(OX)\agent_web_.c" \
         "$(OX)\ai_.c" \
         "$(OX)\ajax_.c" \
         "$(OX)\alerts_.c" \
@@ -520,7 +524,14 @@ SRC   = "$(OX)\add_.c" \
         "$(OX)\zip_.c" \
         "$(SRCDIR_extsrc)\pikchr.c"
 
-EXTRA_FILES   = "$(SRCDIR)\..\dep\vendor\extsrc\pikchr-worker.js" \
+EXTRA_FILES   = "$(SRCDIR)\..\cfg\agentui.css" \
+        "$(SRCDIR)\..\cfg\agentui.js" \
+        "$(SRCDIR)\..\cfg\agentui.th1" \
+        "$(SRCDIR)\..\cfg\mcp_tools.json" \
+        "$(SRCDIR)\..\cfg\roles\default.th1" \
+        "$(SRCDIR)\..\cfg\roles\json-default.th1" \
+        "$(SRCDIR)\..\cfg\roles\reviewer.th1" \
+        "$(SRCDIR)\..\dep\vendor\extsrc\pikchr-worker.js" \
         "$(SRCDIR)\..\dep\vendor\extsrc\pikchr.js" \
         "$(SRCDIR)\..\dep\vendor\extsrc\pikchr.wasm" \
         "$(SRCDIR)\..\pub\skins\ardoise\css.txt" \
@@ -638,6 +649,10 @@ EXTRA_FILES   = "$(SRCDIR)\..\dep\vendor\extsrc\pikchr-worker.js" \
 
 OBJ   = "$(OX)\add$O" \
         "$(OX)\agent$O" \
+        "$(OX)\agent_runtime$O" \
+        "$(OX)\agent_store$O" \
+        "$(OX)\agent_th1$O" \
+        "$(OX)\agent_web$O" \
         "$(OX)\ai$O" \
         "$(OX)\ajax$O" \
         "$(OX)\alerts$O" \
@@ -892,6 +907,10 @@ APPTARGETS = $(APPTARGETS) openssl
 "$(OX)\linkopts": "$(B)\win\Makefile.msc"
 	echo "$(OX)\add.obj" > $@
 	echo "$(OX)\agent.obj" >> $@
+	echo "$(OX)\agent_runtime.obj" >> $@
+	echo "$(OX)\agent_store.obj" >> $@
+	echo "$(OX)\agent_th1.obj" >> $@
+	echo "$(OX)\agent_web.obj" >> $@
 	echo "$(OX)\ai.obj" >> $@
 	echo "$(OX)\ajax.obj" >> $@
 	echo "$(OX)\alerts.obj" >> $@
@@ -1162,7 +1181,14 @@ realclean: clean
 "$(OBJDIR)\json_wiki$O" : "$(SRCDIR)\json_detail.h"
 
 "$(OX)\builtin_data.reslist": $(EXTRA_FILES) "$(B)\win\Makefile.msc"
-	echo "$(SRCDIR)\../dep/vendor/extsrc/pikchr-worker.js" > $@
+	echo "$(SRCDIR)\../cfg/agentui.css" > $@
+	echo "$(SRCDIR)\../cfg/agentui.js" >> $@
+	echo "$(SRCDIR)\../cfg/agentui.th1" >> $@
+	echo "$(SRCDIR)\../cfg/mcp_tools.json" >> $@
+	echo "$(SRCDIR)\../cfg/roles/default.th1" >> $@
+	echo "$(SRCDIR)\../cfg/roles/json-default.th1" >> $@
+	echo "$(SRCDIR)\../cfg/roles/reviewer.th1" >> $@
+	echo "$(SRCDIR)\../dep/vendor/extsrc/pikchr-worker.js" >> $@
 	echo "$(SRCDIR)\../dep/vendor/extsrc/pikchr.js" >> $@
 	echo "$(SRCDIR)\../dep/vendor/extsrc/pikchr.wasm" >> $@
 	echo "$(SRCDIR)\../pub/skins/ardoise/css.txt" >> $@
@@ -1288,6 +1314,30 @@ realclean: clean
 	$(TCC) /Fo$@ /Fd$(@D)\ -c "$(OX)\agent_.c"
 
 "$(OX)\agent_.c" : "$(SRCDIR)\agent.c"
+	"$(OBJDIR)\translate$E" $** > $@
+
+"$(OX)\agent_runtime$O" : "$(OX)\agent_runtime_.c" "$(OX)\agent_runtime.h"
+	$(TCC) /Fo$@ /Fd$(@D)\ -c "$(OX)\agent_runtime_.c"
+
+"$(OX)\agent_runtime_.c" : "$(SRCDIR)\agent_runtime.c"
+	"$(OBJDIR)\translate$E" $** > $@
+
+"$(OX)\agent_store$O" : "$(OX)\agent_store_.c" "$(OX)\agent_store.h"
+	$(TCC) /Fo$@ /Fd$(@D)\ -c "$(OX)\agent_store_.c"
+
+"$(OX)\agent_store_.c" : "$(SRCDIR)\agent_store.c"
+	"$(OBJDIR)\translate$E" $** > $@
+
+"$(OX)\agent_th1$O" : "$(OX)\agent_th1_.c" "$(OX)\agent_th1.h"
+	$(TCC) /Fo$@ /Fd$(@D)\ -c "$(OX)\agent_th1_.c"
+
+"$(OX)\agent_th1_.c" : "$(SRCDIR)\agent_th1.c"
+	"$(OBJDIR)\translate$E" $** > $@
+
+"$(OX)\agent_web$O" : "$(OX)\agent_web_.c" "$(OX)\agent_web.h"
+	$(TCC) /Fo$@ /Fd$(@D)\ -c "$(OX)\agent_web_.c"
+
+"$(OX)\agent_web_.c" : "$(SRCDIR)\agent_web.c"
 	"$(OBJDIR)\translate$E" $** > $@
 
 "$(OX)\ai$O" : "$(OX)\ai_.c" "$(OX)\ai.h"
@@ -2196,6 +2246,10 @@ realclean: clean
 "$(OX)\headers": "$(OBJDIR)\makeheaders$E" "$(OX)\page_index.h" "$(OX)\builtin_data.h" "$(OX)\VERSION.h"
 	"$(OBJDIR)\makeheaders$E" "$(OX)\add_.c":"$(OX)\add.h" \
 			"$(OX)\agent_.c":"$(OX)\agent.h" \
+			"$(OX)\agent_runtime_.c":"$(OX)\agent_runtime.h" \
+			"$(OX)\agent_store_.c":"$(OX)\agent_store.h" \
+			"$(OX)\agent_th1_.c":"$(OX)\agent_th1.h" \
+			"$(OX)\agent_web_.c":"$(OX)\agent_web.h" \
 			"$(OX)\ai_.c":"$(OX)\ai.h" \
 			"$(OX)\ajax_.c":"$(OX)\ajax.h" \
 			"$(OX)\alerts_.c":"$(OX)\alerts.h" \

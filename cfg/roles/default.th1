@@ -1,6 +1,5 @@
 set tools_json ""
-set tools_path "cfg/mcp_tools.json"
-catch { set tools_json [read_file $tools_path] }
+catch { set tools_json [agent_asset "cfg/mcp_tools.json"] }
 
 set thinking_tag [agent_config thinking_tag]
 if {[string compare $thinking_tag ""] == 0} {set thinking_tag "thought"}

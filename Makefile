@@ -47,9 +47,9 @@ TCLSH = tclsh
 
 CFLAGS = -g -Os
 CFLAGS_INCLUDE = -I. -I$(SRCDIR) -I$(SRCDIR_extsrc)
-LIB =	  -lresolv /home/bensiv/Projects/fossil-scm/dep/vendor/compat/zlib/libz.a -lssl -lcrypto /home/bensiv/Projects/fossil-scm/dep/vendor/compat/zlib/libz.a -ldl -lpthread -lm
+LIB =	  -lresolv /home/bensiv/fossil-scm/dep/vendor/compat/zlib/libz.a -lssl -lcrypto /home/bensiv/fossil-scm/dep/vendor/compat/zlib/libz.a -ldl -lpthread -lm
 BCCFLAGS =	 $(CFLAGS)
-TCCFLAGS =	-Wall -Wdeclaration-after-statement -DFOSSIL_ENABLE_JSON -DFOSSIL_DYNAMIC_BUILD=1 -I/home/bensiv/Projects/fossil-scm/dep/vendor/compat/zlib  $(CFLAGS) -DHAVE_AUTOCONFIG_H
+TCCFLAGS =	-Wall -Wdeclaration-after-statement -DFOSSIL_ENABLE_JSON -DFOSSIL_DYNAMIC_BUILD=1 -I/home/bensiv/fossil-scm/dep/vendor/compat/zlib  $(CFLAGS) -DHAVE_AUTOCONFIG_H
 #
 # Fuzzing may be enable by appending -fsanitize=fuzzer -DFOSSIL_FUZZ
 # to the TCCFLAGS variable.
@@ -103,7 +103,7 @@ distclean: clean
 	-rm -f cscope.out tags
 
 reconfig:
-	./configure --conf=/home/bensiv/Projects/fossil-scm/bld/auto.def --json --with-zlib=tree
+	./configure --conf=/home/bensiv/fossil-scm/bld/auto.def --json --with-zlib=tree
 
 tags:
 	ctags -R ./src
@@ -123,9 +123,9 @@ tags:
 # This is also why we repeat the reconfig target's command here instead
 # of delegating to it with "$(MAKE) reconfig": having children running
 # around interfering makes this failure mode even worse.
-Makefile: ./bld/Makefile.in $(SRCDIR)/main.mk /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/autosetup /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/local.tcl /home/bensiv/Projects/fossil-scm/bld/auto.def /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/system.tcl /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/cc.tcl /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/cc-lib.tcl
-	./configure --conf=/home/bensiv/Projects/fossil-scm/bld/auto.def --json --with-zlib=tree
-	touch /home/bensiv/Projects/fossil-scm/Makefile
+Makefile: ./bld/Makefile.in $(SRCDIR)/main.mk /home/bensiv/fossil-scm/dep/vendor/autosetup/autosetup /home/bensiv/fossil-scm/dep/vendor/autosetup/local.tcl /home/bensiv/fossil-scm/bld/auto.def /home/bensiv/fossil-scm/dep/vendor/autosetup/system.tcl /home/bensiv/fossil-scm/dep/vendor/autosetup/cc.tcl /home/bensiv/fossil-scm/dep/vendor/autosetup/cc-lib.tcl
+	./configure --conf=/home/bensiv/fossil-scm/bld/auto.def --json --with-zlib=tree
+	touch /home/bensiv/fossil-scm/Makefile
 
 # Container stuff
 SRCTB := src-17f98784c2d6.tar.gz
