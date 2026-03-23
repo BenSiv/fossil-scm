@@ -25,7 +25,9 @@ int agent_load_asset(const char *zAsset, Blob *pOut){
   blob_zero(pOut);
   if( g.zLocalRoot && g.zLocalRoot[0] ){
     zPath = mprintf("%s%s", g.zLocalRoot, zAsset);
-    if( blob_read_from_file(pOut, zPath, ExtFILE)>=0 ){
+    if( file_size(zPath, ExtFILE)>=0
+     && blob_read_from_file(pOut, zPath, ExtFILE)>=0
+    ){
       fossil_free(zPath);
       return 1;
     }
