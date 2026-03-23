@@ -34,6 +34,8 @@ Canonical documents for this fork live under [`doc/`](doc/):
   [`doc/ai/OPENCLAW_LESSONS.md`](doc/ai/OPENCLAW_LESSONS.md).
   Comparative design notes from reviewing `~/Fabric` live in
   [`doc/ai/FABRIC_LESSONS.md`](doc/ai/FABRIC_LESSONS.md).
+  The active condensed roadmap for current implementation work now lives in
+  [`doc/ai/FOSSIL_INTERNAL_TOOLING_PLAN.md`](doc/ai/FOSSIL_INTERNAL_TOOLING_PLAN.md).
   The current cross-project roadmap for continuing the Goose/Fossil split now
   lives in
   [`doc/ai/FOSSIL_GOOSE_PHASE2_PLAN.md`](doc/ai/FOSSIL_GOOSE_PHASE2_PLAN.md).
@@ -166,6 +168,7 @@ Notes:
 
 - Core AI data-pool tests: [`tst/ai.test`](tst/ai.test)
 - Hermetic agent regression tests: [`tst/agent.test`](tst/agent.test)
+- Focused flat-route smoke tests: [`tst/agent-v1-smoke.test`](tst/agent-v1-smoke.test)
 - Fake backend fixture: [`tst/fake-agent-backend.sh`](tst/fake-agent-backend.sh)
 
 The agent regression tests are deterministic and do not require Ollama,
@@ -179,6 +182,7 @@ Codex, or network access. They cover:
 - `/agent-config` capability flags for the active backend
 - `/agent-config` provider choices and model suggestions
 - `/agent-history` JSON for stored sessions and ordered messages
+- flat `agent-api-v1-*` session/chat/event smoke coverage
 - structured chat event kinds in `agentchat`
 - lightweight structured `meta` on `agentchat` rows
 - first-use `/agent-chat` session creation and message persistence

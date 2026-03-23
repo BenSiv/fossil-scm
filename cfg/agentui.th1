@@ -37,6 +37,7 @@ $ui_css
   </div>
 
   <div id="agent-chat-status" style="margin:0.6em 0;padding:0.5em 0.7em;border:1px solid var(--agent-border);background:var(--agent-card-bg);">Status: Idle</div>
+  <div id="agent-chat-request" class="agent-request-panel" style="margin:0.6em 0;padding:0.5em 0.7em;border:1px solid var(--agent-border);background:var(--agent-card-bg);display:none;"></div>
 
   <div id="agent-chat-log" style="min-height:320px;max-height:520px;overflow:auto;border:1px solid var(--agent-border);padding:0.8em;margin:1em 0;background:var(--agent-card-bg);">
     $history_html

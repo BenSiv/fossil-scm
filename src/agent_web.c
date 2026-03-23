@@ -20,7 +20,6 @@ void agent_emit_retrieval_json(int qid);
 
 int agent_load_asset(const char *zAsset, Blob *pOut){
   char *zPath = 0;
-  char *zBuiltin = 0;
   const unsigned char *pData = 0;
   int nData = 0;
   blob_zero(pOut);
@@ -32,9 +31,12 @@ int agent_load_asset(const char *zAsset, Blob *pOut){
     }
     fossil_free(zPath);
   }
-  zBuiltin = mprintf("../%s", zAsset);
-  pData = builtin_file(zBuiltin, &nData);
-  fossil_free(zBuiltin);
+  pData = builtin_file(zAsset, &nData);
+  if( pData==0 ){
+    char *zBuiltin = mprintf("../%s", zAsset);
+    pData = builtin_file(zBuiltin, &nData);
+    fossil_free(zBuiltin);
+  }
   if( pData && nData>=0 ){
     blob_append(pOut, (const char*)pData, nData);
     return 1;

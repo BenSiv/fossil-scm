@@ -30,6 +30,28 @@ body[class*="theme-"] {
   color: var(--agent-text);
 }
 .theme-toggle { cursor: pointer; padding: 0.3em 0.6em; border: 1px solid var(--agent-border); border-radius: 4px; background: var(--agent-card-bg); color: inherit; font-size: 0.9em; }
+.agent-request-panel { font-size: 0.9em; }
+.agent-request-state {
+  display: inline-block;
+  padding: 0.15em 0.45em;
+  border: 1px solid var(--agent-border);
+  border-radius: 999px;
+  margin-left: 0.4em;
+  font-size: 0.85em;
+}
+.agent-event-type {
+  display: inline-block;
+  padding: 0.1em 0.4em;
+  border: 1px solid var(--agent-border);
+  border-radius: 999px;
+  margin-left: 0.35em;
+  font-size: 0.8em;
+}
+.agent-request-ref {
+  display: inline-block;
+  margin-left: 0.35em;
+  font-size: 0.8em;
+}
 
 .approval-card {
   margin: 1em 0;

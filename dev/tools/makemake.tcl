@@ -229,6 +229,7 @@ set extra_files {
   ../cfg/agentui.css
   ../cfg/agentui.js
   ../cfg/agentui.th1
+  ../cfg/agent_prompts.json
   ../cfg/mcp_tools.json
   ../cfg/roles/*.th1
   ../pub/skins/*/*.txt

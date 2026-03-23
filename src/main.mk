@@ -177,6 +177,7 @@ EXTRA_FILES = \
   $(SRCDIR)/../cfg/agentui.css \
   $(SRCDIR)/../cfg/agentui.js \
   $(SRCDIR)/../cfg/agentui.th1 \
+  $(SRCDIR)/../cfg/agent_prompts.json \
   $(SRCDIR)/../cfg/mcp_tools.json \
   $(SRCDIR)/../cfg/roles/default.th1 \
   $(SRCDIR)/../cfg/roles/json-default.th1 \

@@ -598,6 +598,8 @@ test agent-api-v1-23 {[string first "\"provider\":\"codex\"" $RESULT]>=0}
 test agent-api-v1-23a {[string first "\"request_id\":\"req-" $RESULT]>=0}
 test agent-api-v1-23b {[string first "\"request\":\{\"rid\":" $RESULT]>=0}
 test agent-api-v1-23c {[string first "\"state\":\"finished\"" $RESULT]>=0}
+test agent-api-v1-23d {[string first "\"is_active\":false" $RESULT]>=0}
+test agent-api-v1-23e {[string first "\"is_terminal\":true" $RESULT]>=0}
 
 set response [agent_http_request $repository GET [subst {/agent-api-v1-events?sid=$apiSid&after=0}] {}]
 set RESULT [agent_http_body $response]
@@ -613,6 +615,8 @@ test agent-api-v1-30a {[string first {"request_count":1} $RESULT]>=0 || [string 
 test agent-api-v1-30aa {[string first "\"request\":\{\"rid\":" $RESULT]>=0}
 test agent-api-v1-30ab {[string first "\"request_id\":\"req-" $RESULT]>=0}
 test agent-api-v1-30ac {[string first "\\\"request_id\\\":\\\"req-" $RESULT]>=0}
+test agent-api-v1-30ad {[string first "\"event_type\":\"message\"" $RESULT]>=0 || [string first "\"event_type\":\"progress\"" $RESULT]>=0}
+test agent-api-v1-30ae {[string first "\"is_terminal\":true" $RESULT]>=0}
 
 set response [agent_http_request $repository GET [subst {/agent-api-v1-session?sid=$apiSid}] {}]
 set RESULT [agent_http_body $response]

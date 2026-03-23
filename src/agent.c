@@ -3036,9 +3036,7 @@ static int agent_semantic_search(
 static const char *agent_prompt_fragment(const char *zKey, const char *zDefault){
   static Blob config = BLOB_INITIALIZER;
   if( blob_size(&config)==0 ){
-    char *zPath = mprintf("%scfg/agent_prompts.json", g.zLocalRoot);
-    blob_read_from_file(&config, zPath, ExtFILE);
-    fossil_free(zPath);
+    agent_load_asset("cfg/agent_prompts.json", &config);
   }
   if( blob_size(&config)>0 ){
     /* Simple JSON extraction for fragments */

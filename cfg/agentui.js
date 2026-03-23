@@ -6,6 +6,7 @@
   var model = document.getElementById('agent-model');
   var context = document.getElementById('agent-context');
   var statusBox = document.getElementById('agent-chat-status');
+  var requestBox = document.getElementById('agent-chat-request');
   var log = document.getElementById('agent-chat-log');
   var feedbackUseful = document.getElementById('agent-feedback-useful');
   var feedbackNotUseful = document.getElementById('agent-feedback-not-useful');
@@ -16,6 +17,10 @@
   var lastReplyFeedback = '';
   var supportsStreaming = null;
   var configPromise = null;
+  var currentRequestId = '';
+  var currentRequestState = '';
+  var currentRequestActive = false;
+  var currentRequestTerminal = false;
 
   function ensureConfig(){
     if(configPromise) return configPromise;
@@ -38,11 +43,58 @@
       return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];
     });
   }
+
+  function isTerminalState(state){
+    return state === 'finished' || state === 'failed' || state === 'cancelled' || state === 'reply' || state === 'error';
+  }
+
+  function requestIsTerminal(request){
+    if(!request) return false;
+    if(typeof request.is_terminal === 'boolean') return request.is_terminal;
+    return isTerminalState(request.state || '');
+  }
+
+  function requestIsActive(request){
+    if(!request) return false;
+    if(typeof request.is_active === 'boolean') return request.is_active;
+    return !requestIsTerminal(request);
+  }
+
   function setStatus(text, status){
     var statusText = 'Status: ' + text;
     if(status==='running') statusText += ' <span class="spinner"></span>';
     if(statusBox) statusBox.innerHTML = statusText;
   }
+
+  function renderRequestBox(request){
+    if(!requestBox) return;
+    if(!request || !request.request_id){
+      requestBox.style.display = 'none';
+      requestBox.innerHTML = '';
+      return;
+    }
+    requestBox.style.display = '';
+    requestBox.innerHTML =
+      '<b>Request:</b> <code>' + esc(request.request_id) + '</code>' +
+      '<span class="agent-request-state">' + esc(request.state || '') + '</span>' +
+      '<span class="agent-request-ref dimmed">active=' + esc(String(!!requestIsActive(request))) + '</span>' +
+      '<span class="agent-request-ref dimmed">terminal=' + esc(String(!!requestIsTerminal(request))) + '</span>' +
+      (request.ctime ? ' <span class="dimmed">started ' + esc(request.ctime) + '</span>' : '') +
+      (request.terminal_acid ? ' <span class="dimmed">reply acid ' + esc(String(request.terminal_acid)) + '</span>' : '');
+  }
+
+  function updateRequestState(request){
+    if(!request) return;
+    currentRequestId = request.request_id || currentRequestId;
+    currentRequestState = request.state || currentRequestState;
+    currentRequestActive = requestIsActive(request);
+    currentRequestTerminal = requestIsTerminal(request);
+    renderRequestBox(request);
+    if(currentRequestState){
+      setStatus('Request ' + currentRequestState, currentRequestActive ? 'running' : '');
+    }
+  }
+
   function setFeedbackState(acid, feedback){
     lastReplyAcid = acid || 0;
     lastReplyFeedback = feedback || '';
@@ -52,22 +104,34 @@
       feedbackStatus.textContent = lastReplyAcid ? ('Current: ' + (lastReplyFeedback || 'none')) : 'No reply selected';
     }
   }
+
   function appendEvent(msg){
     var meta;
+    var div;
+    var html;
     try{ meta = msg.meta ? JSON.parse(msg.meta) : {}; }catch(e){ meta = {}; }
     if(meta.hidden || msg.kind==='context') return;
-    var div = document.createElement('div');
+    div = document.createElement('div');
     div.style.marginBottom = '0.8em';
-    var html = '<b>' + (msg.role==='user' ? 'You' : (msg.role==='system' ? 'System' : 'Agent')) + ':</b>';
+    html = '<b>' + (msg.role==='user' ? 'You' : (msg.role==='system' ? 'System' : 'Agent')) + ':</b>';
     if(msg.provider) html += ' <span class="dimmed">[' + esc(msg.provider) + (msg.model ? ' / ' + esc(msg.model) : '') + ']</span>';
-    if(msg.kind) html += ' <span class="dimmed">{' + esc(msg.kind) + '}</span>';
-    if(meta.thinking) html += ' <details class="thinking-details"><summary class="dimmed">Reasoning</summary><pre style="white-space:pre-wrap;margin:0.5em 0;padding:0.5em;border-left:3px solid #ccc;background:rgba(0,0,0,0.02)">' + esc(meta.thinking) + '</pre></details>';
+    if(msg.event_type) html += ' <span class="agent-event-type">' + esc(msg.event_type) + '</span>';
+    else if(msg.kind) html += ' <span class="dimmed">{' + esc(msg.kind) + '}</span>';
+    if(msg.request_id) html += ' <span class="agent-request-ref dimmed">#' + esc(msg.request_id) + '</span>';
+    if(meta.thinking){
+      html += ' <details class="thinking-details"><summary class="dimmed">Reasoning</summary><pre style="white-space:pre-wrap;margin:0.5em 0;padding:0.5em;border-left:3px solid #ccc;background:rgba(0,0,0,0.02)">' + esc(meta.thinking) + '</pre></details>';
+    }
     html += ' <pre style="white-space:pre-wrap;display:inline;margin:0">' + esc(msg.msg || '') + '</pre>';
     div.innerHTML = html;
     log.appendChild(div);
     if(msg.acid && msg.acid>lastAcid) lastAcid = msg.acid;
     if(msg.role==='agent' && msg.kind==='reply') setFeedbackState(msg.acid || 0, msg.feedback || '');
+    if(msg.request_id && (!currentRequestId || currentRequestId === msg.request_id)){
+      currentRequestId = msg.request_id;
+    }
+    log.scrollTop = log.scrollHeight;
   }
+
   function addMsg(role, text){
     var div = document.createElement('div');
     div.style.marginBottom = '0.8em';
@@ -75,7 +139,47 @@
     log.appendChild(div);
     log.scrollTop = log.scrollHeight;
   }
-  
+
+  function stopPolling(){
+    if(pollHandle){
+      clearTimeout(pollHandle);
+      pollHandle = 0;
+    }
+  }
+
+  function schedulePoll(delayMs){
+    stopPolling();
+    pollHandle = setTimeout(pollEvents, delayMs || 1200);
+  }
+
+  function pollEvents(){
+    if(!sid) return;
+    fetch('agent-api-v1-events?sid=' + encodeURIComponent(sid) + '&after=' + encodeURIComponent(lastAcid))
+      .then(function(resp){
+        if(!resp.ok) throw new Error('Event poll failed: HTTP ' + resp.status);
+        return resp.json();
+      })
+      .then(function(data){
+        var request = data && data.request ? data.request : null;
+        if(data && Array.isArray(data.events)){
+          data.events.forEach(appendEvent);
+        }
+        if(typeof data.last_acid === 'number' && data.last_acid > lastAcid){
+          lastAcid = data.last_acid;
+        }
+        if(request) updateRequestState(request);
+        if(request && requestIsActive(request)){
+          schedulePoll(1000);
+        }else if(currentRequestId && currentRequestActive && !currentRequestTerminal){
+          schedulePoll(1000);
+        }
+      })
+      .catch(function(err){
+        setStatus('Event polling failed', 'error');
+        addMsg('System', err && err.message ? err.message : 'Event polling failed.');
+      });
+  }
+
   send.addEventListener('click', function(){
     var msg = input.value.trim();
     if(!msg) return;
@@ -101,16 +205,13 @@
     var sawPayload = false;
 
     fetch(url).then(function(response){
-      if(!response.ok){
-        throw new Error('Stream request failed: HTTP ' + response.status);
-      }
-      if(!response.body){
-        throw new Error('Stream request returned no body.');
-      }
+      if(!response.ok) throw new Error('Stream request failed: HTTP ' + response.status);
+      if(!response.body) throw new Error('Stream request returned no body.');
       var reader = response.body.getReader();
       function readChunk(){
         reader.read().then(function(result){
           if(result.done){
+            schedulePoll(200);
             if(sawPayload){
               setStatus('Reply received');
             }else{
@@ -132,10 +233,9 @@
                 sawPayload = true;
                 setStatus('Backend error', 'error');
                 addMsg('System', content.error);
-                return;
-              } else if(content && typeof content === 'object' && content.type === 'propose_edit'){
+              }else if(content && typeof content === 'object' && content.type === 'propose_edit'){
                 renderApprovalCard(content);
-              } else {
+              }else{
                 if(!agentDiv){
                   agentDiv = document.createElement('div');
                   agentDiv.style.marginBottom = '0.8em';
@@ -163,9 +263,18 @@
   }
 
   function sendJson(msg){
-    var params = {sid: sid, msg: msg, provider: provider.value, model: model.value, context: context.checked ? 1 : 0};
-    var url = 'agent-chat?' + new URLSearchParams(params);
-    fetch(url).then(function(response){
+    var params = new URLSearchParams({
+      sid: sid,
+      msg: msg,
+      provider: provider.value,
+      model: model.value,
+      context: context.checked ? 1 : 0
+    });
+    fetch('agent-api-v1-chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
+      body: params.toString()
+    }).then(function(response){
       if(!response.ok){
         throw new Error('Request failed: HTTP ' + response.status);
       }
@@ -176,10 +285,12 @@
         addMsg('System', data.error);
         return;
       }
-      if(data && data.sid) sid = data.sid;
-      var reply = (data && typeof data.reply === 'string') ? data.reply : JSON.stringify(data || '');
-      setStatus('Reply received');
-      addMsg('Agent', reply);
+      if(data && data.chat && data.chat.sid) sid = data.chat.sid;
+      if(data && data.request) updateRequestState(data.request);
+      if(data && data.chat && typeof data.chat.reply === 'string'){
+        addMsg('Agent', data.chat.reply);
+      }
+      schedulePoll(200);
     }).catch(function(err){
       setStatus('Request failed', 'error');
       addMsg('System', err && err.message ? err.message : 'Request failed.');
@@ -196,20 +307,19 @@
       '</div>' +
       '<button class="btn-approve">Approve & Apply</button>' +
       '<button class="btn-reject">Reject</button>';
-    
+
     div.querySelector('.btn-approve').onclick = function(){
-       div.innerHTML = '<i>Applying edit...</i>';
-       sendConfirmedEdit(data);
+      div.innerHTML = '<i>Applying edit...</i>';
+      sendConfirmedEdit(data);
     };
     div.querySelector('.btn-reject').onclick = function(){
-       div.remove();
-       addMsg('System', 'Edit rejected by user.');
+      div.remove();
+      addMsg('System', 'Edit rejected by user.');
     };
     log.appendChild(div);
   }
 
   function sendConfirmedEdit(data){
-    /* We send a special message that the orchestration script will recognize as an approval */
     var confirmMsg = 'CONFIRMED_EDIT: ' + JSON.stringify({
       tool: "edit_file",
       path: data.path,

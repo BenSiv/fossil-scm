@@ -1,0 +1,120 @@
+#
+# Focused smoke tests for the flat Fossil v1 agent API contract.
+#
+
+require_no_open_checkout
+
+set path [file dirname [info script]]
+set backend [file normalize [file join $path fake-agent-backend.sh]]
+
+proc smoke_http_request {repository method url body} {
+  set requestFile [file join [pwd] smoke-http-[getSeqNo].txt]
+  set outFile [file join [pwd] smoke-http-out-[getSeqNo].txt]
+  if {$method eq "POST"} {
+    set len [string length $body]
+    write_file $requestFile [subst {POST $url HTTP/1.0\r
+Host: localhost\r
+User-Agent: Fossil-Agent-V1-Smoke\r
+Content-Type: application/x-www-form-urlencoded\r
+Content-Length: $len\r
+\r
+$body}]
+  } else {
+    write_file $requestFile [subst {GET $url HTTP/1.0\r
+Host: localhost\r
+User-Agent: Fossil-Agent-V1-Smoke\r
+\r
+}]
+  }
+  fossil http --in $requestFile --out $outFile --ipaddr 127.0.0.1 \
+      $repository --localauth -expectError
+  set result [expr {[file exists $outFile] ? [read_file $outFile] : ""}]
+  catch {file delete $requestFile}
+  catch {file delete $outFile}
+  return $result
+}
+
+proc smoke_http_status {response} {
+  set status ""
+  set response [string map [list \r\n \n] $response]
+  regexp {^HTTP/\S+\s+([0-9][0-9][0-9])} $response dummy status
+  return $status
+}
+
+proc smoke_http_body {response} {
+  set response [string map [list \r\n \n] $response]
+  set sep [string first "\n\n" $response]
+  if {$sep<0} { return "" }
+  return [string range $response [expr {$sep+2}] end]
+}
+
+proc smoke_json_sid {body} {
+  set sid ""
+  set marker "\"sid\":"
+  set pos [string first $marker $body]
+  if {$pos>=0} {
+    set rest [string range $body [expr {$pos + [string length $marker]}] end]
+    regexp {^([0-9]+)} $rest -> sid
+  }
+  return $sid
+}
+
+test_setup
+
+fossil test-th-eval --open-config {repository}
+set repository [normalize_result]
+if {[string length $repository] == 0} {
+  puts "Detection of the open repository file failed."
+  test_cleanup_then_return
+}
+
+set cfgDir [file normalize [file join [pwd] agent-v1-smoke-config]]
+file mkdir $cfgDir
+
+write_file [file join $cfgDir agent.json] [subst -nocommands {
+{
+  "provider": "codex",
+  "model": "test-chat-model",
+  "command": "$backend",
+  "embedding_provider": "ollama",
+  "embedding_model": "test-embed-model",
+  "embedding_command": "$backend",
+  "chat_provider_locked": 1
+}
+}]
+
+fossil set agent-config-path [file join $cfgDir agent.json]
+fossil ai init
+
+set response [smoke_http_request $repository POST /agent-api-v1-session-create {title=Smoke+Chat&provider=codex&model=test-chat-model}]
+set RESULT [smoke_http_body $response]
+test agent-v1-smoke-1 {[smoke_http_status $response] eq {200}}
+test agent-v1-smoke-2 {[string first {"api_version":"v1","ok":true} $RESULT]>=0}
+test agent-v1-smoke-3 {[regexp {"session":\{} $RESULT] && [string first "\"request_count\":0" $RESULT]>=0}
+set apiSid [smoke_json_sid $RESULT]
+test agent-v1-smoke-4 {$apiSid ne ""}
+
+set response [smoke_http_request $repository POST /agent-api-v1-chat [subst {sid=$apiSid&msg=smoke+contract+check&provider=codex&model=test-chat-model&context=1}]]
+set RESULT [smoke_http_body $response]
+test agent-v1-smoke-5 {[smoke_http_status $response] eq {200}}
+test agent-v1-smoke-6 {[string first "\"chat\":" $RESULT]>=0}
+test agent-v1-smoke-7 {[string first "\"request_id\":\"req-" $RESULT]>=0}
+test agent-v1-smoke-8 {[string first "\"is_active\":false" $RESULT]>=0}
+test agent-v1-smoke-9 {[string first "\"is_terminal\":true" $RESULT]>=0}
+
+set response [smoke_http_request $repository GET [subst {/agent-api-v1-events?sid=$apiSid&after=0}] {}]
+set RESULT [smoke_http_body $response]
+test agent-v1-smoke-10 {[smoke_http_status $response] eq {200}}
+test agent-v1-smoke-11 {[string first "\"event_type\":\"message\"" $RESULT]>=0 || [string first "\"event_type\":\"progress\"" $RESULT]>=0}
+test agent-v1-smoke-12 {[string first "\"request_id\":\"req-" $RESULT]>=0}
+test agent-v1-smoke-13 {[string first "\"is_terminal\":true" $RESULT]>=0}
+test agent-v1-smoke-14 {[string first "\"request\":" $RESULT]>=0 && [string first "\"rid\":" $RESULT]>=0}
+
+set response [smoke_http_request $repository GET [subst {/agent-api-v1-session?sid=$apiSid}] {}]
+set RESULT [smoke_http_body $response]
+test agent-v1-smoke-15 {[smoke_http_status $response] eq {200}}
+test agent-v1-smoke-16 {[string first "\"last_request_state\":\"finished\"" $RESULT]>=0}
+test agent-v1-smoke-17 {[string first "\"request_count\":1" $RESULT]>=0}
+test agent-v1-smoke-18 {[string first "\"is_terminal\":true" $RESULT]>=0}
+
+test_cleanup

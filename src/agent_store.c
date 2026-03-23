@@ -173,7 +173,9 @@ void agent_chat_session_rename(int sid, const char *zTitle){
 }
 
 int agent_chat_session_exists(int sid){
-  return sid>0 && db_exists("SELECT 1 FROM agentchat_session WHERE sid=%d", sid);
+  return sid>0
+    && db_table_exists("repository","agentchat_session")
+    && db_exists("SELECT 1 FROM agentchat_session WHERE sid=%d", sid);
 }
 
 int agent_chat_latest_session(const char *zUser){
@@ -325,6 +327,9 @@ int agent_chat_session_request_count(int sid){
 
 void agent_emit_request_object_json(int sidCurrent, const char *zRequestId){
   Stmt q;
+  const char *zState;
+  int isActive;
+  int isTerminal;
   if( sidCurrent<=0 || !db_table_exists("repository","agent_request") ){
     CX("null");
     return;
@@ -353,14 +358,27 @@ void agent_emit_request_object_json(int sidCurrent, const char *zRequestId){
     );
   }
   if( db_step(&q)==SQLITE_ROW ){
+    zState = db_column_text(&q, 2);
+    isActive = zState
+      && (fossil_strcmp(zState, "queued")==0
+       || fossil_strcmp(zState, "running")==0
+       || fossil_strcmp(zState, "waiting-approval")==0);
+    isTerminal = zState
+      && (fossil_strcmp(zState, "finished")==0
+       || fossil_strcmp(zState, "failed")==0
+       || fossil_strcmp(zState, "cancelled")==0
+       || fossil_strcmp(zState, "reply")==0
+       || fossil_strcmp(zState, "error")==0);
     CX("{\"rid\":%d,\"request_id\":%!j,\"state\":%!j,\"terminal_acid\":%d,"
-       "\"ctime\":%!j,\"mtime\":%!j}",
+       "\"ctime\":%!j,\"mtime\":%!j,\"is_active\":%s,\"is_terminal\":%s}",
        db_column_int(&q, 0),
        db_column_text(&q, 1),
-       db_column_text(&q, 2),
+       zState,
        db_column_int(&q, 3),
        db_column_text(&q, 4),
-       db_column_text(&q, 5));
+       db_column_text(&q, 5),
+       isActive ? "true" : "false",
+       isTerminal ? "true" : "false");
   }else{
     CX("null");
   }
@@ -555,7 +573,17 @@ void agent_emit_history_object_json(int sidCurrent){
     if( db_table_exists("repository","ai_chat_eval") ){
       db_prepare(&q,
         "SELECT c.acid, c.role, c.kind, c.provider, c.model, c.meta, c.msg,"
-        "       coalesce(e.user_feedback,'')"
+        "       coalesce(e.user_feedback,''),"
+        "       CASE"
+        "         WHEN c.role='user' AND c.kind='prompt' THEN 'message'"
+        "         WHEN c.role='agent' AND c.kind='reply' THEN 'message'"
+        "         WHEN c.role='agent' AND c.kind='error' THEN 'error'"
+        "         WHEN c.role='system' AND c.kind='tool' THEN 'tool_request'"
+        "         WHEN c.role='system' AND c.kind='progress' THEN 'progress'"
+        "         WHEN c.role='system' AND c.kind='context' THEN 'context'"
+        "         ELSE coalesce(c.kind, c.role, '')"
+        "       END,"
+        "       coalesce(json_extract(c.meta,'$.request_id'),'')"
         "  FROM agentchat AS c"
         "  LEFT JOIN ai_chat_eval AS e ON e.sid=c.sid AND e.acid=c.acid"
         " WHERE c.sid=%d"
@@ -564,7 +592,17 @@ void agent_emit_history_object_json(int sidCurrent){
       );
     }else{
       db_prepare(&q,
-        "SELECT acid, role, kind, provider, model, meta, msg, ''"
+        "SELECT acid, role, kind, provider, model, meta, msg, '',"
+        "       CASE"
+        "         WHEN role='user' AND kind='prompt' THEN 'message'"
+        "         WHEN role='agent' AND kind='reply' THEN 'message'"
+        "         WHEN role='agent' AND kind='error' THEN 'error'"
+        "         WHEN role='system' AND kind='tool' THEN 'tool_request'"
+        "         WHEN role='system' AND kind='progress' THEN 'progress'"
+        "         WHEN role='system' AND kind='context' THEN 'context'"
+        "         ELSE coalesce(kind, role, '')"
+        "       END,"
+        "       coalesce(json_extract(meta,'$.request_id'),'')"
         " FROM agentchat WHERE sid=%d"
         " ORDER BY acid ASC",
         sidCurrent
@@ -572,7 +610,8 @@ void agent_emit_history_object_json(int sidCurrent){
     }
     while( db_step(&q)==SQLITE_ROW ){
       CX("%s{\"acid\":%d,\"role\":%!j,\"kind\":%!j,\"provider\":%!j,"
-         "\"model\":%!j,\"meta\":%!j,\"msg\":%!j,\"feedback\":%!j}",
+         "\"model\":%!j,\"meta\":%!j,\"msg\":%!j,\"feedback\":%!j,"
+         "\"event_type\":%!j,\"request_id\":%!j,\"is_terminal\":%s}",
          first ? "" : ",",
          db_column_int(&q, 0),
          db_column_text(&q, 1),
@@ -581,7 +620,13 @@ void agent_emit_history_object_json(int sidCurrent){
          db_column_text(&q, 4),
          db_column_text(&q, 5),
          db_column_text(&q, 6),
-         db_column_text(&q, 7));
+         db_column_text(&q, 7),
+         db_column_text(&q, 8),
+         db_column_text(&q, 9),
+         ((db_column_text(&q,1) && fossil_strcmp(db_column_text(&q,1),"agent")==0
+           && db_column_text(&q,2) && (fossil_strcmp(db_column_text(&q,2),"reply")==0
+                                    || fossil_strcmp(db_column_text(&q,2),"error")==0))
+          ? "true" : "false"));
       first = 0;
     }
     db_finalize(&q);
@@ -598,6 +643,10 @@ void agent_emit_history_json(int sidCurrent){
 
 void agent_emit_events_array_json(int sidCurrent, int afterAcid, int *pLastAcid){
   Stmt q;
+  const char *zRole;
+  const char *zKind;
+  const char *zEventType;
+  int isTerminal;
   int first = 1;
   int lastAcid = afterAcid;
   CX("[");
@@ -605,7 +654,17 @@ void agent_emit_events_array_json(int sidCurrent, int afterAcid, int *pLastAcid)
     if( db_table_exists("repository","ai_chat_eval") ){
       db_prepare(&q,
         "SELECT c.acid, c.role, c.kind, c.provider, c.model, c.meta, c.msg,"
-        "       coalesce(e.user_feedback,'')"
+        "       coalesce(e.user_feedback,''),"
+        "       CASE"
+        "         WHEN c.role='user' AND c.kind='prompt' THEN 'message'"
+        "         WHEN c.role='agent' AND c.kind='reply' THEN 'message'"
+        "         WHEN c.role='agent' AND c.kind='error' THEN 'error'"
+        "         WHEN c.role='system' AND c.kind='tool' THEN 'tool_request'"
+        "         WHEN c.role='system' AND c.kind='progress' THEN 'progress'"
+        "         WHEN c.role='system' AND c.kind='context' THEN 'context'"
+        "         ELSE coalesce(c.kind, c.role, '')"
+        "       END,"
+        "       coalesce(json_extract(c.meta,'$.request_id'),'')"
         "  FROM agentchat AS c"
         "  LEFT JOIN ai_chat_eval AS e ON e.sid=c.sid AND e.acid=c.acid"
         " WHERE c.sid=%d AND c.acid>%d"
@@ -614,7 +673,17 @@ void agent_emit_events_array_json(int sidCurrent, int afterAcid, int *pLastAcid)
       );
     }else{
       db_prepare(&q,
-        "SELECT acid, role, kind, provider, model, meta, msg, ''"
+        "SELECT acid, role, kind, provider, model, meta, msg, '',"
+        "       CASE"
+        "         WHEN role='user' AND kind='prompt' THEN 'message'"
+        "         WHEN role='agent' AND kind='reply' THEN 'message'"
+        "         WHEN role='agent' AND kind='error' THEN 'error'"
+        "         WHEN role='system' AND kind='tool' THEN 'tool_request'"
+        "         WHEN role='system' AND kind='progress' THEN 'progress'"
+        "         WHEN role='system' AND kind='context' THEN 'context'"
+        "         ELSE coalesce(kind, role, '')"
+        "       END,"
+        "       coalesce(json_extract(meta,'$.request_id'),'')"
         " FROM agentchat WHERE sid=%d AND acid>%d"
         " ORDER BY acid ASC",
         sidCurrent, afterAcid
@@ -622,17 +691,30 @@ void agent_emit_events_array_json(int sidCurrent, int afterAcid, int *pLastAcid)
     }
     while( db_step(&q)==SQLITE_ROW ){
       int acid = db_column_int(&q, 0);
+      zRole = db_column_text(&q, 1);
+      zKind = db_column_text(&q, 2);
+      zEventType = db_column_text(&q, 8);
+      isTerminal =
+        (zRole && fossil_strcmp(zRole, "agent")==0
+         && zKind && (fossil_strcmp(zKind, "reply")==0
+                   || fossil_strcmp(zKind, "error")==0))
+        || (zEventType && (fossil_strcmp(zEventType, "error")==0
+                        || fossil_strcmp(zEventType, "finish")==0));
       CX("%s{\"acid\":%d,\"role\":%!j,\"kind\":%!j,\"provider\":%!j,"
-         "\"model\":%!j,\"meta\":%!j,\"msg\":%!j,\"feedback\":%!j}",
+       "\"model\":%!j,\"meta\":%!j,\"msg\":%!j,\"feedback\":%!j,"
+         "\"event_type\":%!j,\"request_id\":%!j,\"is_terminal\":%s}",
          first ? "" : ",",
          acid,
-         db_column_text(&q, 1),
-         db_column_text(&q, 2),
+         zRole,
+         zKind,
          db_column_text(&q, 3),
          db_column_text(&q, 4),
          db_column_text(&q, 5),
          db_column_text(&q, 6),
-         db_column_text(&q, 7));
+         db_column_text(&q, 7),
+         db_column_text(&q, 8),
+         db_column_text(&q, 9),
+         isTerminal ? "true" : "false");
       if( acid>lastAcid ) lastAcid = acid;
       first = 0;
     }
