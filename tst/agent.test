@@ -66,6 +66,12 @@ proc agent_http_body {response} {
   return [string range $response [expr {$sep+2}] end]
 }
 
+proc agent_json_sid {body} {
+  set sid ""
+  regexp {"sid":([0-9]+)} $body -> sid
+  return $sid
+}
+
 test_setup
 
 fossil test-th-eval --open-config {repository}
@@ -540,6 +546,60 @@ test agent-chat-54 {[string first {"acid":6,"role":"user","kind":"prompt"} $RESU
 test agent-chat-55 {[string first {"acid":7,"role":"system","kind":"progress"} $RESULT]>=0}
 test agent-chat-56 {[string first {"acid":8,"role":"agent","kind":"reply"} $RESULT]>=0}
 test agent-chat-57 {[string first {"acid":1,} $RESULT]<0}
+
+set response [agent_http_request $repository POST /agent-api/v1/session/create {title=API+Chat&provider=codex&model=test-chat-model}]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-api-v1-1 {[agent_http_status $response] eq {200}}
+test agent-api-v1-2 {[string first {"api_version":"v1","ok":true} $RESULT]>=0}
+test agent-api-v1-3 {[string first {"session":} $RESULT]>=0}
+test agent-api-v1-4 {[string first {"title":"API Chat"} $RESULT]>=0}
+test agent-api-v1-5 {[string first {"message_count":0} $RESULT]>=0}
+set apiSid [agent_json_sid $RESULT]
+test agent-api-v1-6 {$apiSid ne ""}
+
+set response [agent_http_request $repository GET /agent-api/v1/sessions {}]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-api-v1-7 {[agent_http_status $response] eq {200}}
+test agent-api-v1-8 {[string first {"api_version":"v1","ok":true} $RESULT]>=0}
+test agent-api-v1-9 {[string first [subst {"sid":$apiSid}] $RESULT]>=0}
+test agent-api-v1-10 {[string first {"title":"API Chat"} $RESULT]>=0}
+
+set response [agent_http_request $repository GET [subst {/agent-api/v1/session?sid=$apiSid}] {}]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-api-v1-11 {[agent_http_status $response] eq {200}}
+test agent-api-v1-12 {[string first {"api_version":"v1","ok":true,"session":} $RESULT]>=0}
+test agent-api-v1-13 {[string first [subst {"sid":$apiSid}] $RESULT]>=0}
+test agent-api-v1-14 {[string first {"ctime":"} $RESULT]>=0}
+test agent-api-v1-15 {[string first {"mtime":"} $RESULT]>=0}
+test agent-api-v1-16 {[string first {"messages":[} $RESULT]>=0}
+
+set response [agent_http_request $repository POST /agent-api/v1/session/name [subst {sid=$apiSid&name=Renamed+API+Chat}]]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-api-v1-17 {[agent_http_status $response] eq {200}}
+test agent-api-v1-18 {[string first {"api_version":"v1","ok":true,"session":} $RESULT]>=0}
+test agent-api-v1-19 {[string first {"title":"Renamed API Chat"} $RESULT]>=0}
+
+set response [agent_http_request $repository POST /agent-api/v1/chat [subst {sid=$apiSid&msg=api+bridge+check&model=test-chat-model&context=1}]]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-api-v1-20 {[agent_http_status $response] eq {200}}
+test agent-api-v1-21 {[string first {"api_version":"v1","ok":true,"chat":} $RESULT]>=0}
+test agent-api-v1-22 {[string first {"reply":"} $RESULT]>=0}
+test agent-api-v1-23 {[string first {"provider":"codex"} $RESULT]>=0}
+
+set response [agent_http_request $repository GET [subst {/agent-api/v1/events?sid=$apiSid&after=0}] {}]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-api-v1-24 {[agent_http_status $response] eq {200}}
+test agent-api-v1-25 {[string first {"api_version":"v1","ok":true} $RESULT]>=0}
+test agent-api-v1-26 {[string first [subst {"sid":$apiSid}] $RESULT]>=0}
+test agent-api-v1-27 {[string first {"events":[} $RESULT]>=0}
+test agent-api-v1-28 {[string first {"last_acid":} $RESULT]>=0}
+test agent-api-v1-29 {[string first {"kind":"reply"} $RESULT]>=0}
 
 set response [agent_http_request $repository GET /agent-pool {}]
 set RESULT [agent_http_body $response]

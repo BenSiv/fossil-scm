@@ -34,6 +34,11 @@ Canonical documents for this fork live under [`doc/`](doc/):
   [`doc/ai/OPENCLAW_LESSONS.md`](doc/ai/OPENCLAW_LESSONS.md).
   Comparative design notes from reviewing `~/Fabric` live in
   [`doc/ai/FABRIC_LESSONS.md`](doc/ai/FABRIC_LESSONS.md).
+  The current cross-project roadmap for continuing the Goose/Fossil split now
+  lives in
+  [`doc/ai/FOSSIL_GOOSE_PHASE2_PLAN.md`](doc/ai/FOSSIL_GOOSE_PHASE2_PLAN.md).
+  Cross-project licensing guidance for this forked integration work lives in
+  [`doc/ai/CROSS_PROJECT_LICENSE_POLICY.md`](doc/ai/CROSS_PROJECT_LICENSE_POLICY.md).
   A combined orchestration roadmap drawing from Goose, `gentle-ai`, and
   OpenCode lives in [`doc/ai/ORCHESTRATION_IMPLEMENTATION_PLAN.md`](doc/ai/ORCHESTRATION_IMPLEMENTATION_PLAN.md).
   Knowledge storage direction is defined in
