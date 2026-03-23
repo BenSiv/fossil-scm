@@ -18,7 +18,7 @@
 ** separate file. This file contains only code for the core SQLite library.
 **
 ** The content in this amalgamation comes from Fossil check-in
-** 5c237f1f863a32cf229010d2024d0d1e76a0 with changes in files:
+** 276c350313a1ac2ebc70c1e8e50ed4baecd4 with changes in files:
 **
 **    
 */
@@ -469,10 +469,10 @@ extern "C" {
 */
 #define SQLITE_VERSION        "3.53.0"
 #define SQLITE_VERSION_NUMBER 3053000
-#define SQLITE_SOURCE_ID      "2026-03-18 22:31:56 5c237f1f863a32cf229010d2024d0d1e76a07a4d8b9492b26503b959f1c32485"
+#define SQLITE_SOURCE_ID      "2026-03-23 13:00:56 276c350313a1ac2ebc70c1e8e50ed4baecd4be4d4c93ba04cf5e0078da18700e"
 #define SQLITE_SCM_BRANCH     "trunk"
 #define SQLITE_SCM_TAGS       ""
-#define SQLITE_SCM_DATETIME   "2026-03-18T22:31:56.220Z"
+#define SQLITE_SCM_DATETIME   "2026-03-23T13:00:56.709Z"
 
 /*
 ** CAPI3REF: Run-Time Library Version Numbers
@@ -3550,6 +3550,28 @@ SQLITE_API char *sqlite3_mprintf(const char*,...);
 SQLITE_API char *sqlite3_vmprintf(const char*, va_list);
 SQLITE_API char *sqlite3_snprintf(int,char*,const char*, ...);
 SQLITE_API char *sqlite3_vsnprintf(int,char*,const char*, va_list);
+
+/*
+** CAPI3REF: Text-to-float conversion
+**
+** The sqlite3_atof(X) interface returns a "double" derived from the
+** text representation of a floating point value in X.
+** This interface provides applications with access to the
+** same text&rarr;float conversion routine used by SQLite for SQL parsing
+** and type coercion.  The sqlite3_atof(X) routine works like the standard
+** C-library atof(X) routine with the following exceptions:
+**
+** <ul>
+** <li> Parsing of the input X is strict. If anything about X
+**      is not well-formed, 0.0 is returned.
+** <li> Special values such like "INF", "INFINITY", and "NAN" are not
+**      recognized.
+** <li> Hexadecimal floating point literals are not recognized.
+** <li> The current locale is ignored. The radix character is always ".".
+** <li> The sqlite3_atof() interface does not set errno.
+** </ul>
+*/
+SQLITE_API double sqlite3_atof(const char*);
 
 /*
 ** CAPI3REF: Memory Allocation Subsystem
@@ -24655,7 +24677,7 @@ SQLITE_PRIVATE int sqlite3IntFloatCompare(i64,double);
 SQLITE_PRIVATE i64 sqlite3VdbeIntValue(const Mem*);
 SQLITE_PRIVATE int sqlite3VdbeMemIntegerify(Mem*);
 SQLITE_PRIVATE double sqlite3VdbeRealValue(Mem*);
-SQLITE_PRIVATE SQLITE_NOINLINE double sqlite3MemRealValueRC(Mem*, int*);
+SQLITE_PRIVATE int sqlite3MemRealValueRC(Mem*, double*);
 SQLITE_PRIVATE int sqlite3VdbeBooleanValue(Mem*, int ifNull);
 SQLITE_PRIVATE void sqlite3VdbeIntegerAffinity(Mem*);
 SQLITE_PRIVATE int sqlite3VdbeMemRealify(Mem*);
@@ -36553,6 +36575,20 @@ static u64 sqlite3Multiply128(u64 a, u64 b, u64 *pLo){
 ** The lower 64 bits of A*B are discarded.
 */
 static u64 sqlite3Multiply160(u64 a, u32 aLo, u64 b, u32 *pLo){
+#if (defined(__GNUC__) || defined(__clang__)) \
+        && (defined(__x86_64__) || defined(__aarch64__) || defined(__riscv))
+  __uint128_t r = (__uint128_t)a * b;
+  r += ((__uint128_t)aLo * b) >> 32;
+  *pLo = (r>>32)&0xffffffff;
+  return r>>64;
+#elif defined(_MSC_VER) && defined(_M_X64)
+  u64 r1_hi = __umulh(a,b);
+  u64 r1_lo = a*b;
+  u64 r2 = (__umulh((u64)aLo,b)<<32) + ((aLo*b)>>32);
+  r1_hi += _addcarry_u64(0, r1_lo, r2, &r1_lo);
+  *pLo = r1_lo>>32;
+  return r1_hi;
+#else
   u64 x2 = a>>32;
   u64 x1 = a&0xffffffff;
   u64 x0 = aLo;
@@ -36574,6 +36610,7 @@ static u64 sqlite3Multiply160(u64 a, u32 aLo, u64 b, u32 *pLo){
   r3 += r2>>32;
   *pLo = r2&0xffffffff;
   return (r4<<32) + r3;
+#endif
 }
 
 /*
@@ -36803,6 +36840,9 @@ static void sqlite3Fp2Convert10(u64 m, int e, int n, u64 *pD, int *pP){
 
 /*
 ** Return an IEEE754 floating point value that approximates d*pow(10,p).
+**
+** The (current) algorithm is adapted from the work of Ross Cox at
+** https://github.com/rsc/fpfmt
 */
 static double sqlite3Fp10Convert2(u64 d, int p){
   int b, lp, e, adj, s;
@@ -36854,14 +36894,17 @@ static double sqlite3Fp10Convert2(u64 d, int p){
 **
 ** z[] must be UTF-8 and zero-terminated.
 **
-** Return TRUE if the result is a valid real number (or integer) and FALSE
-** if the string is empty or contains extraneous text.  More specifically
-** return
+** Return positive if the result is a valid real number (or integer) and
+** zero or negative if the string is empty or contains extraneous text.
+** More specifically:
+**
 **      1          =>  The input string is a pure integer
 **      2 or more  =>  The input has a decimal point or eNNN clause
-**      0 or less  =>  The input string is not a valid number
-**     -1          =>  Not a valid number, but has a valid prefix which
-**                     includes a decimal point and/or an eNNN clause
+**      0 or less  =>  The input string is not well-formed
+**     -1          =>  The input is not well-formed, but it does begin
+**                     with a well-formed floating-point literal (with
+**                     a "." or a "eNNN" suffix or both) followed by
+**                     other extraneous text.
 **
 ** Valid numbers are in one of these formats:
 **
@@ -36872,116 +36915,138 @@ static double sqlite3Fp10Convert2(u64 d, int p){
 ** Leading and trailing whitespace is ignored for the purpose of determining
 ** validity.
 **
-** If some prefix of the input string is a valid number, this routine
-** returns FALSE but it still converts the prefix and writes the result
-** into *pResult.
+** Algorithm sketch:  Compute an unsigned 64-bit integer s and a base-10
+** exponent d such that the value encoding by the input is s*pow(10,d).
+** Then invoke sqlite3Fp10Convert2() to calculated the closest possible
+** IEEE754 double.  The sign is added back afterwards, if the input string
+** starts with a "-".  The use of an unsigned 64-bit s mantissa means that
+** only about the first 19 significant digits of the input can contribute
+** to the result.  This can result in suboptimal rounding decisions when
+** correct rounding requires more than 19 input digits.  For example,
+** this routine renders "3500000000000000.2500001" as
+** 3500000000000000.0 instead of 3500000000000000.5 because the decision
+** to round up instead of using banker's rounding to round down is determined
+** by the 23rd significant digit, which this routine ignores. It is not
+** possible to do better without some kind of BigNum.
 */
-#if defined(_MSC_VER)
-#pragma warning(disable : 4756)
-#endif
-SQLITE_PRIVATE int sqlite3AtoF(const char *z, double *pResult){
+SQLITE_PRIVATE int sqlite3AtoF(const char *zIn, double *pResult){
 #ifndef SQLITE_OMIT_FLOATING_POINT
-  /* sign * significand * (10 ^ (esign * exponent)) */
-  int neg = 0;     /* True for a negative value */
-  u64 s = 0;       /* mantissa */
-  int d = 0;       /* Value is s * pow(10,d) */
-  int nDigit = 0;  /* Number of digits processed */
-  int eType = 1;   /* 1: pure integer,  2+: fractional */
+  const unsigned char *z = (const unsigned char*)zIn;
+  int neg = 0;       /* True for a negative value */
+  u64 s = 0;         /* mantissa */
+  int d = 0;         /* Value is s * pow(10,d) */
+  int seenDigit = 0; /* true if any digits seen */
+  int seenFP = 0;    /* True if we've seen a "." or a "e" */
+  unsigned v;        /* Value of a single digit */
 
-  *pResult = 0.0;   /* Default return value, in case of an error */
-
-  /* skip leading spaces */
-  while( sqlite3Isspace(*z) ) z++;
-
-  /* get sign of significand */
-  if( *z=='-' ){
+  start_of_text:
+  if( (v = (unsigned)z[0] - '0')<10 ){
+    parse_integer_part:
+    seenDigit = 1;
+    s = v;
+    z++;
+    while( (v = (unsigned)z[0] - '0')<10 ){
+      s = s*10 + v;
+      z++;
+      if( s>=(LARGEST_INT64-9)/10 ){
+        while( sqlite3Isdigit(z[0]) ){ z++; d++; }
+        break;
+      }
+    }
+  }else if( z[0]=='-' ){
     neg = 1;
     z++;
-  }else if( *z=='+' ){
+    if( (v = (unsigned)z[0] - '0')<10 ) goto parse_integer_part;
+  }else if( z[0]=='+' ){
     z++;
-  }
-
-  /* copy max significant digits to significand */
-  while( sqlite3Isdigit(*z) ){
-    s = s*10 + (*z - '0');
-    z++; nDigit++;
-    if( s>=((LARGEST_INT64-9)/10) ){
-      /* skip non-significant significand digits
-      ** (increase exponent by d to shift decimal left) */
-      while( sqlite3Isdigit(*z) ){ z++; d++; }
-    }
+    if( (v = (unsigned)z[0] - '0')<10 ) goto parse_integer_part;
+  }else if( sqlite3Isspace(z[0]) ){
+    do{ z++; }while( sqlite3Isspace(z[0]) );
+    goto start_of_text;
+  }else{
+    s = 0;
   }
 
   /* if decimal point is present */
   if( *z=='.' ){
     z++;
-    eType++;
-    /* copy digits from after decimal to significand
-    ** (decrease exponent by d to shift decimal right) */
-    while( sqlite3Isdigit(*z) ){
-      if( s<((LARGEST_INT64-9)/10) ){
-        s = s*10 + (*z - '0');
-        d--;
-        nDigit++;
-      }
-      z++;
+    seenFP = 1;
+    if( sqlite3Isdigit(z[0]) ){
+      seenDigit = 1;
+      do{
+        if( s<((LARGEST_INT64-9)/10) ){
+          s = s*10 + z[0] - '0';
+          d--;
+        }
+        z++;
+      }while( sqlite3Isdigit(z[0]) );
     }
+  }
+
+  if( !seenDigit ){
+    *pResult = 0.0;
+    return 0;
   }
 
   /* if exponent is present */
   if( *z=='e' || *z=='E' ){
-    int esign = 1;   /* sign of exponent */
+    int esign;
     z++;
-    eType++;
 
     /* get sign of exponent */
     if( *z=='-' ){
       esign = -1;
       z++;
-    }else if( *z=='+' ){
-      z++;
+    }else{
+      esign = +1;
+      if( *z=='+' ){
+        z++;
+      }
     }
     /* copy digits to exponent */
-    if( sqlite3Isdigit(*z) ){
-      int exp = *z - '0';
+    if( (v = (unsigned)z[0] - '0')<10 ){
+      int exp = v;
       z++;
-      while( sqlite3Isdigit(*z) ){
-        exp = exp<10000 ? (exp*10 + (*z - '0')) : 10000;
+      seenFP = 1;
+      while( (v = (unsigned)z[0] - '0')<10 ){
+        exp = exp<10000 ? (exp*10 + v) : 10000;
         z++;
       }
       d += esign*exp;
     }else{
-      eType = -1;
+      z--;  /* Leave z[0] at 'e' or '+' or '-',
+            ** so that the return is 0 or -1 */
     }
   }
 
   /* skip trailing spaces */
   while( sqlite3Isspace(*z) ) z++;
 
-  /* Zero is a special case */
-  if( s==0 ){
-    *pResult = neg ? -0.0 : +0.0;
-  }else{
-    *pResult = sqlite3Fp10Convert2(s,d);
-    if( neg ) *pResult = -*pResult;
-    assert( !sqlite3IsNaN(*pResult) );
-  }
+  /* Convert s*pow(10,d) into real */
+  *pResult = s ? sqlite3Fp10Convert2(s,d) : 0.0;
+  if( neg ) *pResult = -*pResult;
+  assert( !sqlite3IsNaN(*pResult) );
 
   /* return true if number and no extra non-whitespace characters after */
-  if( z[0]==0 && nDigit>0 ){
-    return eType;
-  }else if( eType>=2 && nDigit>0 ){
-    return -1;
+  if( z[0]==0 ){
+    return seenFP+1;
+  }else if( seenFP ){
+    return -1;   /* Prefix is a floating point number */
   }else{
-    return 0;
+    return 0;    /* Prefix is just an integer */
   }
 #else
   return !sqlite3Atoi64(z, pResult, strlen(z), SQLITE_UTF8);
 #endif /* SQLITE_OMIT_FLOATING_POINT */
 }
-#if defined(_MSC_VER)
-#pragma warning(default : 4756)
-#endif
+
+/*
+** Access to sqlite3AtoF()
+*/
+SQLITE_API double sqlite3_atof(const char *z){
+  double r;
+  return sqlite3AtoF(z,&r)>0 ? r : 0.0;
+}
 
 /*
 ** Digit pairs used to convert a U64 or I64 into text, two digits
@@ -85683,32 +85748,24 @@ SQLITE_PRIVATE i64 sqlite3VdbeIntValue(const Mem *pMem){
 }
 
 /*
-** Invoke sqlite3AtoF() on the text value of pMem and return the
-** double result.  If sqlite3AtoF() returns an error code, write
-** that code into *pRC if (*pRC)!=NULL.
-**
-** The caller must ensure that pMem->db!=0 and that pMem is in
-** mode MEM_Str or MEM_Blob.
+** This routine implements the uncommon and slower path for
+** sqlite3MemValueRC().  It is broken out into a separate
+** no-inline routine so that the main routine can avoid unnecessary
+** stack pushes.
 */
-SQLITE_PRIVATE SQLITE_NOINLINE double sqlite3MemRealValueRC(Mem *pMem, int *pRC){
-  double val = (double)0;
-  int rc = 0;
-  assert( pMem->db!=0 );
-  assert( pMem->flags & (MEM_Str|MEM_Blob) );
-  if( pMem->z==0 ){
-    /* no-op */
-  }else if( pMem->enc==SQLITE_UTF8
-   && ((pMem->flags & MEM_Term)!=0 || sqlite3VdbeMemZeroTerminateIfAble(pMem))
-  ){
-    rc = sqlite3AtoF(pMem->z, &val);
-  }else if( pMem->n==0 ){
-    /* no-op */
-  }else if( pMem->enc==SQLITE_UTF8 ){
+static SQLITE_NOINLINE int sqlite3MemRealValueRCSlowPath(
+  Mem *pMem,
+  double *pValue
+){
+  int rc = SQLITE_OK;
+  *pValue = 0.0;
+  if( pMem->enc==SQLITE_UTF8 ){
     char *zCopy = sqlite3DbStrNDup(pMem->db, pMem->z, pMem->n);
     if( zCopy ){
-      rc = sqlite3AtoF(zCopy, &val);
+      rc = sqlite3AtoF(zCopy, pValue);
       sqlite3DbFree(pMem->db, zCopy);
     }
+    return rc;
   }else{
     int n, i, j;
     char *zCopy;
@@ -85731,13 +85788,49 @@ SQLITE_PRIVATE SQLITE_NOINLINE double sqlite3MemRealValueRC(Mem *pMem, int *pRC)
       }
       assert( j<=n/2 );
       zCopy[j] = 0;
-      rc = sqlite3AtoF(zCopy, &val);
+      rc = sqlite3AtoF(zCopy, pValue);
       if( i<n ) rc = -100;
       sqlite3DbFree(pMem->db, zCopy);
     }
+    return rc;
   }
-  if( pRC ) *pRC = rc;
-  return val;
+}
+
+/*
+** Invoke sqlite3AtoF() on the text value of pMem and return the
+** double result.  If sqlite3AtoF() returns an error code, write
+** that code into *pRC if (*pRC)!=NULL.
+**
+** The caller must ensure that pMem->db!=0 and that pMem is in
+** mode MEM_Str or MEM_Blob.
+*/
+SQLITE_PRIVATE int sqlite3MemRealValueRC(Mem *pMem, double *pValue){
+  assert( pMem->db!=0 );
+  assert( pMem->flags & (MEM_Str|MEM_Blob) );
+  if( pMem->z==0 ){
+    *pValue = 0.0;
+    return 0;
+  }else if( pMem->enc==SQLITE_UTF8
+   && ((pMem->flags & MEM_Term)!=0 || sqlite3VdbeMemZeroTerminateIfAble(pMem))
+  ){
+    return sqlite3AtoF(pMem->z, pValue);
+  }else if( pMem->n==0 ){
+    *pValue = 0.0;
+    return 0;
+  }else{
+    return sqlite3MemRealValueRCSlowPath(pMem, pValue);
+  }
+}
+
+/*
+** This routine acts as a bridge from sqlite3VdbeRealValue() to
+** sqlite3VdbeRealValueRC, allowing sqlite3VdbeRealValue() to avoid
+** stuffing values onto the stack.
+*/
+static SQLITE_NOINLINE double sqlite3MemRealValueNoRC(Mem *pMem){
+  double r;
+  (void)sqlite3MemRealValueRC(pMem, &r);
+  return r;
 }
 
 /*
@@ -85756,7 +85849,7 @@ SQLITE_PRIVATE double sqlite3VdbeRealValue(Mem *pMem){
     testcase( pMem->flags & MEM_IntReal );
     return (double)pMem->u.i;
   }else if( pMem->flags & (MEM_Str|MEM_Blob) ){
-    return sqlite3MemRealValueRC(pMem, 0);
+    return sqlite3MemRealValueNoRC(pMem);
   }else{
     /* (double)0 In case of SQLITE_OMIT_FLOATING_POINT... */
     return (double)0;
@@ -85880,7 +85973,7 @@ SQLITE_PRIVATE int sqlite3VdbeMemNumerify(Mem *pMem){
     sqlite3_int64 ix;
     assert( (pMem->flags & (MEM_Blob|MEM_Str))!=0 );
     assert( pMem->db==0 || sqlite3_mutex_held(pMem->db->mutex) );
-    pMem->u.r = sqlite3MemRealValueRC(pMem, &rc);
+    rc = sqlite3MemRealValueRC(pMem, &pMem->u.r);
     if( ((rc==0 || rc==1) && sqlite3Atoi64(pMem->z, &ix, pMem->n, pMem->enc)<=1)
      || sqlite3RealSameAsInt(pMem->u.r, (ix = sqlite3RealToI64(pMem->u.r)))
     ){
@@ -96320,7 +96413,7 @@ static void applyNumericAffinity(Mem *pRec, int bTryForInt){
   double rValue;
   int rc;
   assert( (pRec->flags & (MEM_Str|MEM_Int|MEM_Real|MEM_IntReal))==MEM_Str );
-  rValue = sqlite3MemRealValueRC(pRec, &rc);
+  rc = sqlite3MemRealValueRC(pRec, &rValue);
   if( rc<=0 ) return;
   if( rc==1 && alsoAnInt(pRec, rValue, &pRec->u.i) ){
     pRec->flags |= MEM_Int;
@@ -96438,7 +96531,7 @@ static u16 SQLITE_NOINLINE computeNumericType(Mem *pMem){
     pMem->u.i = 0;
     return MEM_Int;
   }
-  pMem->u.r = sqlite3MemRealValueRC(pMem, &rc);
+  rc = sqlite3MemRealValueRC(pMem, &pMem->u.r);
   if( rc<=0 ){
     if( rc==0 && sqlite3Atoi64(pMem->z, &ix, pMem->n, pMem->enc)<=1 ){
       pMem->u.i = ix;
@@ -110778,7 +110871,7 @@ static int exprProbability(Expr *p){
   double r = -1.0;
   if( p->op!=TK_FLOAT ) return -1;
   assert( !ExprHasProperty(p, EP_IntValue) );
-  sqlite3AtoF(p->u.zToken, &r);
+  r = sqlite3_atof(p->u.zToken);
   assert( r>=0.0 );
   if( r>1.0 ) return -1;
   return (int)(r*134217728.0);
@@ -116466,8 +116559,7 @@ sqlite3ExprCodeIN_oom_error:
 */
 static void codeReal(Vdbe *v, const char *z, int negateFlag, int iMem){
   if( ALWAYS(z!=0) ){
-    double value;
-    sqlite3AtoF(z, &value);
+    double value = sqlite3_atof(z);
     assert( !sqlite3IsNaN(value) ); /* The new AtoF never returns NaN */
     if( negateFlag ) value = -value;
     sqlite3VdbeAddOp4Dup8(v, OP_Real, 0, iMem, 0, (u8*)&value, P4_REAL);
@@ -128325,9 +128417,10 @@ static void convertToWithoutRowidTable(Parse *pParse, Table *pTab){
     if( !hasColumn(pPk->aiColumn, j, i)
      && (pTab->aCol[i].colFlags & COLFLAG_VIRTUAL)==0
     ){
+      const char *zColl = sqlite3ColumnColl(&pTab->aCol[i]);
       assert( j<pPk->nColumn );
       pPk->aiColumn[j] = i;
-      pPk->azColl[j] = sqlite3StrBINARY;
+      pPk->azColl[j] = zColl ? zColl : sqlite3StrBINARY;
       j++;
     }
   }
@@ -131353,8 +131446,7 @@ SQLITE_PRIVATE void sqlite3RowidConstraint(
 }
 
 /*
-** Check to see if pIndex uses the collating sequence pColl.  Return
-** true if it does and false if it does not.
+** Return true if any column of pIndex uses the zColl collation
 */
 #ifndef SQLITE_OMIT_REINDEX
 static int collationMatch(const char *zColl, Index *pIndex){
@@ -131362,8 +131454,8 @@ static int collationMatch(const char *zColl, Index *pIndex){
   assert( zColl!=0 );
   for(i=0; i<pIndex->nColumn; i++){
     const char *z = pIndex->azColl[i];
-    assert( z!=0 || pIndex->aiColumn[i]<0 );
-    if( pIndex->aiColumn[i]>=0 && 0==sqlite3StrICmp(z, zColl) ){
+    assert( z!=0 );
+    if( 0==sqlite3StrICmp(z, zColl) ){
       return 1;
     }
   }
@@ -131372,72 +131464,39 @@ static int collationMatch(const char *zColl, Index *pIndex){
 #endif
 
 /*
-** Recompute all indices of pTab that use the collating sequence pColl.
-** If pColl==0 then recompute all indices of pTab.
-*/
-#ifndef SQLITE_OMIT_REINDEX
-static void reindexTable(Parse *pParse, Table *pTab, char const *zColl){
-  if( !IsVirtual(pTab) ){
-    Index *pIndex;              /* An index associated with pTab */
-
-    for(pIndex=pTab->pIndex; pIndex; pIndex=pIndex->pNext){
-      if( zColl==0 || collationMatch(zColl, pIndex) ){
-        int iDb = sqlite3SchemaToIndex(pParse->db, pTab->pSchema);
-        sqlite3BeginWriteOperation(pParse, 0, iDb);
-        sqlite3RefillIndex(pParse, pIndex, -1);
-      }
-    }
-  }
-}
-#endif
-
-/*
-** Recompute all indices of all tables in all databases where the
-** indices use the collating sequence pColl.  If pColl==0 then recompute
-** all indices everywhere.
-*/
-#ifndef SQLITE_OMIT_REINDEX
-static void reindexDatabases(Parse *pParse, char const *zColl){
-  Db *pDb;                    /* A single database */
-  int iDb;                    /* The database index number */
-  sqlite3 *db = pParse->db;   /* The database connection */
-  HashElem *k;                /* For looping over tables in pDb */
-  Table *pTab;                /* A table in the database */
-
-  assert( sqlite3BtreeHoldsAllMutexes(db) );  /* Needed for schema access */
-  for(iDb=0, pDb=db->aDb; iDb<db->nDb; iDb++, pDb++){
-    assert( pDb!=0 );
-    for(k=sqliteHashFirst(&pDb->pSchema->tblHash);  k; k=sqliteHashNext(k)){
-      pTab = (Table*)sqliteHashData(k);
-      reindexTable(pParse, pTab, zColl);
-    }
-  }
-}
-#endif
-
-/*
 ** Generate code for the REINDEX command.
 **
 **        REINDEX                            -- 1
 **        REINDEX  <collation>               -- 2
-**        REINDEX  ?<database>.?<tablename>  -- 3
-**        REINDEX  ?<database>.?<indexname>  -- 4
+**        REINDEX  ?<database>.?<indexname>  -- 3
+**        REINDEX  ?<database>.?<tablename>  -- 4
+**        REINDEX  EXPRESSIONS               -- 5
 **
-** Form 1 causes all indices in all attached databases to be rebuilt.
-** Form 2 rebuilds all indices in all databases that use the named
+** Form 1 causes all indexes in all attached databases to be rebuilt.
+** Form 2 rebuilds all indexes in all databases that use the named
 ** collating function.  Forms 3 and 4 rebuild the named index or all
-** indices associated with the named table.
+** indexes associated with the named table, respectively.  Form 5
+** rebuilds all expression indexes in addition to all collations,
+** indexes, or tables named "EXPRESSIONS".
+**
+** If the name is ambiguous such that it matches two or more of
+** forms 2 through 5, then rebuild the union of all matching indexes,
+** taken care to avoid rebuilding the same index more than once.
 */
 #ifndef SQLITE_OMIT_REINDEX
 SQLITE_PRIVATE void sqlite3Reindex(Parse *pParse, Token *pName1, Token *pName2){
   CollSeq *pColl;             /* Collating sequence to be reindexed, or NULL */
-  char *z;                    /* Name of a table or index */
-  const char *zDb;            /* Name of the database */
-  Table *pTab;                /* A table in the database */
-  Index *pIndex;              /* An index associated with pTab */
-  int iDb;                    /* The database index number */
+  char *z = 0;                /* Name of a table or index or collation */
+  const char *zDb = 0;        /* Name of the database */
+  int iReDb = -1;             /* The database index number */
   sqlite3 *db = pParse->db;   /* The database connection */
   Token *pObjName;            /* Name of the table or index to be reindexed */
+  int bMatch = 0;             /* At least one name match */
+  const char *zColl = 0;      /* Rebuild indexes using this collation */
+  Table *pReTab = 0;          /* Rebuild all indexes of this table */
+  Index *pReIndex = 0;        /* Rebuild this index */
+  int isExprIdx = 0;          /* Rebuild all expression indexes */
+  int bAll = 0;               /* Rebuild all indexes */
 
   /* Read the database schema. If an error occurs, leave an error message
   ** and code in pParse and return NULL. */
@@ -131446,41 +131505,66 @@ SQLITE_PRIVATE void sqlite3Reindex(Parse *pParse, Token *pName1, Token *pName2){
   }
 
   if( pName1==0 ){
-    reindexDatabases(pParse, 0);
-    return;
+    /* rebuild all indexes */
+    bMatch = 1;
+    bAll = 1;
   }else if( NEVER(pName2==0) || pName2->z==0 ){
-    char *zColl;
     assert( pName1->z );
-    zColl = sqlite3NameFromToken(pParse->db, pName1);
-    if( !zColl ) return;
-    pColl = sqlite3FindCollSeq(db, ENC(db), zColl, 0);
-    if( pColl ){
-      reindexDatabases(pParse, zColl);
-      sqlite3DbFree(db, zColl);
-      return;
+    z = sqlite3NameFromToken(pParse->db, pName1);
+    if( z==0 ) return;
+  }else{
+    iReDb = sqlite3TwoPartName(pParse, pName1, pName2, &pObjName);
+    if( iReDb<0 ) return;
+    z = sqlite3NameFromToken(db, pObjName);
+    if( z==0 ) return;
+    zDb = db->aDb[iReDb].zDbSName;
+  }
+  if( !bAll ){
+    if( zDb==0 && sqlite3StrICmp(z, "expressions")==0 ){
+      isExprIdx = 1;
+      bMatch = 1;
     }
-    sqlite3DbFree(db, zColl);
+    if( zDb==0 && (pColl = sqlite3FindCollSeq(db, ENC(db), z, 0))!=0 ){
+      zColl = z;
+      bMatch = 1;
+    }
+    if( zColl==0 && (pReTab = sqlite3FindTable(db, z, zDb))!=0 ){
+      bMatch = 1;
+    }
+    if( zColl==0 && (pReIndex = sqlite3FindIndex(db, z, zDb))!=0 ){
+      bMatch = 1;
+    }
   }
-  iDb = sqlite3TwoPartName(pParse, pName1, pName2, &pObjName);
-  if( iDb<0 ) return;
-  z = sqlite3NameFromToken(db, pObjName);
-  if( z==0 ) return;
-  zDb = pName2->n ? db->aDb[iDb].zDbSName : 0;
-  pTab = sqlite3FindTable(db, z, zDb);
-  if( pTab ){
-    reindexTable(pParse, pTab, 0);
-    sqlite3DbFree(db, z);
-    return;
+  if( bMatch ){
+    int iDb;
+    HashElem *k;
+    Table *pTab;
+    Index *pIdx;
+    Db *pDb;
+    for(iDb=0, pDb=db->aDb; iDb<db->nDb; iDb++, pDb++){
+      assert( pDb!=0 );
+      if( iReDb>=0 && iReDb!=iDb ) continue;
+      for(k=sqliteHashFirst(&pDb->pSchema->tblHash); k; k=sqliteHashNext(k)){
+        pTab = (Table*)sqliteHashData(k);
+        if( IsVirtual(pTab) ) continue;
+        for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
+          if( bAll
+           || pTab==pReTab
+           || pIdx==pReIndex
+           || (isExprIdx && pIdx->bHasExpr)
+           || (zColl!=0 && collationMatch(zColl,pIdx))
+          ){
+            sqlite3BeginWriteOperation(pParse, 0, iDb);
+            sqlite3RefillIndex(pParse, pIdx, -1);
+          }
+        } /* End loop over indexes of pTab */
+      } /* End loop over tables of iDb */
+    } /* End loop over databases */
+  }else{
+    sqlite3ErrorMsg(pParse, "unable to identify the object to be reindexed");
   }
-  pIndex = sqlite3FindIndex(db, z, zDb);
   sqlite3DbFree(db, z);
-  if( pIndex ){
-    iDb = sqlite3SchemaToIndex(db, pIndex->pTable->pSchema);
-    sqlite3BeginWriteOperation(pParse, 0, iDb);
-    sqlite3RefillIndex(pParse, pIndex, -1);
-    return;
-  }
-  sqlite3ErrorMsg(pParse, "unable to identify the object to be reindexed");
+  return;
 }
 #endif
 
@@ -142131,6 +142215,8 @@ struct sqlite3_api_routines {
   void (*str_free)(sqlite3_str*);
   int (*carray_bind)(sqlite3_stmt*,int,void*,int,int,void(*)(void*));
   int (*carray_bind_v2)(sqlite3_stmt*,int,void*,int,int,void(*)(void*),void*);
+  /* Version 3.53.0 and later */
+  double (*atof)(const char*);
 };
 
 /*
@@ -142474,6 +142560,8 @@ typedef int (*sqlite3_loadext_entry)(
 #define sqlite3_str_free               sqlite3_api->str_free
 #define sqlite3_carray_bind            sqlite3_api->carray_bind
 #define sqlite3_carray_bind_v2         sqlite3_api->carray_bind_v2
+/* Version 3.53.0 and later */
+#define sqlite3_atof                   sqlite3_api->atof
 #endif /* !defined(SQLITE_CORE) && !defined(SQLITE_OMIT_LOAD_EXTENSION) */
 
 #if !defined(SQLITE_CORE) && !defined(SQLITE_OMIT_LOAD_EXTENSION)
@@ -143006,11 +143094,12 @@ static const sqlite3_api_routines sqlite3Apis = {
   sqlite3_str_free,
 #ifdef SQLITE_ENABLE_CARRAY
   sqlite3_carray_bind,
-  sqlite3_carray_bind_v2
+  sqlite3_carray_bind_v2,
 #else
   0,
-  0
+  0,
 #endif
+  sqlite3_atof
 };
 
 /* True if x is the directory separator character
@@ -172277,7 +172366,12 @@ static int whereLoopAddBtree(
       whereLoopOutputAdjust(pWC, pNew, rSize);
       if( pSrc->fg.isSubquery ){
         if( pSrc->fg.viaCoroutine ) pNew->wsFlags |= WHERE_COROUTINE;
-        pNew->u.btree.pOrderBy = pSrc->u4.pSubq->pSelect->pOrderBy;
+        /* Do not set btree.pOrderBy for a recursive CTE. In this case
+        ** the ORDER BY clause does not determine the overall order that
+        ** rows are emitted from the CTE in.  */
+        if( (pSrc->u4.pSubq->pSelect->selFlags & SF_Recursive)==0 ){
+          pNew->u.btree.pOrderBy = pSrc->u4.pSubq->pSelect->pOrderBy;
+        }
       }else if( pSrc->fg.fromExists ){
         pNew->nOut = 0;
       }
@@ -212775,6 +212869,7 @@ static void jsonReturnString(
 ){
   assert( (pParse!=0)==(ctx!=0) );
   assert( ctx==0 || ctx==p->pCtx );
+  jsonStringTerminate(p);
   if( p->eErr==0 ){
     int flags = SQLITE_PTR_TO_INT(sqlite3_user_data(p->pCtx));
     if( flags & JSON_BLOB ){
@@ -212782,7 +212877,7 @@ static void jsonReturnString(
     }else if( p->bStatic ){
       sqlite3_result_text64(p->pCtx, p->zBuf, p->nUsed,
                             SQLITE_TRANSIENT, SQLITE_UTF8);
-    }else if( jsonStringTerminate(p) ){
+    }else{
       if( pParse && pParse->bJsonIsRCStr==0 && pParse->nBlobAlloc>0 ){
         int rc;
         pParse->zJson = sqlite3RCStrRef(p->zBuf);
@@ -212798,8 +212893,6 @@ static void jsonReturnString(
       sqlite3_result_text64(p->pCtx, sqlite3RCStrRef(p->zBuf), p->nUsed,
                             sqlite3RCStrUnref,
                             SQLITE_UTF8);
-    }else{
-      sqlite3_result_error_nomem(p->pCtx);
     }
   }else if( p->eErr & JSTRING_OOM ){
     sqlite3_result_error_nomem(p->pCtx);
@@ -214013,12 +214106,8 @@ static int jsonConvertTextToBlob(
 */
 static void jsonReturnStringAsBlob(JsonString *pStr){
   JsonParse px;
+  assert( pStr->eErr==0 );
   memset(&px, 0, sizeof(px));
-  jsonStringTerminate(pStr);
-  if( pStr->eErr ){
-    sqlite3_result_error_nomem(pStr->pCtx);
-    return;
-  }
   px.zJson = pStr->zBuf;
   px.nJson = pStr->nUsed;
   px.db = sqlite3_context_db_handle(pStr->pCtx);
@@ -216733,7 +216822,8 @@ static void jsonArrayCompute(sqlite3_context *ctx, int isFinal){
   pStr = (JsonString*)sqlite3_aggregate_context(ctx, 0);
   if( pStr ){
     pStr->pCtx = ctx;
-    jsonAppendChar(pStr, ']');
+    jsonAppendRawNZ(pStr, "]", 2);
+    jsonStringTrimOneChar(pStr);
     if( pStr->eErr ){
       jsonReturnString(pStr, 0, 0);
       return;
@@ -216856,7 +216946,8 @@ static void jsonObjectCompute(sqlite3_context *ctx, int isFinal){
   int flags = SQLITE_PTR_TO_INT(sqlite3_user_data(ctx));
   pStr = (JsonString*)sqlite3_aggregate_context(ctx, 0);
   if( pStr ){
-    jsonAppendChar(pStr, '}');
+    jsonAppendRawNZ(pStr, "}", 2);
+    jsonStringTrimOneChar(pStr);
     pStr->pCtx = ctx;
     if( pStr->eErr ){
       jsonReturnString(pStr, 0, 0);
@@ -259197,7 +259288,7 @@ static void fts5SetEstimatedRows(sqlite3_index_info *pIdxInfo, i64 nRow){
   if( sqlite3_libversion_number()>=3008002 )
 #endif
   {
-    pIdxInfo->estimatedRows = nRow;
+    pIdxInfo->estimatedRows = MAX(1, nRow);
   }
 #endif
 }
@@ -259266,19 +259357,30 @@ static int fts5UsePatternMatch(
 **  a) If a MATCH operator is present, the cost depends on the other
 **     constraints also present. As follows:
 **
-**       * No other constraints:         cost=1000.0
-**       * One rowid range constraint:   cost=750.0
-**       * Both rowid range constraints: cost=500.0
-**       * An == rowid constraint:       cost=100.0
+**       * No other constraints:         cost=50000.0
+**       * One rowid range constraint:   cost=37500.0
+**       * Both rowid range constraints: cost=30000.0
+**       * An == rowid constraint:       cost=25000.0
 **
 **  b) Otherwise, if there is no MATCH:
 **
-**       * No other constraints:         cost=1000000.0
-**       * One rowid range constraint:   cost=750000.0
-**       * Both rowid range constraints: cost=250000.0
-**       * An == rowid constraint:       cost=10.0
+**       * No other constraints:         cost=3000000.0
+**       * One rowid range constraints:  cost=2250000.0
+**       * Both rowid range constraint:  cost=750000.0
+**       * An == rowid constraint:       cost=25.0
 **
 ** Costs are not modified by the ORDER BY clause.
+**
+** The ratios used in case (a) are based on informal results obtained from
+** the tool/fts5cost.tcl script. The "MATCH and ==" combination has the
+** cost set quite high because the query may be a prefix query. Unless
+** there is a prefix index, prefix queries with rowid constraints are much
+** more expensive than non-prefix queries with rowid constraints.
+**
+** The estimated rows returned is set to the cost/40. For simple queries,
+** experimental results show that cost/4 might be about right. But for
+** more complex queries that use multiple terms the number of rows might
+** be far fewer than this. So we compromise and use cost/40.
 */
 static int fts5BestIndexMethod(sqlite3_vtab *pVTab, sqlite3_index_info *pInfo){
   Fts5Table *pTab = (Fts5Table*)pVTab;
@@ -259404,21 +259506,35 @@ static int fts5BestIndexMethod(sqlite3_vtab *pVTab, sqlite3_index_info *pInfo){
 
   /* Calculate the estimated cost based on the flags set in idxFlags. */
   if( bSeenEq ){
-    pInfo->estimatedCost = nSeenMatch ? 1000.0 : 25.0;
-    fts5SetUniqueFlag(pInfo);
+    pInfo->estimatedCost = nSeenMatch ? 25000.0 : 25.0;
     fts5SetEstimatedRows(pInfo, 1);
+    fts5SetUniqueFlag(pInfo);
   }else{
-    if( bSeenLt && bSeenGt ){
-      pInfo->estimatedCost = nSeenMatch ? 5000.0 :   750000.0;
-    }else if( bSeenLt || bSeenGt ){
-      pInfo->estimatedCost = nSeenMatch ? 7500.0 :  2250000.0;
+    i64 nEstRows;
+    if( nSeenMatch ){
+      if( bSeenLt && bSeenGt ){
+        pInfo->estimatedCost = 50000.0;
+      }else if( bSeenLt || bSeenGt ){
+        pInfo->estimatedCost = 37500.0;
+      }else{
+        pInfo->estimatedCost = 50000.0;
+      }
+      nEstRows = (i64)(pInfo->estimatedCost / 40.0);
+      for(i=1; i<nSeenMatch; i++){
+        pInfo->estimatedCost *= 2.5;
+        nEstRows = nEstRows / 2;
+      }
     }else{
-      pInfo->estimatedCost = nSeenMatch ? 10000.0 : 3000000.0;
+      if( bSeenLt && bSeenGt ){
+        pInfo->estimatedCost = 750000.0;
+      }else if( bSeenLt || bSeenGt ){
+        pInfo->estimatedCost = 2250000.0;
+      }else{
+        pInfo->estimatedCost = 3000000.0;
+      }
+      nEstRows = (i64)(pInfo->estimatedCost / 4.0);
     }
-    for(i=1; i<nSeenMatch; i++){
-      pInfo->estimatedCost *= 0.4;
-    }
-    fts5SetEstimatedRows(pInfo, (i64)(pInfo->estimatedCost / 4.0));
+    fts5SetEstimatedRows(pInfo, nEstRows);
   }
 
   pInfo->idxNum = idxFlags;
@@ -262279,7 +262395,7 @@ static void fts5SourceIdFunc(
 ){
   assert( nArg==0 );
   UNUSED_PARAM2(nArg, apUnused);
-  sqlite3_result_text(pCtx, "fts5: 2026-03-18 15:40:26 971aa34b3fd86ba30fe170886d9f83c17159b1638c4bd4fb6cdef79b1c9a88e2", -1, SQLITE_TRANSIENT);
+  sqlite3_result_text(pCtx, "fts5: 2026-03-23 12:25:52 1553a60506fa29b5f00535ae0f7aeb8cc94ebe84015386b3248fd8491108fc60", -1, SQLITE_TRANSIENT);
 }
 
 /*
