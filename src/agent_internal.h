@@ -17,6 +17,9 @@ int agent_chat_latest_session(const char *zUser);
 int agent_chat_latest_terminal_acid(int sid);
 int agent_chat_is_terminal_acid(int sid, int acid);
 const char *agent_chat_session_state(int sid);
+const char *agent_chat_session_request_id(int sid);
+const char *agent_chat_session_request_state(int sid);
+int agent_chat_session_request_count(int sid);
 int agent_chat_save(
   int sid,
   const char *zUser,
@@ -48,6 +51,12 @@ void agent_emit_session_list_json(const char *zUser);
 void agent_emit_history_object_json(int sidCurrent);
 void agent_emit_events_array_json(int sidCurrent, int afterAcid, int *pLastAcid);
 void agent_emit_session_array_json(const char *zUser);
+void agent_emit_active_request_ids_json(int sidCurrent);
+void agent_emit_request_object_json(int sidCurrent, const char *zRequestId);
+void agent_emit_latest_request_json(int sidCurrent);
+
+int agent_request_create(int sid, const char *zRequestId, const char *zState);
+void agent_request_set_state(int rid, const char *zState, int terminalAcid);
 
 const char *agent_chat_session_model(int sid, const char *zDefault);
 const char *agent_chat_session_provider(int sid, const char *zDefault);

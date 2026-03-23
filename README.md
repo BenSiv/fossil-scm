@@ -37,6 +37,10 @@ Canonical documents for this fork live under [`doc/`](doc/):
   The current cross-project roadmap for continuing the Goose/Fossil split now
   lives in
   [`doc/ai/FOSSIL_GOOSE_PHASE2_PLAN.md`](doc/ai/FOSSIL_GOOSE_PHASE2_PLAN.md).
+  The Fossil-first roadmap for making the agent and knowledge system
+  self-contained, with Goose treated as optional or eventually deprecated,
+  lives in
+  [`doc/ai/FOSSIL_SELF_CONTAINED_AGENT_PLAN.md`](doc/ai/FOSSIL_SELF_CONTAINED_AGENT_PLAN.md).
   Cross-project licensing guidance for this forked integration work lives in
   [`doc/ai/CROSS_PROJECT_LICENSE_POLICY.md`](doc/ai/CROSS_PROJECT_LICENSE_POLICY.md).
   A combined orchestration roadmap drawing from Goose, `gentle-ai`, and

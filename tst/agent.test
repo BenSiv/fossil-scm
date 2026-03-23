@@ -547,7 +547,7 @@ test agent-chat-55 {[string first {"acid":7,"role":"system","kind":"progress"} $
 test agent-chat-56 {[string first {"acid":8,"role":"agent","kind":"reply"} $RESULT]>=0}
 test agent-chat-57 {[string first {"acid":1,} $RESULT]<0}
 
-set response [agent_http_request $repository POST /agent-api/v1/session/create {title=API+Chat&provider=codex&model=test-chat-model}]
+set response [agent_http_request $repository POST /agent-api-v1-session-create {title=API+Chat&provider=codex&model=test-chat-model}]
 set RESULT [agent_http_body $response]
 set CODE 0
 test agent-api-v1-1 {[agent_http_status $response] eq {200}}
@@ -555,43 +555,51 @@ test agent-api-v1-2 {[string first {"api_version":"v1","ok":true} $RESULT]>=0}
 test agent-api-v1-3 {[string first {"session":} $RESULT]>=0}
 test agent-api-v1-4 {[string first {"title":"API Chat"} $RESULT]>=0}
 test agent-api-v1-5 {[string first {"message_count":0} $RESULT]>=0}
+test agent-api-v1-5a {[string first {"request_count":0} $RESULT]>=0}
 set apiSid [agent_json_sid $RESULT]
 test agent-api-v1-6 {$apiSid ne ""}
 
-set response [agent_http_request $repository GET /agent-api/v1/sessions {}]
+set response [agent_http_request $repository GET /agent-api-v1-sessions {}]
 set RESULT [agent_http_body $response]
 set CODE 0
 test agent-api-v1-7 {[agent_http_status $response] eq {200}}
 test agent-api-v1-8 {[string first {"api_version":"v1","ok":true} $RESULT]>=0}
 test agent-api-v1-9 {[string first [subst {"sid":$apiSid}] $RESULT]>=0}
 test agent-api-v1-10 {[string first {"title":"API Chat"} $RESULT]>=0}
+test agent-api-v1-10a {[string first {"request_count":0} $RESULT]>=0}
 
-set response [agent_http_request $repository GET [subst {/agent-api/v1/session?sid=$apiSid}] {}]
+set response [agent_http_request $repository GET [subst {/agent-api-v1-session?sid=$apiSid}] {}]
 set RESULT [agent_http_body $response]
 set CODE 0
 test agent-api-v1-11 {[agent_http_status $response] eq {200}}
-test agent-api-v1-12 {[string first {"api_version":"v1","ok":true,"session":} $RESULT]>=0}
+test agent-api-v1-12 {[string first {"api_version":"v1","ok":true} $RESULT]>=0 && [string first {"session":} $RESULT]>=0}
 test agent-api-v1-13 {[string first [subst {"sid":$apiSid}] $RESULT]>=0}
 test agent-api-v1-14 {[string first {"ctime":"} $RESULT]>=0}
 test agent-api-v1-15 {[string first {"mtime":"} $RESULT]>=0}
 test agent-api-v1-16 {[string first {"messages":[} $RESULT]>=0}
+test agent-api-v1-16a {[string first {"last_request_id":""} $RESULT]>=0}
+test agent-api-v1-16b {[string first {"request_count":0} $RESULT]>=0}
+test agent-api-v1-16c {[string first "\"request\":null" $RESULT]>=0}
 
-set response [agent_http_request $repository POST /agent-api/v1/session/name [subst {sid=$apiSid&name=Renamed+API+Chat}]]
+set response [agent_http_request $repository POST /agent-api-v1-session-name [subst {sid=$apiSid&name=Renamed+API+Chat}]]
 set RESULT [agent_http_body $response]
 set CODE 0
 test agent-api-v1-17 {[agent_http_status $response] eq {200}}
-test agent-api-v1-18 {[string first {"api_version":"v1","ok":true,"session":} $RESULT]>=0}
+test agent-api-v1-18 {[string first {"api_version":"v1","ok":true} $RESULT]>=0 && [string first {"session":} $RESULT]>=0}
 test agent-api-v1-19 {[string first {"title":"Renamed API Chat"} $RESULT]>=0}
 
-set response [agent_http_request $repository POST /agent-api/v1/chat [subst {sid=$apiSid&msg=api+bridge+check&model=test-chat-model&context=1}]]
+set response [agent_http_request $repository POST /agent-api-v1-chat [subst {sid=$apiSid&msg=api+bridge+check&model=test-chat-model&context=1}]]
 set RESULT [agent_http_body $response]
 set CODE 0
 test agent-api-v1-20 {[agent_http_status $response] eq {200}}
-test agent-api-v1-21 {[string first {"api_version":"v1","ok":true,"chat":} $RESULT]>=0}
-test agent-api-v1-22 {[string first {"reply":"} $RESULT]>=0}
-test agent-api-v1-23 {[string first {"provider":"codex"} $RESULT]>=0}
+test agent-api-v1-21 {[string first {"api_version":"v1","ok":true} $RESULT]>=0 && [string first "\"chat\":" $RESULT]>=0}
+test agent-api-v1-22 {[string first "\"reply\":\"" $RESULT]>=0}
+test agent-api-v1-23 {[string first "\"provider\":\"codex\"" $RESULT]>=0}
+test agent-api-v1-23a {[string first "\"request_id\":\"req-" $RESULT]>=0}
+test agent-api-v1-23b {[string first "\"request\":\{\"rid\":" $RESULT]>=0}
+test agent-api-v1-23c {[string first "\"state\":\"finished\"" $RESULT]>=0}
 
-set response [agent_http_request $repository GET [subst {/agent-api/v1/events?sid=$apiSid&after=0}] {}]
+set response [agent_http_request $repository GET [subst {/agent-api-v1-events?sid=$apiSid&after=0}] {}]
 set RESULT [agent_http_body $response]
 set CODE 0
 test agent-api-v1-24 {[agent_http_status $response] eq {200}}
@@ -600,6 +608,59 @@ test agent-api-v1-26 {[string first [subst {"sid":$apiSid}] $RESULT]>=0}
 test agent-api-v1-27 {[string first {"events":[} $RESULT]>=0}
 test agent-api-v1-28 {[string first {"last_acid":} $RESULT]>=0}
 test agent-api-v1-29 {[string first {"kind":"reply"} $RESULT]>=0}
+test agent-api-v1-30 {[string first {"capabilities":{"backend":"fossil"}} $RESULT]>=0}
+test agent-api-v1-30a {[string first {"request_count":1} $RESULT]>=0 || [string first {"request_count":2} $RESULT]>=0}
+test agent-api-v1-30aa {[string first "\"request\":\{\"rid\":" $RESULT]>=0}
+test agent-api-v1-30ab {[string first "\"request_id\":\"req-" $RESULT]>=0}
+test agent-api-v1-30ac {[string first "\\\"request_id\\\":\\\"req-" $RESULT]>=0}
+
+set response [agent_http_request $repository GET [subst {/agent-api-v1-session?sid=$apiSid}] {}]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-api-v1-30b {[agent_http_status $response] eq {200}}
+test agent-api-v1-30c {[string first {"last_request_id":"req-} $RESULT]>=0}
+test agent-api-v1-30d {[string first {"last_request_state":"finished"} $RESULT]>=0}
+test agent-api-v1-30e {[string first {"state":"reply"} $RESULT]>=0 || [string first {"state":"finished"} $RESULT]>=0}
+test agent-api-v1-30f {[string first "\"request\":\{\"rid\":" $RESULT]>=0}
+
+set response [agent_http_request $repository GET /agent-api-v1-capabilities {}]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-api-v1-31 {[agent_http_status $response] eq {200}}
+test agent-api-v1-32 {[string first {"api_version":"v1","ok":true,"capabilities":} $RESULT]>=0}
+test agent-api-v1-33 {[string first {"events":"poll-only"} $RESULT]>=0}
+test agent-api-v1-34 {[string first {"requestCancel":false} $RESULT]>=0}
+test agent-api-v1-35 {[string first {"sessionDelete":false} $RESULT]>=0}
+test agent-api-v1-36 {[string first {"sessionFork":false} $RESULT]>=0}
+
+set response [agent_http_request $repository GET [subst {/agent-api-v1-requests-active?sid=$apiSid}] {}]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-api-v1-37 {[agent_http_status $response] eq {200}}
+test agent-api-v1-38 {[string first {"request_ids":[]} $RESULT]>=0}
+test agent-api-v1-39 {[string first [subst {"sid":$apiSid}] $RESULT]>=0}
+
+set response [agent_http_request $repository POST /agent-api-v1-request-cancel [subst {sid=$apiSid&request_id=test-request-1}]]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-api-v1-40 {[agent_http_status $response] eq {200}}
+test agent-api-v1-41 {[string first {"ok":false} $RESULT]>=0}
+test agent-api-v1-42 {[string first {"error_code":"unsupported"} $RESULT]>=0}
+test agent-api-v1-43 {[string first {request cancellation is not supported} $RESULT]>=0}
+
+set response [agent_http_request $repository POST /agent-api-v1-session-delete [subst {sid=$apiSid}]]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-api-v1-44 {[agent_http_status $response] eq {200}}
+test agent-api-v1-45 {[string first {"error_code":"unsupported"} $RESULT]>=0}
+test agent-api-v1-46 {[string first {session deletion is not supported} $RESULT]>=0}
+
+set response [agent_http_request $repository POST /agent-api-v1-session-fork [subst {sid=$apiSid&acid=1}]]
+set RESULT [agent_http_body $response]
+set CODE 0
+test agent-api-v1-47 {[agent_http_status $response] eq {200}}
+test agent-api-v1-48 {[string first {"error_code":"unsupported"} $RESULT]>=0}
+test agent-api-v1-49 {[string first {session fork is not supported} $RESULT]>=0}
 
 set response [agent_http_request $repository GET /agent-pool {}]
 set RESULT [agent_http_body $response]

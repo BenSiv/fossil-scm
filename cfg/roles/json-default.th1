@@ -7,48 +7,48 @@ set context ""
 set retrieval_qid 0
 
 if {$context_enabled} {
-  set event_meta "{\"stage\":\"context\",\"status\":\"running\"}"
+  set event_meta "{\"request_id\":\"$request_id\",\"stage\":\"context\",\"status\":\"running\"}"
   set event_msg "Assembling repository context..."
   agent_save_event $sid $user "progress" $provider $model $event_meta $event_msg
   set context [agent_context $msg $model]
   set retrieval_qid [agent_last_retrieval_qid]
   if {[string compare $context ""] != 0} {
     if {$retrieval_qid > 0} {
-      set event_meta "{\"stage\":\"context\",\"hidden\":true,\"retrieval_qid\":$retrieval_qid}"
+      set event_meta "{\"request_id\":\"$request_id\",\"stage\":\"context\",\"hidden\":true,\"retrieval_qid\":$retrieval_qid}"
     } else {
-      set event_meta "{\"stage\":\"context\",\"hidden\":true}"
+      set event_meta "{\"request_id\":\"$request_id\",\"stage\":\"context\",\"hidden\":true}"
     }
     agent_save_event $sid $user "context" $provider $model $event_meta $context
     set full_prompt "$system_prompt\n\nContext:\n$context\n\nUser request:\n$msg"
   }
-  set event_meta "{\"stage\":\"context\",\"status\":\"ok\"}"
+  set event_meta "{\"request_id\":\"$request_id\",\"stage\":\"context\",\"status\":\"ok\"}"
   set event_msg "Repository context assembled"
   agent_save_event $sid $user "progress" $provider $model $event_meta $event_msg
 }
 
-set event_meta "{\"tool\":\"chat-backend\",\"provider\":\"$provider\"}"
+set event_meta "{\"request_id\":\"$request_id\",\"tool\":\"chat-backend\",\"provider\":\"$provider\"}"
 set event_msg "Invoking $provider backend"
 agent_save_event $sid $user "tool" $provider $model $event_meta $event_msg
-set event_meta "{\"stage\":\"backend\",\"status\":\"running\"}"
+set event_meta "{\"request_id\":\"$request_id\",\"stage\":\"backend\",\"status\":\"running\"}"
 set event_msg "Waiting for backend reply..."
 agent_save_event $sid $user "progress" $provider $model $event_meta $event_msg
 
 if {[string compare $context ""] != 0} {
   if {$retrieval_qid > 0} {
-    set prompt_meta "{\"context\":true,\"retrieval_qid\":$retrieval_qid}"
+    set prompt_meta "{\"request_id\":\"$request_id\",\"context\":true,\"retrieval_qid\":$retrieval_qid}"
   } else {
-    set prompt_meta "{\"context\":true}"
+    set prompt_meta "{\"request_id\":\"$request_id\",\"context\":true}"
   }
 } else {
-  set prompt_meta "{\"context\":false}"
+  set prompt_meta "{\"request_id\":\"$request_id\",\"context\":false}"
 }
 agent_save $sid $user "user" "prompt" $provider $model $prompt_meta $msg
 
 if {[catch {agent_run $provider $model $full_prompt} reply]} {
-  set event_meta "{\"stage\":\"backend\",\"status\":\"error\"}"
+  set event_meta "{\"request_id\":\"$request_id\",\"stage\":\"backend\",\"status\":\"error\"}"
   set event_msg "Backend reply failed"
   agent_save_event $sid $user "progress" $provider $model $event_meta $event_msg
-  set acid [agent_save $sid $user "agent" "error" $provider $model "" $reply]
+  set acid [agent_save $sid $user "agent" "error" $provider $model "{\"request_id\":\"$request_id\"}" $reply]
   agent_eval $sid $acid $provider $model "error" $reply
   return "{\"error\":[agent_json_quote $reply]}"
 }
@@ -79,11 +79,11 @@ if {$s != -1} {
   }
 }
 
-set event_meta "{\"stage\":\"backend\",\"status\":\"ok\"}"
+set event_meta "{\"request_id\":\"$request_id\",\"stage\":\"backend\",\"status\":\"ok\"}"
 set event_msg "Backend reply received"
 agent_save_event $sid $user "progress" $provider $model $event_meta $event_msg
 
-set meta ""
+set meta "{\"request_id\":\"$request_id\"}"
 set acid [agent_save $sid $user "agent" "reply" $provider $model $meta $clean_reply]
 if {[string compare $thinking ""] != 0} {
   agent_save_reasoning $sid $acid $provider $model $thinking

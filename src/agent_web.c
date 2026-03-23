@@ -54,6 +54,32 @@ const char *agent_orchestration_script(const char *zRole, Blob *pScript){
   return 0;
 }
 
+static void agent_api_v1_emit_capabilities(void){
+  CX("{"
+     "\"backend\":\"fossil\","
+     "\"chat\":true,"
+     "\"events\":\"poll-only\","
+     "\"requestCancel\":false,"
+     "\"sessionCreate\":true,"
+     "\"sessionRename\":true,"
+     "\"sessionDelete\":false,"
+     "\"sessionFork\":false"
+     "}");
+}
+
+static void agent_api_v1_emit_error(
+  const char *zError,
+  const char *zCode
+){
+  CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j", zError);
+  if( zCode && zCode[0] ){
+    CX(",\"error_code\":%!j", zCode);
+  }
+  CX(",\"capabilities\":");
+  agent_api_v1_emit_capabilities();
+  CX("}\n");
+}
+
 /*
 ** WEBPAGE: agentui
 **
@@ -295,9 +321,7 @@ void agent_retrieval_page(void){
 }
 
 /*
-** WEBPAGE: agent-chat
-**
-** JSON endpoint for non-streaming agent chat.
+** JSON endpoint implementation for non-streaming agent chat.
 */
 static void agent_chat_page_impl(int bApiV1){
   Blob err = BLOB_INITIALIZER;
@@ -306,14 +330,18 @@ static void agent_chat_page_impl(int bApiV1){
   const char *zModel;
   const char *zProvider;
   const char *zUser;
+  const char *zRequestIdParam;
+  const char *zUseRequestId;
   int sid;
+  int rid = 0;
+  int terminalAcid = 0;
+  char *zRequestId = 0;
 
   login_check_credentials();
   if( !g.perm.Read ){
     cgi_set_content_type("application/json");
     if( bApiV1 ){
-      CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
-         "missing read permissions or not logged in");
+      agent_api_v1_emit_error("missing read permissions or not logged in", 0);
     }else{
       CX("{\"error\":%!j}\n", "missing read permissions or not logged in");
     }
@@ -323,13 +351,13 @@ static void agent_chat_page_impl(int bApiV1){
   zProvider = PD("provider", agent_chat_provider());
   zModel = PD("model", agent_default_model());
   zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
+  zRequestIdParam = PD("request_id", "");
   sid = atoi(PD("sid","0"));
   cgi_set_content_type("application/json");
 
   if( zMsg[0]==0 || zModel[0]==0 ){
     if( bApiV1 ){
-      CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
-         "missing msg or model parameter");
+      agent_api_v1_emit_error("missing msg or model parameter", "missing_parameter");
     }else{
       CX("{\"error\":%!j}\n", "missing msg or model parameter");
     }
@@ -337,7 +365,7 @@ static void agent_chat_page_impl(int bApiV1){
   }
   if( agent_validate_provider_model(zProvider, zModel, &err) ){
     if( bApiV1 ){
-      CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n", blob_str(&err));
+      agent_api_v1_emit_error(blob_str(&err), "invalid_provider_model");
     }else{
       CX("{\"error\":%!j}\n", blob_str(&err));
     }
@@ -350,6 +378,9 @@ static void agent_chat_page_impl(int bApiV1){
   if( sid<=0 || !agent_chat_session_exists(sid) ){
     sid = agent_chat_session_create(zUser, zProvider, zModel);
   }
+  rid = agent_request_create(sid, zRequestIdParam, "running");
+  zUseRequestId = agent_chat_session_request_id(sid);
+  zRequestId = mprintf("%s", zUseRequestId ? zUseRequestId : "");
 
   Th_FossilInit(TH_INIT_DEFAULT);
   Th_StoreInt("sid", sid);
@@ -357,12 +388,13 @@ static void agent_chat_page_impl(int bApiV1){
   Th_SetVar(g.interp, "provider", 8, zProvider, (int)strlen(zProvider));
   Th_SetVar(g.interp, "model", 5, zModel, (int)strlen(zModel));
   Th_SetVar(g.interp, "user", 4, zUser, (int)strlen(zUser));
+  Th_SetVar(g.interp, "request_id", 10, zRequestId, -1);
   Th_StoreInt("context_enabled", PB("context"));
 
   if( agent_orchestration_script("json-default", &script)==0 ){
+    agent_request_set_state(rid, "failed", 0);
     if( bApiV1 ){
-      CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
-         "missing default orchestration script");
+      agent_api_v1_emit_error("missing default orchestration script", "missing_asset");
     }else{
       CX("{\"error\":%!j}\n", "missing default orchestration script");
     }
@@ -371,16 +403,24 @@ static void agent_chat_page_impl(int bApiV1){
     int nResult = 0;
     const char *zResult = Th_GetResult(g.interp, &nResult);
     if( thRc==TH_ERROR ){
+      terminalAcid = agent_chat_latest_terminal_acid(sid);
+      agent_request_set_state(rid, "failed", terminalAcid);
       if( bApiV1 ){
-        CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
-           zResult ? zResult : "TH1 eval failed");
+        agent_api_v1_emit_error(zResult ? zResult : "TH1 eval failed", "th1_error");
       }else{
         CX("{\"error\":%!j}\n", zResult ? zResult : "TH1 eval failed");
       }
     }else{
+      terminalAcid = agent_chat_latest_terminal_acid(sid);
+      agent_request_set_state(rid, "finished", terminalAcid);
       if( bApiV1 ){
-        CX("{\"api_version\":\"v1\",\"ok\":true,\"chat\":");
+        CX("{\"api_version\":\"v1\",\"ok\":true,\"capabilities\":");
+        agent_api_v1_emit_capabilities();
+        CX(",\"chat\":");
         CX("%.*s", nResult, zResult ? zResult : "{}");
+        CX(",\"request_id\":%!j", zRequestId && zRequestId[0] ? zRequestId : zRequestIdParam);
+        CX(",\"request\":");
+        agent_emit_request_object_json(sid, zRequestId && zRequestId[0] ? zRequestId : zRequestIdParam);
         CX("}\n");
       }else{
         CX("%.*s\n", nResult, zResult ? zResult : "{}");
@@ -390,8 +430,14 @@ static void agent_chat_page_impl(int bApiV1){
   db_end_transaction(0);
   blob_reset(&script);
   blob_reset(&err);
+  fossil_free(zRequestId);
 }
 
+/*
+** WEBPAGE: agent-chat
+**
+** JSON endpoint for non-streaming agent chat.
+*/
 void agent_chat_page(void){
   agent_chat_page_impl(0);
 }
@@ -473,14 +519,24 @@ void agent_api_v1_sessions_page(void){
   login_check_credentials();
   cgi_set_content_type("application/json");
   if( !g.perm.Read ){
-    CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
-       "missing read permissions or not logged in");
+    agent_api_v1_emit_error("missing read permissions or not logged in", 0);
     return;
   }
   zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
-  CX("{\"api_version\":\"v1\",\"ok\":true,\"user\":%!j,\"sessions\":", zUser);
+  CX("{\"api_version\":\"v1\",\"ok\":true,\"user\":%!j,\"capabilities\":", zUser);
+  agent_api_v1_emit_capabilities();
+  CX(",\"sessions\":");
   agent_emit_session_array_json(zUser);
   CX("}\n");
+}
+
+/*
+** WEBPAGE: agent-api-v1-sessions
+**
+** Fossil-native flat alias for the versioned session list API.
+*/
+void agent_api_v1_sessions_flat_page(void){
+  agent_api_v1_sessions_page();
 }
 
 /*
@@ -494,20 +550,29 @@ void agent_api_v1_session_page(void){
   login_check_credentials();
   cgi_set_content_type("application/json");
   if( !g.perm.Read ){
-    CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
-       "missing read permissions or not logged in");
+    agent_api_v1_emit_error("missing read permissions or not logged in", 0);
     return;
   }
   sidRequested = atoi(PD("sid","0"));
   if( sidRequested<=0 || !agent_chat_session_exists(sidRequested) ){
-    CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
-       "missing or unknown sid parameter");
+    agent_api_v1_emit_error("missing or unknown sid parameter", "unknown_session");
     return;
   }
   sidCurrent = sidRequested;
-  CX("{\"api_version\":\"v1\",\"ok\":true,\"session\":");
+  CX("{\"api_version\":\"v1\",\"ok\":true,\"capabilities\":");
+  agent_api_v1_emit_capabilities();
+  CX(",\"session\":");
   agent_emit_history_object_json(sidCurrent);
   CX("}\n");
+}
+
+/*
+** WEBPAGE: agent-api-v1-session
+**
+** Fossil-native flat alias for the versioned session detail API.
+*/
+void agent_api_v1_session_flat_page(void){
+  agent_api_v1_session_page();
 }
 
 /*
@@ -524,8 +589,7 @@ void agent_api_v1_session_create_page(void){
   login_check_credentials();
   cgi_set_content_type("application/json");
   if( !g.perm.Read ){
-    CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
-       "missing read permissions or not logged in");
+    agent_api_v1_emit_error("missing read permissions or not logged in", 0);
     return;
   }
   zProvider = PD("provider", agent_chat_provider());
@@ -539,9 +603,20 @@ void agent_api_v1_session_create_page(void){
     agent_chat_session_rename(sid, zTitle);
   }
   db_end_transaction(0);
-  CX("{\"api_version\":\"v1\",\"ok\":true,\"session\":");
+  CX("{\"api_version\":\"v1\",\"ok\":true,\"capabilities\":");
+  agent_api_v1_emit_capabilities();
+  CX(",\"session\":");
   agent_emit_history_object_json(sid);
   CX("}\n");
+}
+
+/*
+** WEBPAGE: agent-api-v1-session-create
+**
+** Fossil-native flat alias for the versioned session creation API.
+*/
+void agent_api_v1_session_create_flat_page(void){
+  agent_api_v1_session_create_page();
 }
 
 /*
@@ -555,14 +630,12 @@ void agent_api_v1_session_name_page(void){
   login_check_credentials();
   cgi_set_content_type("application/json");
   if( !g.perm.Read ){
-    CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
-       "missing read permissions or not logged in");
+    agent_api_v1_emit_error("missing read permissions or not logged in", 0);
     return;
   }
   sidRequested = atoi(PD("sid","0"));
   if( sidRequested<=0 || !agent_chat_session_exists(sidRequested) ){
-    CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
-       "missing or unknown sid parameter");
+    agent_api_v1_emit_error("missing or unknown sid parameter", "unknown_session");
     return;
   }
   zName = PD("name", "");
@@ -570,9 +643,20 @@ void agent_api_v1_session_name_page(void){
   db_unprotect(PROTECT_READONLY);
   agent_chat_session_rename(sidRequested, zName);
   db_end_transaction(0);
-  CX("{\"api_version\":\"v1\",\"ok\":true,\"session\":");
+  CX("{\"api_version\":\"v1\",\"ok\":true,\"capabilities\":");
+  agent_api_v1_emit_capabilities();
+  CX(",\"session\":");
   agent_emit_history_object_json(sidRequested);
   CX("}\n");
+}
+
+/*
+** WEBPAGE: agent-api-v1-session-name
+**
+** Fossil-native flat alias for the versioned session rename API.
+*/
+void agent_api_v1_session_name_flat_page(void){
+  agent_api_v1_session_name_page();
 }
 
 /*
@@ -588,23 +672,180 @@ void agent_api_v1_events_page(void){
   login_check_credentials();
   cgi_set_content_type("application/json");
   if( !g.perm.Read ){
-    CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
-       "missing read permissions or not logged in");
+    agent_api_v1_emit_error("missing read permissions or not logged in", 0);
     return;
   }
   sidRequested = atoi(PD("sid","0"));
   if( sidRequested<=0 || !agent_chat_session_exists(sidRequested) ){
-    CX("{\"api_version\":\"v1\",\"ok\":false,\"error\":%!j}\n",
-       "missing or unknown sid parameter");
+    agent_api_v1_emit_error("missing or unknown sid parameter", "unknown_session");
     return;
   }
   sidCurrent = sidRequested;
   afterAcid = atoi(PD("after","0"));
   if( afterAcid<0 ) afterAcid = 0;
-  CX("{\"api_version\":\"v1\",\"ok\":true,\"sid\":%d,\"after\":%d,\"events\":",
+  CX("{\"api_version\":\"v1\",\"ok\":true,\"sid\":%d,\"after\":%d,\"capabilities\":",
      sidCurrent, afterAcid);
+  agent_api_v1_emit_capabilities();
+  CX(",\"events\":");
   agent_emit_events_array_json(sidCurrent, afterAcid, &lastAcid);
-  CX(",\"last_acid\":%d}\n", lastAcid);
+  CX(",\"last_acid\":%d,\"request\":", lastAcid);
+  agent_emit_latest_request_json(sidCurrent);
+  CX("}\n");
+}
+
+/*
+** WEBPAGE: agent-api-v1-events
+**
+** Fossil-native flat alias for the versioned event list API.
+*/
+void agent_api_v1_events_flat_page(void){
+  agent_api_v1_events_page();
+}
+
+/*
+** WEBPAGE: agent-api/v1/capabilities
+**
+** Versioned capability discovery for the Fossil agent backend.
+*/
+void agent_api_v1_capabilities_page(void){
+  login_check_credentials();
+  cgi_set_content_type("application/json");
+  if( !g.perm.Read ){
+    agent_api_v1_emit_error("missing read permissions or not logged in", 0);
+    return;
+  }
+  CX("{\"api_version\":\"v1\",\"ok\":true,\"capabilities\":");
+  agent_api_v1_emit_capabilities();
+  CX("}\n");
+}
+
+/*
+** WEBPAGE: agent-api-v1-capabilities
+**
+** Fossil-native flat alias for capability discovery.
+*/
+void agent_api_v1_capabilities_flat_page(void){
+  agent_api_v1_capabilities_page();
+}
+
+/*
+** WEBPAGE: agent-api/v1/requests/active
+**
+** Versioned active request discovery. Fossil currently exposes no resumable
+** server-side request registry, so this returns an empty list.
+*/
+void agent_api_v1_requests_active_page(void){
+  int sidRequested;
+  login_check_credentials();
+  cgi_set_content_type("application/json");
+  if( !g.perm.Read ){
+    agent_api_v1_emit_error("missing read permissions or not logged in", 0);
+    return;
+  }
+  sidRequested = atoi(PD("sid","0"));
+  if( sidRequested>0 && !agent_chat_session_exists(sidRequested) ){
+    agent_api_v1_emit_error("missing or unknown sid parameter", "unknown_session");
+    return;
+  }
+  CX("{\"api_version\":\"v1\",\"ok\":true,\"sid\":%d,\"request_ids\":",
+     sidRequested>0 ? sidRequested : 0);
+  agent_emit_active_request_ids_json(sidRequested>0 ? sidRequested : 0);
+  CX(",\"capabilities\":");
+  agent_api_v1_emit_capabilities();
+  CX("}\n");
+}
+
+/*
+** WEBPAGE: agent-api-v1-requests-active
+**
+** Fossil-native flat alias for active request discovery.
+*/
+void agent_api_v1_requests_active_flat_page(void){
+  agent_api_v1_requests_active_page();
+}
+
+/*
+** WEBPAGE: agent-api/v1/request/cancel
+**
+** Versioned request cancellation API. Explicitly unsupported for Fossil's
+** current synchronous backend model.
+*/
+void agent_api_v1_request_cancel_page(void){
+  login_check_credentials();
+  cgi_set_content_type("application/json");
+  if( !g.perm.Read ){
+    agent_api_v1_emit_error("missing read permissions or not logged in", 0);
+    return;
+  }
+  agent_api_v1_emit_error(
+    "request cancellation is not supported by the Fossil backend",
+    "unsupported"
+  );
+}
+
+/*
+** WEBPAGE: agent-api-v1-request-cancel
+**
+** Fossil-native flat alias for request cancellation.
+*/
+void agent_api_v1_request_cancel_flat_page(void){
+  agent_api_v1_request_cancel_page();
+}
+
+/*
+** WEBPAGE: agent-api/v1/session/delete
+**
+** Versioned session deletion API. Explicitly unsupported until Fossil has a
+** contract-safe delete lifecycle for stored chat state.
+*/
+void agent_api_v1_session_delete_page(void){
+  login_check_credentials();
+  cgi_set_content_type("application/json");
+  if( !g.perm.Read ){
+    agent_api_v1_emit_error("missing read permissions or not logged in", 0);
+    return;
+  }
+  agent_api_v1_emit_error(
+    "session deletion is not supported by the Fossil backend",
+    "unsupported"
+  );
+}
+
+/*
+** WEBPAGE: agent-api-v1-session-delete
+**
+** Fossil-native flat alias for session deletion.
+*/
+void agent_api_v1_session_delete_flat_page(void){
+  agent_api_v1_session_delete_page();
+}
+
+/*
+** WEBPAGE: agent-api/v1/session/fork
+**
+** Versioned session fork API. Explicitly unsupported until Fossil exposes a
+** first-class branch/truncate chat lifecycle in the v1 contract.
+*/
+void agent_api_v1_session_fork_page(void){
+  login_check_credentials();
+  cgi_set_content_type("application/json");
+  if( !g.perm.Read ){
+    agent_api_v1_emit_error("missing read permissions or not logged in", 0);
+    return;
+  }
+  agent_api_v1_emit_error(
+    "session fork is not supported by the Fossil backend",
+    "unsupported"
+  );
+}
+
+/*
+** WEBPAGE: agent-api-v1-session-fork
+**
+** Fossil-native flat alias for session fork.
+*/
+void agent_api_v1_session_fork_flat_page(void){
+  agent_api_v1_session_fork_page();
 }
 
 /*
@@ -614,4 +855,13 @@ void agent_api_v1_events_page(void){
 */
 void agent_api_v1_chat_page(void){
   agent_chat_page_impl(1);
+}
+
+/*
+** WEBPAGE: agent-api-v1-chat
+**
+** Fossil-native flat alias for versioned chat submission.
+*/
+void agent_api_v1_chat_flat_page(void){
+  agent_api_v1_chat_page();
 }

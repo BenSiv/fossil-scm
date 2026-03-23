@@ -19,9 +19,25 @@ What is already true:
   - `agent_runtime.c`
   - `agent_th1.c`
   - `agent_web.c`
-- Fossil exposes an initial `/agent-api/v1/*` surface and builtin-backed TH1
+- Fossil exposes an initial versioned agent API surface and builtin-backed TH1
   asset loading.
+- Because Fossil page dispatch is page-name oriented, the stable live route
+  shape should prefer flat page names such as:
+  - `/agent-api-v1-sessions`
+  - `/agent-api-v1-session`
+  - `/agent-api-v1-chat`
+  rather than slash-nested names like `/agent-api/v1/...`.
+- Fossil now exposes explicit v1 capability and unsupported-operation
+  responses for:
+  - `capabilities`
+  - `requests/active`
+  - `request/cancel`
+  - `session/delete`
+  - `session/fork`
 - Goose has a first compatibility layer in `ui/desktop/src/fossilApi.ts`.
+- Goose desktop now has an initial backend namespace split under:
+  - `ui/desktop/src/backends/fossil/`
+  - `ui/desktop/src/backends/shared/`
 - Goose can now treat Fossil as an alternate backend for core session/chat
   flows, but only partially.
 
@@ -109,12 +125,12 @@ Deliverables:
    - get
    - list
    - rename
-   - delete
+   - delete or explicit "unsupported" response
    - fork or explicit "unsupported" response
 2. normalize event endpoints:
    - polling list
    - true streaming SSE endpoint
-   - request cancellation endpoint
+   - request cancellation endpoint or explicit "unsupported" response
    - active request discovery endpoint
 3. add stable payload fields:
    - `api_version`
@@ -181,6 +197,7 @@ Suggested move plan:
 
 1. move `fossilApi.ts` into a backend namespace:
    - `ui/desktop/src/backends/fossil/client.ts`
+   - leave `fossilApi.ts` as a transitional shim only while imports are moved
 2. move session/event compatibility logic out of generic hooks where possible:
    - Fossil session adapter
    - Fossil event adapter
@@ -203,12 +220,12 @@ Objective:
 Fossil tests:
 
 1. extend `tst/agent.test` for:
-   - `/agent-api/v1/session/create`
-   - `/agent-api/v1/session`
-   - `/agent-api/v1/sessions`
-   - `/agent-api/v1/session/name`
-   - `/agent-api/v1/chat`
-   - `/agent-api/v1/events`
+   - `/agent-api-v1-session-create`
+   - `/agent-api-v1-session`
+   - `/agent-api-v1-sessions`
+   - `/agent-api-v1-session-name`
+   - `/agent-api-v1-chat`
+   - `/agent-api-v1-events`
 2. add SSE-specific tests once the streaming endpoint is stabilized
 3. add compatibility tests for error envelopes and unsupported operations
 

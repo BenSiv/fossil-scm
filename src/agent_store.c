@@ -34,6 +34,15 @@ static const char zAgentChatSchema[] =
 @   meta TEXT,
 @   msg TEXT NOT NULL
 @ );
+@ CREATE TABLE repository.agent_request(
+@   rid INTEGER PRIMARY KEY AUTOINCREMENT,
+@   sid INTEGER REFERENCES agentchat_session,
+@   request_id TEXT,
+@   state TEXT NOT NULL,
+@   terminal_acid INTEGER,
+@   ctime JULIANDAY DEFAULT (julianday('now')),
+@   mtime JULIANDAY DEFAULT (julianday('now'))
+@ );
 ;
 
 /*
@@ -56,6 +65,19 @@ static void agent_chat_create_tables(void){
         ");"
       );
     }
+    if( !db_table_exists("repository","agent_request") ){
+      db_multi_exec(
+        "CREATE TABLE repository.agent_request("
+        "  rid INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  sid INTEGER REFERENCES agentchat_session,"
+        "  request_id TEXT,"
+        "  state TEXT NOT NULL,"
+        "  terminal_acid INTEGER,"
+        "  ctime JULIANDAY DEFAULT (julianday('now')),"
+        "  mtime JULIANDAY DEFAULT (julianday('now'))"
+        ");"
+      );
+    }
     if( !db_table_has_column("repository","agentchat","sid") ){
       db_multi_exec("ALTER TABLE agentchat ADD COLUMN sid INTEGER");
     }
@@ -74,7 +96,47 @@ static void agent_chat_create_tables(void){
     if( !db_table_has_column("repository","agentchat","provider") ){
       db_multi_exec("ALTER TABLE agentchat ADD COLUMN provider TEXT");
     }
+    if( !db_table_has_column("repository","agent_request","terminal_acid") ){
+      db_multi_exec("ALTER TABLE agent_request ADD COLUMN terminal_acid INTEGER");
+    }
   }
+}
+
+int agent_request_create(int sid, const char *zRequestId, const char *zState){
+  int rid;
+  agent_chat_create_tables();
+  db_multi_exec(
+    "INSERT INTO agent_request(sid,request_id,state,terminal_acid,ctime,mtime)"
+    " VALUES(%d,%Q,%Q,NULL,julianday('now'),julianday('now'))",
+    sid,
+    zRequestId && zRequestId[0] ? zRequestId : "",
+    zState && zState[0] ? zState : "running"
+  );
+  rid = db_last_insert_rowid();
+  if( zRequestId==0 || zRequestId[0]==0 ){
+    db_multi_exec(
+      "UPDATE agent_request"
+      " SET request_id=printf('req-%%d', rid)"
+      " WHERE rid=%d",
+      rid
+    );
+  }
+  return rid;
+}
+
+void agent_request_set_state(int rid, const char *zState, int terminalAcid){
+  if( rid<=0 ) return;
+  db_multi_exec(
+    "UPDATE agent_request"
+    " SET state=%Q,"
+    " terminal_acid=CASE WHEN %d>0 THEN %d ELSE terminal_acid END,"
+    " mtime=julianday('now')"
+    " WHERE rid=%d",
+    zState && zState[0] ? zState : "finished",
+    terminalAcid,
+    terminalAcid,
+    rid
+  );
 }
 
 int agent_chat_session_create(
@@ -205,6 +267,19 @@ void agent_chat_save_event(
 }
 
 const char *agent_chat_session_state(int sid){
+  if( sid>0 && db_table_exists("repository","agent_request") ){
+    const char *zReqState = db_text("",
+      "SELECT state FROM agent_request WHERE sid=%d"
+      " ORDER BY mtime DESC, rid DESC LIMIT 1",
+      sid
+    );
+    if( zReqState && zReqState[0]
+     && fossil_strcmp(zReqState, "finished")!=0
+     && fossil_strcmp(zReqState, "reply")!=0
+    ){
+      return zReqState;
+    }
+  }
   if( sid<=0 || !db_table_exists("repository","agentchat") ) return "";
   return db_text("",
     "SELECT CASE"
@@ -223,6 +298,77 @@ const char *agent_chat_session_state(int sid){
     " FROM agentchat WHERE sid=%d ORDER BY acid DESC LIMIT 1",
     sid
   );
+}
+
+const char *agent_chat_session_request_id(int sid){
+  if( sid<=0 || !db_table_exists("repository","agent_request") ) return "";
+  return db_text("",
+    "SELECT coalesce(request_id,'') FROM agent_request WHERE sid=%d"
+    " ORDER BY mtime DESC, rid DESC LIMIT 1",
+    sid
+  );
+}
+
+const char *agent_chat_session_request_state(int sid){
+  if( sid<=0 || !db_table_exists("repository","agent_request") ) return "";
+  return db_text("",
+    "SELECT coalesce(state,'') FROM agent_request WHERE sid=%d"
+    " ORDER BY mtime DESC, rid DESC LIMIT 1",
+    sid
+  );
+}
+
+int agent_chat_session_request_count(int sid){
+  if( sid<=0 || !db_table_exists("repository","agent_request") ) return 0;
+  return db_int(0, "SELECT count(*) FROM agent_request WHERE sid=%d", sid);
+}
+
+void agent_emit_request_object_json(int sidCurrent, const char *zRequestId){
+  Stmt q;
+  if( sidCurrent<=0 || !db_table_exists("repository","agent_request") ){
+    CX("null");
+    return;
+  }
+  if( zRequestId && zRequestId[0] ){
+    db_prepare(&q,
+      "SELECT rid, coalesce(request_id,''), coalesce(state,''),"
+      "       coalesce(terminal_acid,0),"
+      "       coalesce(datetime(ctime,toLocal()),''),"
+      "       coalesce(datetime(mtime,toLocal()),'')"
+      "  FROM agent_request"
+      " WHERE sid=%d AND request_id=%Q"
+      " ORDER BY mtime DESC, rid DESC LIMIT 1",
+      sidCurrent, zRequestId
+    );
+  }else{
+    db_prepare(&q,
+      "SELECT rid, coalesce(request_id,''), coalesce(state,''),"
+      "       coalesce(terminal_acid,0),"
+      "       coalesce(datetime(ctime,toLocal()),''),"
+      "       coalesce(datetime(mtime,toLocal()),'')"
+      "  FROM agent_request"
+      " WHERE sid=%d"
+      " ORDER BY mtime DESC, rid DESC LIMIT 1",
+      sidCurrent
+    );
+  }
+  if( db_step(&q)==SQLITE_ROW ){
+    CX("{\"rid\":%d,\"request_id\":%!j,\"state\":%!j,\"terminal_acid\":%d,"
+       "\"ctime\":%!j,\"mtime\":%!j}",
+       db_column_int(&q, 0),
+       db_column_text(&q, 1),
+       db_column_text(&q, 2),
+       db_column_int(&q, 3),
+       db_column_text(&q, 4),
+       db_column_text(&q, 5));
+  }else{
+    CX("null");
+  }
+  db_finalize(&q);
+}
+
+void agent_emit_latest_request_json(int sidCurrent){
+  agent_emit_request_object_json(sidCurrent, 0);
 }
 
 int agent_chat_latest_terminal_acid(int sid){
@@ -371,9 +517,13 @@ void agent_emit_history_object_json(int sidCurrent){
   const char *zTitle = "New Chat";
   const char *zProvider = agent_chat_session_provider(sidCurrent, "");
   const char *zModel = agent_chat_session_model(sidCurrent, "");
+  const char *zState = agent_chat_session_state(sidCurrent);
+  const char *zReqId = agent_chat_session_request_id(sidCurrent);
+  const char *zReqState = agent_chat_session_request_state(sidCurrent);
   char *zCtime = 0;
   char *zMtime = 0;
   int nMsg = 0;
+  int nReq = 0;
   if( sidCurrent>0 && db_table_exists("repository","agentchat_session") ){
     zTitle = db_text("New Chat",
       "SELECT coalesce(nullif(title,''),'New Chat') FROM agentchat_session"
@@ -389,11 +539,17 @@ void agent_emit_history_object_json(int sidCurrent){
       sidCurrent
     );
     nMsg = db_int(0, "SELECT count(*) FROM agentchat WHERE sid=%d", sidCurrent);
+    nReq = agent_chat_session_request_count(sidCurrent);
   }
   CX("{\"sid\":%d,\"title\":%!j,\"provider\":%!j,\"model\":%!j,"
-     "\"ctime\":%!j,\"mtime\":%!j,\"message_count\":%d,\"messages\":[",
+     "\"ctime\":%!j,\"mtime\":%!j,\"message_count\":%d,"
+     "\"state\":%!j,\"request_count\":%d,\"last_request_id\":%!j,"
+     "\"last_request_state\":%!j,\"request\":",
      sidCurrent, zTitle, zProvider, zModel,
-     zCtime ? zCtime : "", zMtime ? zMtime : "", nMsg);
+     zCtime ? zCtime : "", zMtime ? zMtime : "", nMsg,
+     zState ? zState : "", nReq, zReqId ? zReqId : "", zReqState ? zReqState : "");
+  agent_emit_latest_request_json(sidCurrent);
+  CX(",\"messages\":[");
   if( sidCurrent>0 && db_table_exists("repository","agentchat") ){
     int first = 1;
     if( db_table_exists("repository","ai_chat_eval") ){
@@ -490,7 +646,30 @@ void agent_emit_events_json(int sidCurrent, int afterAcid){
   int lastAcid = afterAcid;
   CX("{\"sid\":%d,\"after\":%d,\"events\":", sidCurrent, afterAcid);
   agent_emit_events_array_json(sidCurrent, afterAcid, &lastAcid);
+  CX(",\"last_acid\":%d,\"request\":", lastAcid);
+  agent_emit_latest_request_json(sidCurrent);
   CX("}\n");
+}
+
+void agent_emit_active_request_ids_json(int sidCurrent){
+  Stmt q;
+  int first = 1;
+  CX("[");
+  if( sidCurrent>0 && db_table_exists("repository","agent_request") ){
+    db_prepare(&q,
+      "SELECT request_id FROM agent_request"
+      " WHERE sid=%d"
+      "   AND state IN ('queued','running','waiting-approval')"
+      " ORDER BY mtime DESC, rid DESC",
+      sidCurrent
+    );
+    while( db_step(&q)==SQLITE_ROW ){
+      CX("%s%!j", first ? "" : ",", db_column_text(&q, 0));
+      first = 0;
+    }
+    db_finalize(&q);
+  }
+  CX("]");
 }
 
 void agent_emit_session_array_json(const char *zUser){
@@ -504,7 +683,14 @@ void agent_emit_session_array_json(const char *zUser){
       "       coalesce(nullif(model,''),''),"
       "       datetime(ctime,toLocal()),"
       "       datetime(mtime,toLocal()),"
-      "       (SELECT count(*) FROM agentchat AS c WHERE c.sid=agentchat_session.sid)"
+      "       (SELECT count(*) FROM agentchat AS c WHERE c.sid=agentchat_session.sid),"
+      "       coalesce((SELECT state FROM agent_request AS r"
+      "                 WHERE r.sid=agentchat_session.sid"
+      "                 ORDER BY r.mtime DESC, r.rid DESC LIMIT 1),''),"
+      "       coalesce((SELECT request_id FROM agent_request AS r"
+      "                 WHERE r.sid=agentchat_session.sid"
+      "                 ORDER BY r.mtime DESC, r.rid DESC LIMIT 1),''),"
+      "       (SELECT count(*) FROM agent_request AS r WHERE r.sid=agentchat_session.sid)"
       "  FROM agentchat_session"
       " WHERE xfrom=%Q OR (%Q='' AND xfrom='')"
       " ORDER BY mtime DESC, sid DESC",
@@ -512,7 +698,8 @@ void agent_emit_session_array_json(const char *zUser){
     );
     while( db_step(&q)==SQLITE_ROW ){
       CX("%s{\"sid\":%d,\"title\":%!j,\"provider\":%!j,\"model\":%!j,"
-         "\"ctime\":%!j,\"mtime\":%!j,\"message_count\":%d}",
+         "\"ctime\":%!j,\"mtime\":%!j,\"message_count\":%d,"
+         "\"state\":%!j,\"last_request_id\":%!j,\"request_count\":%d}",
          first ? "" : ",",
          db_column_int(&q, 0),
          db_column_text(&q, 1),
@@ -520,7 +707,10 @@ void agent_emit_session_array_json(const char *zUser){
          db_column_text(&q, 3),
          db_column_text(&q, 4),
          db_column_text(&q, 5),
-         db_column_int(&q, 6));
+         db_column_int(&q, 6),
+         db_column_text(&q, 7),
+         db_column_text(&q, 8),
+         db_column_int(&q, 9));
       first = 0;
     }
     db_finalize(&q);
