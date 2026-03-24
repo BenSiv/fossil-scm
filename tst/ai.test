@@ -25,6 +25,10 @@ set repoFile [file join $repoPath ai-test.fossil]
 
 exec $::fossilexe new $repoFile --admin-user tester
 exec $::fossilexe open $repoFile
+file mkdir doc
+file mkdir [file join doc ai]
+write_file [file join doc ai init-ingest.md] "# Init Ingest\n\nRepository markdown should become a tier-1 note.\n"
+fossil add [file join doc ai init-ingest.md]
 
 ###############################################################################
 
@@ -33,6 +37,9 @@ test ai-init-1 {[normalize_result] eq {ai: initialized}}
 
 fossil sql "SELECT count(*) FROM sqlite_master WHERE name IN ('ai_context','ai_note','ai_note_link','ai_retrieval','ai_retrieval_note','ai_review','ai_vector','ai_policy')"
 test ai-init-2 {[normalize_result] eq {8}}
+
+fossil sql "SELECT tier || '|' || source_type || '|' || artifact_path || '|' || coalesce(artifact_status,'') FROM ai_note WHERE artifact_path='doc/ai/init-ingest.md' ORDER BY nid DESC LIMIT 1"
+test ai-init-3 {[normalize_result] eq {1|doc|doc/ai/init-ingest.md|materialized}}
 
 ###############################################################################
 

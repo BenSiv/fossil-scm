@@ -2016,6 +2016,9 @@ void knowledge_page(void){
     login_needed(g.anon.Read);
     return;
   }
+  if( ai_is_enabled() ){
+    agent_promote_markdown_notes(1, 0, 0, 0, 0);
+  }
   style_set_current_feature("knowledge");
   agent_knowledge_submenu();
   style_header("Knowledge System");
@@ -2100,6 +2103,9 @@ void knowledge_browser_page(void){
   if( !g.perm.Read ){
     login_needed(g.anon.Read);
     return;
+  }
+  if( ai_is_enabled() ){
+    agent_promote_markdown_notes(1, 0, 0, 0, 0);
   }
   style_set_current_feature("knowledge");
   agent_knowledge_submenu();
@@ -2787,6 +2793,12 @@ static int agent_auto_promote_markdown_enabled(void){
 }
 
 /*
+** Generate embeddings for notes that do not yet have vectors. Returns the
+** number of notes indexed in this pass.
+*/
+static int agent_semantic_index_missing_notes(const char *zModel);
+
+/*
 ** Promote markdown files in the current checkout into tier 1 notes.
 ** If force is false, runs at most once per checkout (tracked locally).
 */
@@ -2955,6 +2967,13 @@ static int agent_semantic_search(
   int nHit = 0;
 
   if( !ai_is_enabled() ) return 0;
+  /*
+  ** Keep repository markdown docs in the knowledge pool automatically so
+  ** retrieval sees checked-in markdown as tier-1 material without requiring a
+  ** separate manual promotion step.
+  */
+  agent_promote_markdown_notes(1, 0, 0, 0, 0);
+  agent_semantic_index_missing_notes(zModel);
   if( agent_generate_embedding(zModel, zQuery, &vQuery)!=0 ){
     blob_reset(&vQuery);
     return 0;
@@ -3430,8 +3449,7 @@ static int agent_generate_embedding(
 /*
 ** Generate embeddings for all notes that don't have them yet.
 */
-static void agent_semantic_index_cmd(void){
-  const char *zModel = agent_embedding_model();
+static int agent_semantic_index_missing_notes(const char *zModel){
   Stmt q1, q2;
   int n = 0;
 
@@ -3467,6 +3485,23 @@ static void agent_semantic_index_cmd(void){
     blob_reset(&text);
   }
   db_finalize(&q1);
+  return n;
+}
+
+/*
+** Generate embeddings for all notes that don't have them yet.
+*/
+static void agent_semantic_index_cmd(void){
+  const char *zModel = agent_embedding_model();
+  int n;
+
+  /*
+  ** The knowledge layer treats repository markdown as first-class pooled
+  ** material. Before indexing, make sure any checkout markdown docs exist as
+  ** tier-1 notes so they can participate in retrieval immediately.
+  */
+  agent_promote_markdown_notes(1, 0, 0, 0, 0);
+  n = agent_semantic_index_missing_notes(zModel);
   fossil_print("Indexed %d notes.\n", n);
 }
 

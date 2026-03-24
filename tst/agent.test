@@ -217,6 +217,15 @@ test agent-index-1 {[normalize_result] eq {Indexed 4 notes.}}
 fossil sql "SELECT source_type || '|' || dim FROM ai_vector ORDER BY source_id DESC LIMIT 1"
 test agent-index-2 {[normalize_result] eq {note|4}}
 
+write_file [file join doc ai retrieval-auto.md] "# Retrieval Auto Promotion\n\nRetrieval should auto-index this repository markdown document.\n"
+fossil add [file join doc ai retrieval-auto.md]
+fossil agent --agent-config [file join $cfgDir agent.json] retrieve {auto-index this repository markdown document} --limit 2
+test agent-retrieve-md-1 {[string first {Retrieval Auto Promotion} [normalize_result]]>=0}
+fossil sql "SELECT tier || '|' || source_type || '|' || artifact_path FROM ai_note WHERE artifact_path='doc/ai/retrieval-auto.md' ORDER BY nid DESC LIMIT 1"
+test agent-retrieve-md-2 {[normalize_result] eq {1|doc|doc/ai/retrieval-auto.md}}
+fossil sql "DELETE FROM ai_vector WHERE source_type='note' AND source_id IN (SELECT nid FROM ai_note WHERE artifact_path='doc/ai/retrieval-auto.md')"
+fossil sql "DELETE FROM ai_note WHERE artifact_path='doc/ai/retrieval-auto.md'"
+
 fossil agent --agent-config [file join $cfgDir agent.json] retrieve {Embeddings retrieval note} --limit 3
 test agent-retrieve-1 {[string first {Embeddings Note} [normalize_result]]>=0}
 test agent-retrieve-2 {[string first {reinforcement: +} [normalize_result]]>=0}
@@ -724,6 +733,7 @@ test knowledge-browser-4 {[string first {/wiki?name=Knowledge/Concept-A} $RESULT
 test knowledge-browser-5 {[string first {recent retrievals:} $RESULT]>=0 && [string first {retrieval #} $RESULT]>=0}
 test knowledge-browser-6 {[string first {/doc/tip/doc/ai/STORAGE_MODEL.md} $RESULT]>=0}
 test knowledge-browser-6a {[string first {/doc/tip/knowledge/tier3/artifact-note.md} $RESULT]>=0 && [string first {status=materialized} $RESULT]>=0}
+test knowledge-browser-6b {[string first {/doc/tip/doc/ai/autopromote.md} $RESULT]>=0}
 
 set response [agent_http_request $repository GET /knowledge-browser?tier=3&source=wiki&process=atomic&q=Concept {}]
 set RESULT $response

@@ -1202,7 +1202,13 @@ void ai_cmd(void){
     verify_all_options();
     db_set_int("ai-enable", 1, 0);
     ai_schema_ensure();
-    agent_promote_markdown_notes(1, 1, 0, 0, 0);
+    /*
+    ** Initializing the knowledge layer should ingest markdown docs from the
+    ** checkout into tier-1 notes even when the legacy auto-promotion toggle is
+    ** unset, because repository markdown is now part of the default knowledge
+    ** substrate.
+    */
+    agent_promote_markdown_notes(1, 0, 0, 0, 0);
     fossil_print("ai: initialized\n");
     return;
   }
