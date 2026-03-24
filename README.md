@@ -21,39 +21,23 @@ Canonical documents for this fork live under [`doc/`](doc/):
 - Build Guide: [`doc/BUILD.txt`](doc/BUILD.txt)
 - Licence: [`doc/LICENCE.md`](doc/LICENCE.md)
 - Repository Map: [`doc/specs/repo-map.md`](doc/specs/repo-map.md)
-- AI docs: [`doc/ai/`](doc/ai/)
-  Includes the [User Guide](doc/ai/USER_GUIDE.md) for active agent features.
-  Data pool strategy is in [`doc/ai/DATA_POOL.md`](doc/ai/DATA_POOL.md).
-  Provider/model design notes live in
-  [`doc/ai/PROVIDER_MODEL_SPLIT.md`](doc/ai/PROVIDER_MODEL_SPLIT.md) and
-  [`doc/ai/IMPLEMENTATION_PLAN.md`](doc/ai/IMPLEMENTATION_PLAN.md), which now
-  includes the phased roadmap from config visibility through streaming and
-  conversation evaluation. Comparative design notes from reviewing
-  `~/gentle-ai` live in [`doc/ai/GENTLE_AI_LESSONS.md`](doc/ai/GENTLE_AI_LESSONS.md).
-  Comparative design notes from reviewing `~/openclaw` live in
-  [`doc/ai/OPENCLAW_LESSONS.md`](doc/ai/OPENCLAW_LESSONS.md).
-  Comparative design notes from reviewing `~/Fabric` live in
-  [`doc/ai/FABRIC_LESSONS.md`](doc/ai/FABRIC_LESSONS.md).
-  The active condensed roadmap for current implementation work now lives in
-  [`doc/ai/FOSSIL_INTERNAL_TOOLING_PLAN.md`](doc/ai/FOSSIL_INTERNAL_TOOLING_PLAN.md).
-  The current cross-project roadmap for continuing the Goose/Fossil split now
-  lives in
-  [`doc/ai/FOSSIL_GOOSE_PHASE2_PLAN.md`](doc/ai/FOSSIL_GOOSE_PHASE2_PLAN.md).
-  The Fossil-first roadmap for making the agent and knowledge system
-  self-contained, with Goose treated as optional or eventually deprecated,
-  lives in
-  [`doc/ai/FOSSIL_SELF_CONTAINED_AGENT_PLAN.md`](doc/ai/FOSSIL_SELF_CONTAINED_AGENT_PLAN.md).
-  Cross-project licensing guidance for this forked integration work lives in
-  [`doc/ai/CROSS_PROJECT_LICENSE_POLICY.md`](doc/ai/CROSS_PROJECT_LICENSE_POLICY.md).
-  A combined orchestration roadmap drawing from Goose, `gentle-ai`, and
-  OpenCode lives in [`doc/ai/ORCHESTRATION_IMPLEMENTATION_PLAN.md`](doc/ai/ORCHESTRATION_IMPLEMENTATION_PLAN.md).
-  Knowledge storage direction is defined in
-  [`doc/ai/STORAGE_MODEL.md`](doc/ai/STORAGE_MODEL.md), which clarifies the
-  split between SQLite runtime/index state and artifact-backed durable text.
-  The concrete browser and materialization sequence lives in
+- Open Knowledge Commons docs: [`doc/ai/`](doc/ai/)
+  The active roadmap is [`doc/ai/IMPLEMENTATION_PLAN.md`](doc/ai/IMPLEMENTATION_PLAN.md).
+  End-user workflow is documented in [`doc/ai/USER_GUIDE.md`](doc/ai/USER_GUIDE.md).
+  Self-hosted evaluation and rollout guidance is in
+  [`doc/ai/ADOPTION_GUIDE.md`](doc/ai/ADOPTION_GUIDE.md).
+  Knowledge capture and curation policy is in
+  [`doc/ai/DATA_POOL.md`](doc/ai/DATA_POOL.md) and
+  [`doc/ai/TIERS.md`](doc/ai/TIERS.md).
+  Storage and provenance design live in
+  [`doc/ai/STORAGE_MODEL.md`](doc/ai/STORAGE_MODEL.md),
+  [`doc/ai/PROVENANCE.md`](doc/ai/PROVENANCE.md), and
+  [`doc/ai/SCHEMA.md`](doc/ai/SCHEMA.md).
+  The browser and durable-artifact sequence lives in
   [`doc/ai/KNOWLEDGE_BROWSER_IMPLEMENTATION_PLAN.md`](doc/ai/KNOWLEDGE_BROWSER_IMPLEMENTATION_PLAN.md).
-  Tcl test suite recovery is tracked in
-  [`doc/ai/TCL_TEST_REVIVAL_PLAN.md`](doc/ai/TCL_TEST_REVIVAL_PLAN.md).
+  Validation coverage is tracked in [`doc/ai/TEST_PLAN.md`](doc/ai/TEST_PLAN.md).
+  The project-level product summary for this fork lives in
+  [`doc/specs/ai-management-system.md`](doc/specs/ai-management-system.md).
 - Clean local reinstall helper: [`dev/tools/install-fossil-clean.sh`](dev/tools/install-fossil-clean.sh)
 - Tcl test prerequisite helper:
   [`dev/tools/install-tcl-test-prereqs.sh`](dev/tools/install-tcl-test-prereqs.sh)

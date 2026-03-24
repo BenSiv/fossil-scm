@@ -1,276 +1,169 @@
-# Pool Processing Loop Implementation Plan
+# Open Knowledge Commons Implementation Plan
 
-This document outlines the implementation plan for the AI agent orchestration layer and the new self-maintaining knowledge pool processing loop.
-provider-aware system without discarding the simplicity of local commands and
-single-binary deployment.
+Purpose: define the implementation roadmap for the NGI Zero Open Knowledge
+Commons work on this Fossil fork.
 
-## Current Status
+This plan replaces the earlier provider-split, cross-project orchestration, and
+AgentOps roadmaps as the primary implementation document for `doc/ai/`.
 
-Fossil has working foundations but is still short of the intended design.
+## Scope
 
-Implemented now:
+The project focus is now four concrete capabilities:
 
-- split chat model and embedding model
-- runtime config precedence with regression coverage
-- `/agentui` diagnostics for effective config source, command, provider
-  inference, and model values
-- wrapper-based backends for Ollama and Codex
-- Tcl regression coverage for agent CLI and first-use web flows
+1. a knowledge browser inside the Fossil web UI
+2. durable knowledge artifacts promoted from indexed notes
+3. provenance-aware retrieval and review surfaces
+4. deployability and documentation for self-hosted adopters
 
-Still missing:
+## Current Baseline
 
-- first-class provider fields
-- provider-aware validation
-- provider/model discovery for the UI
-- streaming chat transport
-- structured message/event persistence
-- conversation-level evaluation of chat quality
+The repository already has useful foundations:
 
-The practical state is:
+- note-oriented knowledge storage in `ai_note`
+- tiered curation concepts from raw capture to durable concepts
+- retrieval metadata and review-oriented tables
+- web-facing AI routes and local-first deployment assumptions
+- internal planning for browser views, storage mapping, and provenance
 
-- operationally usable for local testing
-- not yet architecturally provider-aware
+The current gap is not raw capability alone. The gap is packaging these pieces
+into a coherent knowledge layer that outside users can browse, trust, and
+adopt.
 
-## Design Goals
+## Design Principles
 
-- make runtime config and backend choice explicit
-- remove backend/model ambiguity
-- preserve simple local integrations
-- make `/agentui` truthful about what backend will run
-- prepare for streaming and structured message handling
-- keep the current retrieval loop while extending evaluation to chat
-- **Introduce TH1 Glue Layer**: Move orchestration, prompt engineering, and parsing from C to TH1 scripts for flexibility and safety. See [TH1_ORCHESTRATION.md](file:///wsl.localhost/Ubuntu/home/bensiv/fossil-scm/doc/ai/TH1_ORCHESTRATION.md).
-- keep the core C logic lean and focused on "Muscle" (Vector search, DB access, process execution).
+- keep Fossil self-hosted and lightweight
+- make durable knowledge browseable as Fossil-native artifacts
+- keep SQLite as the metadata, retrieval, and audit layer
+- treat provenance as a first-class user-facing feature
+- prefer reviewable promotion over silent automatic publication
+- document an adoption path for small teams and public-interest projects
 
-## Phase A: Visibility And Safety
+## Milestone 1: Knowledge Browser
 
-Objective:
+Objective: deliver a usable browse surface for indexed knowledge.
 
-- make backend resolution inspectable
-- eliminate silent ambiguity before deeper refactors
+### Deliverables
 
-Delivered already:
+- `/knowledge` summary page oriented around shared project memory
+- `/knowledge-browser` listing indexed notes and knowledge objects
+- filters for tier, source type, processing level, and artifact status
+- text search across note title, body, and durable artifact references
+- links back to wiki pages, technotes, tickets, docs, and repository artifacts
+- review queues for promotion, stale artifacts, and duplicate cleanup
 
-- effective config diagnostics in `/agentui`
-- config source reporting
-- provider inference for diagnostics
-- user config fallback and precedence tests
+### Implementation Notes
 
-Remaining work in this phase:
+- start on top of the existing `ai_note` schema
+- expose retrieval count and recent retrieval history in row/card views
+- keep first release simple and browse-focused rather than analytics-heavy
 
-- surface the effective config summary through a machine-readable endpoint, not
-  only HTML
-- expose whether the effective values came from explicit config or fallback
-- add tests for empty-model and missing-command paths across CLI and web
+### Exit Criteria
 
-Exit criteria:
+- users can browse indexed knowledge through the web UI
+- users can filter and inspect provenance without direct SQL access
+- note pages or row actions clearly link back to source and artifact targets
 
-- a developer can tell, from the UI or one command, exactly which config file,
-  provider, command, and model are active
-- obvious misconfiguration fails early and predictably
+## Milestone 2: Durable Artifact Layer
 
-## Phase B: Provider Fields And Validation
+Objective: turn useful indexed notes into durable, reviewable project artifacts.
 
-Objective:
+### Deliverables
 
-- make provider identity first-class instead of inferred from command strings
+- explicit artifact fields on `ai_note`
+- promotion flow from indexed notes to durable artifacts
+- support for draft, materialized, stale, and superseded states
+- wiki-backed and file-backed materialization targets
+- admin-facing relink and backfill operations
 
-Implementation:
+### Implementation Notes
 
-- add support for:
-  - `provider`
-  - `embedding_provider`
-- keep these legacy fields working:
-  - `command`
-  - `embedding_command`
-  - `model`
-  - `embedding_model`
-- if provider fields are absent, infer them for compatibility
+- preserve `source_type`, `source_id`, and `source_ref` as provenance fields
+- add separate durable artifact references instead of overloading provenance
+- prefer draft wiki pages or a `knowledge/` tree for early materialization
+- avoid bulk rewriting existing notes during the first migration
 
-Validation rules:
+### Exit Criteria
 
-- reject `provider=ollama, model=auto`
-- reject `provider=codex, model=qwen3.5:0.8b`
-- reject embedding requests against providers/models known not to support
-  embeddings when that can be determined early
-- reject missing command/binary when a provider requires an external wrapper
+- durable notes have an explicit artifact target
+- users can promote and review knowledge instead of leaving it in SQL-only form
+- stale or superseded artifacts are visible and auditable
 
-Deliverables:
+## Milestone 3: Provenance And Retrieval Trust
 
-- updated config schema docs
-- compatibility logic for old configs
-- early provider/model mismatch errors
-- Tcl tests for accepted and rejected combinations
+Objective: make retrieval and AI-assisted use inspectable and easier to trust.
 
-Exit criteria:
+### Deliverables
 
-- no backend choice depends on guessing from a free-form model string
-- user-visible errors occur before launching the backend process
+- source-linked retrieval traces
+- per-note provenance paths from derived text back to sources
+- review records for promotion and retrieval quality
+- UI affordances for duplicate, merge, and curation lineage
+- observable reuse signals that justify promotion decisions
 
-## Phase C: Provider-Aware UI And Session State
+### Implementation Notes
 
-Objective:
+- store enough metadata to reconstruct where a note came from
+- keep retrieval history and review actions queryable in SQLite
+- surface provenance in the UI instead of hiding it behind backend internals
+- favor concise rationale summaries over opaque hidden reasoning stores
 
-- make `/agentui` operate on explicit backend identity, not implicit text entry
+### Exit Criteria
 
-Implementation:
+- users can explain why a note or answer was retrieved
+- promotion decisions cite reuse and provenance signals
+- durable artifacts remain attributable to earlier working notes and sources
 
-- replace the plain free-text chat model control with:
-  - provider selector plus provider-scoped model field, or
-  - provider selector plus model dropdown when discovery is available
-- display the active provider and model for both chat and embeddings
-- store provider identity alongside each chat session and message
+## Milestone 4: Deployability And Documentation
 
-Optional server additions:
+Objective: make the knowledge features understandable and adoptable by others.
 
-- endpoint for effective provider/model/config data
-- endpoint for provider capabilities and known models
+### Deliverables
 
-Deliverables:
+- user guide for knowledge capture, browsing, promotion, and review
+- administrator guide for setup, upgrade, and maintenance
+- documentation for self-hosted evaluation by small teams
+- clear repository index of active docs and deprecated directions removed
 
-- no stale model field on new chat
-- existing sessions reopen with the original provider/model pair
-- no confusion between UI text and actual backend
+### Implementation Notes
 
-Exit criteria:
+- document the minimum viable setup first
+- describe local-first and small-team deployment patterns
+- keep docs focused on the knowledge layer rather than a generic agent platform
 
-- session metadata remains meaningful even after config changes
-- the UI cannot silently display one backend while invoking another
+### Exit Criteria
 
----
+- a new adopter can understand what the project does and how to evaluate it
+- the repository docs no longer point in conflicting strategic directions
 
-### [pool-processing]
+## Out Of Scope For This Plan
 
-This component introduces the "pool processing loop" which allows the AI agent to self-maintain the knowledge pool, transitioning items between tiers (Atomic → Composed → Wiki → Curated → Derived).
+The following are not the primary drivers of the current project framing:
 
-#### [MODIFY] [agent.c](file:///wsl.localhost/Ubuntu/home/bensiv/fossil-scm/src/agent.c)
-- **`ai_cmd` (CLI entry point)**: Add a `fossil agent pool-process <tier>` subcommand. This will invoke a TH1 script (either built-in or from the database config) that queries pending items for a tier and processes them.
-- **`agent_register_th1`**: Register the 4 new TH1 pool commands described below.
-- **TH1 Command Implementations**:
-  - `pool_list_pending <tier_num>`: Returns a TCL list of `nid`s from `ai_note` that are ready to be processed *up* to the requested tier. E.g., if passing `2`, it queries notes at `tier=1` that haven't been processed yet.
-  - `pool_get <nid>`: Returns the raw text/body of the specified note from `ai_note`.
-  - `pool_put <target_tier_num> <body> <?metadata?>`: Creates a new `ai_note` at the target tier containing the synthesized body. Returns the new `nid`. Uses `ai_note_create`.
-  - `pool_link <from_nid> <to_nid> <link_type>`: Records a relationship in `ai_note_link`. Uses `ai_note_link_upsert`. Uses link_type strings like `derived-from` or `composed-of`.
+- cross-project Goose/Fabric/OpenClaw comparison work
+- provider-selection strategy as the central roadmap
+- generic AgentOps positioning
+- autonomous micro-commit automation as the headline workflow
 
-#### [MODIFY] [ai.c](file:///wsl.localhost/Ubuntu/home/bensiv/fossil-scm/src/ai.c)
-- Expose `ai_note_link_upsert` for use by the TH1 layer by dropping the `static` keyword and adding it to `ai.h`.
+These implementation details may still exist in code where useful, but they no
+longer define the project narrative or documentation hierarchy.
 
----
+## Document Map
 
-## Phase D: Streaming And Structured Events
+The active companion documents are:
 
-Objective:
+- `DATA_POOL.md`
+- `TIERS.md`
+- `STORAGE_MODEL.md`
+- `PROVENANCE.md`
+- `KNOWLEDGE_BROWSER_IMPLEMENTATION_PLAN.md`
+- `SCHEMA.md`
+- `TEST_PLAN.md`
+- `USER_GUIDE.md`
+- `ADOPTION_GUIDE.md`
 
-- move from buffered one-shot replies to streamed, typed output
-- replace hardcoded C chat logic with a flexible TH1 orchestration layer
+## Success Condition
 
-Transport options:
-
-- server-sent events
-- chunked HTTP
-
-Required backend behavior:
-
-- incremental read of child process output
-- progressive delivery to the UI
-- final persistence after completion or failure
-
-Introduce structured event/message types:
-
-- `progress`
-- `reasoning_visible`
-- `tool_activity`
-- `final_text`
-- `error`
-
-Storage options:
-
-- extend `agentchat` with typed rows, or
-- add a separate event table keyed to a chat message/session
-
-Deliverables:
-
-- live output in `/agentui`
-- separation between visible reasoning and final answer
-- future hooks for filtering, review, or summarization
-
-Exit criteria:
-
-- long-running chats show progress in real time
-- Fossil no longer has to treat every backend response as one undifferentiated
-  text blob
-
-## Phase E: Conversation Evaluation Loop
-
-Objective:
-
-- extend evaluation from retrieval maintenance to answer-quality review
-
-Keep the existing retrieval loop:
-
-- retrieval reinforcement
-- co-retrieval links
-- duplicate detection
-- title correction
-- metadata normalization
-
-Add later, after provider/model clarity and structured events exist:
-
-- reply quality review records
-- output classification
-- explicit handling of visible reasoning text
-- provider-specific post-processing or scrubbing
-- policy hooks that may later influence provider/model choice
-
-Do not build this on top of ambiguous backend state.
-
-Deliverables:
-
-- chat-level eval schema
-- review pipeline for final answers
-- tests covering visible-reasoning and plain-answer providers
-
-Current first slice:
-
-- `ai_chat_eval` records one lightweight evaluation row per final `reply` or
-  `error`
-- initial heuristics classify:
-  - `reply_kind`
-  - `quality_status`
-  - `reasoning_status`
-- a minimal user-feedback path now records `useful` or `not-useful` against
-  the terminal reply evaluation row
-- this is intentionally rule-based and deterministic until provider behavior
-  and event semantics are more mature
-
-Exit criteria:
-
-- Fossil can evaluate agent replies without conflating backend progress,
-  visible reasoning, and final response text
-
-## Testing Strategy
-
-Default `make test` should remain hermetic and Tcl-based.
-
-Coverage to add or maintain:
-
-- config precedence
-- provider/model mismatch rejection
-- user-config runtime fallback
-- `/agentui` new-chat defaults
-- explicit session reopen restores provider/model
-- streaming success and partial-failure handling
-- chat event persistence
-- conversation evaluation records
-
-Live-provider tests should remain opt-in and not be required for default
-developer verification.
-
-## Principles
-
-- explicit provider identity beats command inference
-- runtime diagnostics beat guesswork
-- compatibility matters, but silent fallback should be minimized
-- wrappers are implementation details, not product-level semantics
-- streaming should be designed as transport, not bolted onto final text blobs
-- evaluation should operate on structured outcomes, not raw ambiguous output
+At the end of this roadmap, Fossil should offer a practical self-hosted
+knowledge layer: one that lets communities capture working knowledge, browse
+it, promote the most useful parts into durable artifacts, and inspect the
+provenance behind retrieval and AI-assisted use.

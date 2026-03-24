@@ -1,20 +1,30 @@
 # Metrics
 
-## Knowledge density
-- Ratio of Tier 0 notes to Tier 3 atomic concepts.
+## Knowledge Density
 
-## Concept velocity
-- Rate of promotions from Tier 0/1 to Tier 3.
-- Automatic promotion decisions should be attributable to retrieval usage and review-loop outcomes.
+- ratio of Tier 0 and Tier 1 notes to Tier 3 durable concepts
 
-## Alignment score
-- Percentage of micro-commits that reference constitution/steering.
+## Promotion Velocity
 
-## Retrieval reinforcement
-- Change in retrieval likelihood after successful reuse.
+- rate of movement from working notes to draft or durable artifacts
+- percentage of promotions backed by recorded review decisions
 
-## Atomicity rate
-- Percentage of retrieved notes that already represent one subject.
+## Retrieval Reinforcement
 
-## Duplicate pressure
-- Rate of exact and near-duplicate notes discovered during the evaluation loop.
+- change in retrieval likelihood after successful reuse
+
+## Provenance Coverage
+
+- percentage of retrieved or promoted notes with complete source linkage
+
+## Atomicity Rate
+
+- percentage of retrieved notes that already represent one subject
+
+## Duplicate Pressure
+
+- rate of exact and near-duplicate notes discovered during review
+
+## Artifact Freshness
+
+- ratio of `materialized` artifacts to `stale` or `superseded` artifacts

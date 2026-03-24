@@ -1,22 +1,27 @@
 # Context Assembly
 
-Defines how the agent builds its working context per task.
+Defines how retrieval builds a working context payload for knowledge browsing,
+review, and AI-assisted use.
 
 ## Inputs
-- Active files
-- Last N micro-commits
-- Relevant notes from the data pool, ranked by tier and metadata
-- Steering and constitution
+
+- active request text
+- relevant notes from the data pool, ranked by tier and metadata
+- linked source artifacts
+- steering and project guidance
+- durable knowledge artifacts when available
 
 ## Retrieval
-- Start with metadata filters, provenance links, and tier-aware ranking.
-- Prefer higher-tier notes when they answer the task cleanly.
-- Pull lower-tier notes when the higher tiers do not provide enough coverage.
-- Increase a note's future ranking when it is retrieved successfully.
-- Increase the strength of note-to-note links when notes are retrieved together.
-- Use strict caps per tier to avoid overload.
 
-## Post-retrieval loop
+- start with metadata filters, provenance links, and tier-aware ranking
+- prefer higher-tier notes when they answer the request cleanly
+- pull lower-tier notes when higher tiers do not provide enough coverage
+- increase a note's future ranking when it is retrieved successfully
+- increase note-to-note linkage strength when notes are repeatedly retrieved
+  together
+- use strict caps per tier to avoid overload
+
+## Post-Retrieval Loop
 
 After retrieval, evaluate the selected notes for:
 
@@ -24,7 +29,9 @@ After retrieval, evaluate the selected notes for:
 - connectivity to other retrieved notes
 - duplication and merge candidates
 - title accuracy
-- metadata updates based on processing level
+- metadata and promotion readiness
 
 ## Output
-- A single structured context payload with provenance links.
+
+- a structured context payload with provenance links
+- enough source visibility to justify later promotion or review decisions

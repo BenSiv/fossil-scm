@@ -1,86 +1,114 @@
-# Fossil AI User Guide: The Autonomous Agent
+# Open Knowledge Commons User Guide
 
-The Fossil AI Agent is a local-first, dependency-free AgentOps environment integrated directly into Fossil SCM. It uses a **Knowledge Graph** and **Tiered Memory** system to provide context-aware assistance and autonomous editing.
+Purpose: explain how to use the knowledge-layer features in this Fossil fork.
 
----
+## What This Project Adds
 
-## 🚀 1. Getting Started
+Open Knowledge Commons extends Fossil with a shared knowledge layer built around:
 
-### Activation
-AI features are disabled by default. Use the following commands to initialize the required tables and enable the agent:
-```bash
-fossil ai enable
-fossil ai init
-```
+- indexed notes and working knowledge
+- tiered curation from raw capture to durable concepts
+- promotion into reviewable wiki or file-backed artifacts
+- provenance-aware retrieval and browse surfaces
 
-### Configuration
-The agent's behavior is governed by **TH1 Role Scripts**. You can find the default orchestration logic in:
-- `cfg/roles/default.th1`: The main reasoning loop.
-- `cfg/agent_prompts.json`: Natural language fragments for system prompts.
+The project is aimed at teams that want to keep documentation, decisions,
+references, and retrieval workflows under local control.
 
----
+## Core Workflow
 
-## 🧠 2. The Knowledge Lifecycle
+### 1. Capture knowledge
 
-Fossil uses a "Tiered" memory system (T0–T3) that automatically promotes useful information based on frequency and quality.
+Use notes and source-linked records to capture:
 
-### Adding Knowledge (`fossil agent note`)
-You can feed the agent specific facts, architectural decisions, or "gotchas":
-```bash
-fossil agent note "The build system requires out/autoconfig.h" --tier 2 --title "Build Requirements"
-```
-- **T0 (Raw)**: Default for fleeting notes.
-- **T1 (Working)**: Information you use daily.
-- **T2 (Draft)**: Refined, multi-note summaries.
-- **T3 (Atomic)**: Canonical "Ground Truth" for the project.
+- working summaries
+- technical decisions
+- references and source excerpts
+- draft syntheses
+- project-specific guidance worth retrieving later
 
-### Semantic Indexing
-To keep the search index up to date with new notes or wiki changes, run:
-```bash
-fossil agent semantic-index
-```
+Early captures may remain in the indexed pool while they are still unstable.
 
-### Knowledge Graph & Expansion
-The agent automatically builds a **Knowledge Graph** based on your interactions. 
-- If Note A and Note B are often retrieved together, they become "linked."
-- During retrieval, if the agent finds a relevant note, it automatically "follows the links" to pull in related context that vector search might have missed.
+### 2. Index and retrieve
 
----
+The system indexes notes and related artifacts so they can be:
 
-## 💬 3. Interacting with the Agent
+- searched
+- filtered by tier and source type
+- retrieved with provenance
+- reviewed for later promotion
 
-### The Chat UI
-Navigate to `/agent-chat` in your Fossil UI to start a real-time streaming conversation.
+Higher-tier notes should become easier to reuse, while lower-tier captures stay
+available for provenance and backfill.
 
-### Collective Synthesis
-When you ask a complex question, the agent performs a **Synthesis Phase**:
-1. It retrieves raw notes and code diffs.
-2. It uses the **Knowledge Graph** to find related info.
-3. It performs a "pre-reasoning" step to consolidate these fragments into a single, unified "Context Briefing" before giving you a final answer.
+### 3. Promote useful knowledge
 
----
+When an indexed note proves useful through review or repeated reuse, promote it
+into a durable artifact:
 
-## 🛠️ 4. Autonomous Actions & HITL
+- a draft wiki page
+- a stable wiki page
+- a versioned file under a knowledge tree
 
-The agent can perform actions on your repository, but it follows a strict **Human-in-the-Loop (HITL)** safety workflow for dangerous tools like `edit_file`.
+Promotion should be explicit and reviewable. Provenance should remain attached
+to the promoted artifact.
 
-### Proposing an Edit
-When the agent wants to change a file, it will:
-1. Generate a **Propose Edit** payload.
-2. Intercept the call and show you a **Side-by-Side Diff** in the UI.
-3. Wait for your **Approval** or **Rejection**.
+### 4. Review provenance
 
-### Executing the Action
-Only after you click "Approve" will the agent send the `CONFIRMED_EDIT` signal back to the C-core to actually write the bits to disk.
+When browsing or retrieving knowledge, inspect:
 
----
+- where the note came from
+- what sources support it
+- whether it has been promoted, superseded, or marked stale
+- how often it has been reused
 
-## 🔧 5. Extending the Agent
+This is the trust model for the project: durable knowledge stays inspectable.
 
-### Adding MCP Tools
-Fossil supports the **Model Context Protocol (MCP)**. You can add new tools by editing:
-- `cfg/mcp_tools.json`: Define the tool's schema and parameters.
-- Add a handler in `src/agent.c` (or via a TH1 script) to execute the tool logic.
+## Knowledge Tiers
 
-### Custom Roles
-Create new TH1 scripts in `cfg/roles/` to define specialized agents (e.g., `reviewer.th1`, `tester.th1`) with their own system prompts and tool constraints.
+- Tier 0: raw captures and imports
+- Tier 1: working notes and grouped summaries
+- Tier 2: draft syntheses ready for review
+- Tier 3: durable concepts and canonical references
+
+The tiers are a curation model, not a permission model. Lower tiers remain
+valuable for provenance even when they are not the preferred retrieval target.
+
+## Browser Views
+
+The intended browser surfaces are:
+
+- `/knowledge` for summary and queues
+- `/knowledge-browser` for indexed note browsing
+- artifact links back to wiki, technote, doc, ticket, or repository content
+- provenance and retrieval views for review workflows
+
+Exact route coverage depends on the implementation state of the current branch.
+
+## Durable Artifacts
+
+Durable knowledge should not live only in SQL rows.
+
+Preferred durable targets:
+
+- wiki pages for human-maintained concepts and summaries
+- versioned files for structured knowledge packs and browseable trees
+
+Draft and durable states should be visible from the browser so users can tell
+which knowledge is still working material and which has been published into a
+stable artifact.
+
+## Who This Is For
+
+This project is aimed at:
+
+- software teams
+- research collaborations
+- standards and civic technology groups
+- non-profits and small institutions
+- communities that want self-hosted and portable knowledge infrastructure
+
+## Working Assumption
+
+AI-assisted retrieval can help surface relevant material, but durable changes
+should remain reviewable by people. The project is therefore a knowledge system
+with retrieval support, not a fully autonomous agent platform.

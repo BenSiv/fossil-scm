@@ -1,29 +1,28 @@
 # Data Pool Strategy
 
-Purpose: define how all AI-relevant material enters a shared note pool, how
-metadata drives retrieval, and how retrieved notes are refined over time.
+Purpose: define how knowledge enters the shared pool, how metadata supports
+retrieval, and how useful material advances toward durable artifacts.
 
-## Ingestion policy
+## Ingestion Policy
 
-Any AI-relevant material should be eligible for capture in the data pool,
-including:
+Any project-relevant knowledge should be eligible for capture, including:
 
-- prompts
-- chain-of-thought or internal reasoning traces
+- notes
 - documentation
 - wiki pages
+- technotes
 - tickets
-- chat transcripts
-- diffs and micro-commits
-- derived summaries and curated notes
+- linked source references
+- draft summaries
+- curated knowledge artifacts
 
-Each captured item enters the pool as a note or note-linked artifact with
-metadata attached at ingest time.
+The pool exists to reduce fragmentation between discussion, documentation, and
+retrieval. Captured items should remain attributable to their source.
 
-## Required metadata
+## Required Metadata
 
 Every pooled note should carry enough metadata to support provenance,
-retrieval, and later curation:
+retrieval, and promotion:
 
 - stable note ID
 - title
@@ -31,75 +30,68 @@ retrieval, and later curation:
 - source reference or artifact ID
 - created and updated timestamps in UTC
 - tier or curation level
-- processing level category
+- processing level
 - retrieval count
 - last retrieved timestamp
 - duplicate-of or merged-into link when applicable
 - related note links
 - content hash for exact duplicate detection
 
-## Note hierarchy
+## Note Hierarchy
 
-The note hierarchy expresses how curated a note is. More curated notes should
-be more likely to be retrieved as model context.
+- Tier 0: raw captures and imports
+- Tier 1: working notes and grouped summaries
+- Tier 2: draft syntheses ready for promotion review
+- Tier 3: durable concepts and canonical references
 
-- Tier 0: raw captures such as prompts, chain-of-thought, diffs, and imported
-  source material
-- Tier 1: lightly processed working notes and grouped retrieval sessions
-- Tier 2: curated draft notes with clearer boundaries, titles, and links
-- Tier 3: atomic notes representing one durable subject
+Higher tiers should receive stronger default retrieval weight. Lower tiers
+remain available for provenance, recovery, and backfill.
 
-Higher tiers get a stronger base retrieval weight. Lower tiers remain
-available for provenance, recovery, and re-processing.
-
-## Retrieval strategy
+## Retrieval Strategy
 
 Retrieval is metadata-first and tier-aware.
 
-- Use metadata filters and source links before broad semantic expansion.
-- Prefer higher-tier notes when they cover the query.
-- Fall back to lower-tier notes when higher-tier coverage is weak or missing.
-- Increase a note's future retrieval likelihood each time it is retrieved.
-- Increase relationship strength between notes that are repeatedly retrieved
-  together.
+- prefer higher-tier notes when they cover the request
+- fall back to lower tiers when higher-tier coverage is weak or missing
+- preserve source links for every retrieved note
+- increase future retrieval likelihood when a note is repeatedly reused
+- strengthen links between notes that are repeatedly retrieved together
 
-This creates a reinforcement loop: curation raises retrieval quality, and
-successful retrieval raises future retrieval probability.
+This creates a reinforcement loop in which curation improves retrieval quality
+and demonstrated reuse helps identify promotion candidates.
 
-## Post-retrieval evaluation loop
+## Post-Retrieval Review Loop
 
-Any retrieval event should trigger a processing loop over the retrieved notes.
+Any retrieval event should support a review loop over the retrieved notes.
 
 ### 1. Atomicity
 
-Check whether the note covers one subject. Split or flag notes that mix
-multiple unrelated subjects.
+Check whether the note covers one durable subject. Split or flag notes that mix
+unrelated topics.
 
 ### 2. Connectivity
 
-Record which notes were retrieved together and strengthen links between notes
-that repeatedly co-occur.
+Record which notes were retrieved together and strengthen durable links between
+repeated co-occurrences.
 
-### 3. Duplication and merge
+### 3. Duplication And Merge
 
-Detect exact duplicates first, then near-duplicates. Merge when the retrieved
-notes contain the same information and preserve backlinks to the absorbed
-notes.
+Detect exact duplicates first, then near-duplicates. Preserve lineage when
+merging or superseding notes.
 
-### 4. Title accuracy
+### 4. Title Accuracy
 
-Check whether the title still accurately names the note's subject. Retitle only
-when accuracy requires it.
+Retitle only when the current title is misleading or no longer names the
+subject well.
 
-### 5. Metadata and processing level
+### 5. Promotion Readiness
 
-Update metadata to reflect the latest processing state, including categories
-that describe how processed or curated the note is.
+Assess whether the note is ready to remain in the pool, become a draft artifact,
+or be promoted into a durable artifact.
 
-## Expected outcomes
+## Expected Outcomes
 
-- the pool accepts all relevant material instead of discarding raw inputs
-- metadata remains rich enough to reconstruct origin and processing history
-- retrieval quality improves as notes are curated and repeatedly reused
-- the evaluation loop steadily pushes useful notes toward atomic,
-  better-connected, de-duplicated forms
+- project knowledge remains attributable instead of scattered
+- retrieval quality improves through curation and repeated reuse
+- useful notes move toward durable publication targets
+- provenance stays available even when material becomes more polished
