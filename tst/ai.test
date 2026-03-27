@@ -98,4 +98,50 @@ test ai-selftest-cleanup-3 {[normalize_result] eq {0}}
 
 ###############################################################################
 
+###############################################################################
+# AI Web UI Endpoint Tests
+###############################################################################
+
+proc ai_http_request {repository url} {
+  set requestFile [file join [pwd] ai-http-test.txt]
+  set outFile [file join [pwd] ai-http-out.txt]
+  write_file $requestFile "GET $url HTTP/1.0\r\nHost: localhost\r\nUser-Agent: Fossil-AI-Test\r\n\r\n"
+  fossil http --in $requestFile --out $outFile --ipaddr 127.0.0.1 $repository --localauth -expectError
+  set result [expr {[file exists $outFile] ? [read_file $outFile] : ""}]
+  catch {file delete $requestFile}
+  catch {file delete $outFile}
+  return $result
+}
+
+# Add a fake backend to test semantic-search embeddings successfully
+set backend [file normalize [file join [pwd] fake-embed-backend.sh]]
+write_file $backend {#!/usr/bin/env bash
+printf '{"embedding":[0.1,0.2,0.3,0.4]}\n'
+}
+file attributes $backend -permissions 0755
+
+set cfgDir [file normalize [file join [pwd] ai-test-config]]
+file mkdir $cfgDir
+write_file [file join $cfgDir agent.json] [subst -nocommands {
+{
+  "embedding_provider": "ollama",
+  "embedding_model": "test-embed-model",
+  "embedding_command": "$backend"
+}
+}]
+fossil set agent-config-path [file join $cfgDir agent.json]
+
+# Test `/semantic-search` UI wrapper
+set response [ai_http_request $repoFile /semantic-search?q=test]
+test ai-web-search-1 {[string first {Semantic Search} $response]>=0}
+test ai-web-search-2 {[string first {action="/semantic-search"} $response]>=0}
+
+# Verify that `/note` renders successfully without crashing, and yields expected metadata
+# Note nid=1 (Example Note)
+set response [ai_http_request $repoFile /note?id=1]
+test ai-web-note-1 {[string first {Note: Example Note} $response]>=0}
+test ai-web-note-2 {[string first {Example Note Body} $response]>=0}
+test ai-web-note-3 {[string first {<th>Type:</th><td>doc</td>} $response]>=0}
+
+catch {file delete $backend}
 test_cleanup

@@ -65,7 +65,7 @@ char *ai_note_related_nids(int nid, int limit);
 double ai_note_authority_score(int nid);
 void ai_chat_eval_feedback(int sid, int acid, const char *zFeedback);
 
-static int agent_generate_embedding(
+int agent_generate_embedding(
   const char *zModel,
   const char *zText,
   Blob *pOut
@@ -3328,7 +3328,7 @@ static void agent_verify_cmd(void){
 ** Returns 0 on success, non-zero on error.
 ** The result is stored as an array of floats in pOut.
 */
-static int agent_generate_embedding(
+int agent_generate_embedding(
   const char *zModel,
   const char *zText,
   Blob *pOut

@@ -132,4 +132,7 @@ int agent_run_backend_core(
 int agent_load_asset(const char *zAsset, Blob *pOut);
 const char *agent_orchestration_script(const char *zRole, Blob *pScript);
 
+int agent_generate_embedding(const char *zModel, const char *zText, Blob *pOut);
+void ai_schema_ensure(void);
+
 #endif

@@ -1073,3 +1073,130 @@ void agent_api_v1_chat_page(void){
 void agent_api_v1_chat_flat_page(void){
   agent_api_v1_chat_page();
 }
+
+/*
+** WEBPAGE: semantic-search
+**
+** Run a semantic search against the ai_vector table and display results.
+*/
+void semantic_search_page(void){
+  const char *zQuery = P("q");
+  Blob vQuery = BLOB_INITIALIZER;
+  Stmt q;
+  int nLimit = atoi(PD("n", "20"));
+
+  login_check_credentials();
+  if( !g.perm.Read ){
+    login_needed(g.anon.Read);
+    return;
+  }
+  style_header("Semantic Search");
+
+  @ <form method="GET" action="%R/semantic-search">
+  @ <input type="text" name="q" size="60" value="%h(zQuery?zQuery:"")">
+  @ <input type="submit" value="Search">
+  @ </form>
+  @ <hr>
+
+  if( zQuery && zQuery[0] ){
+    if( !db_table_exists("repository","ai_note")
+     || !db_table_exists("repository","ai_vector") ){
+      @ <p class="error">Knowledge pool not initialized. Run <code>fossil ai init</code> first.</p>
+    }else if( agent_generate_embedding(agent_embedding_model(), zQuery, &vQuery)==0 ){
+      db_prepare(&q,
+        "SELECT n.nid, n.title, n.source_type, vec_distance(v.vector, :vec) AS dist"
+        "  FROM repository.ai_note n"
+        "  JOIN repository.ai_vector v ON v.source_id=n.nid AND v.source_type='note'"
+        " ORDER BY dist ASC LIMIT %d",
+        nLimit<1?20:nLimit
+      );
+      db_bind_blob(&q, ":vec", &vQuery);
+      @ <ul>
+      while( db_step(&q)==SQLITE_ROW ){
+        int nid = db_column_int(&q, 0);
+        const char *zTitle = db_column_text(&q, 1);
+        const char *zSrcType = db_column_text(&q, 2);
+        double dist = db_column_double(&q, 3);
+        @ <li><a href="%R/note?id=%d(nid)">%h(zTitle)</a>
+        @ (distance: %.3f(dist), type: %h(zSrcType))</li>
+      }
+      @ </ul>
+      db_finalize(&q);
+    }else{
+      @ <p class="error">Failed to generate embedding for query.</p>
+    }
+    blob_reset(&vQuery);
+  }
+
+  style_finish_page();
+}
+
+/*
+** WEBPAGE: note
+**
+** Display an AI Note.
+*/
+void agent_note_page(void){
+  int nid = atoi(PD("id", "0"));
+  Stmt q;
+
+  login_check_credentials();
+  if( !g.perm.Read ){
+    login_needed(g.anon.Read);
+    return;
+  }
+  
+  if( nid<=0 ){
+    style_header("Note Not Found");
+    @ <p>Missing or invalid note ID.</p>
+    style_finish_page();
+    return;
+  }
+
+  if( !db_table_exists("repository","ai_note") ){
+    style_header("Semantic Notes");
+    @ <p>Knowledge pool not initialized. Run <code>fossil ai init</code> first.</p>
+    style_finish_page();
+    return;
+  }
+  db_prepare(&q,
+    "SELECT title, body, source_type, source_ref, process_level, metadata, created_at "
+    "FROM repository.ai_note WHERE nid=%d", nid);
+
+  if( db_step(&q)==SQLITE_ROW ){
+    const char *zTitle = db_column_text(&q, 0);
+    const char *zBody = db_column_text(&q, 1);
+    const char *zSrcType = db_column_text(&q, 2);
+    const char *zSrcRef = db_column_text(&q, 3);
+    const char *zLevel = db_column_text(&q, 4);
+    const char *zMeta = db_column_text(&q, 5);
+    const char *zCreated = db_column_text(&q, 6);
+
+    style_header("Note: %h", zTitle);
+    
+    @ <div class="section">Metadata</div>
+    @ <table class="label-value">
+    @ <tr><th>ID:</th><td>%d(nid)</td></tr>
+    @ <tr><th>Created:</th><td>%h(zCreated)</td></tr>
+    @ <tr><th>Type:</th><td>%h(zSrcType)</td></tr>
+    if( zSrcRef && zSrcRef[0] ){
+      @ <tr><th>Ref:</th><td>%h(zSrcRef)</td></tr>
+    }
+    @ <tr><th>Level:</th><td>%h(zLevel)</td></tr>
+    if( zMeta && zMeta[0] ){
+      @ <tr><th>Meta:</th><td><pre>%h(zMeta)</pre></td></tr>
+    }
+    @ </table>
+    
+    @ <div class="section">Content</div>
+    @ <div class="markdown">
+    @ %h(zBody)
+    @ </div>
+
+  }else{
+    style_header("Note Not Found");
+    @ <p>Note %d(nid) not found.</p>
+  }
+  db_finalize(&q);
+  style_finish_page();
+}
