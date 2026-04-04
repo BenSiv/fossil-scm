@@ -101,8 +101,7 @@ void agent_expand_command(
 void agent_prepare_command(
   Blob *pOut,
   const char *zMode,
-  const char *zProvider,
-  const char *zModel,
+  const AgentSessionContext *pCtx,
   Blob *pCmd
 );
 void agent_strip_ansi(Blob *pText);
@@ -119,10 +118,16 @@ int agent_assemble_context(
   int *pRetrievalQid
 );
 void agent_sse_handler(const char *zChunk, int nChunk, void *pApp);
-int agent_run_backend_core(
+int agent_run_backend(
+  int sid,
   const char *zProvider,
   const char *zModel,
-  const char *zPrompt,
+  const char *zQuery,
+  Blob *pReply,
+  Blob *pErr
+);
+int agent_run_backend_core(
+  const AgentSessionContext *pCtx,
   Blob *pReply,
   Blob *pErr,
   void (*xChunk)(const char*, int, void*),
@@ -131,6 +136,16 @@ int agent_run_backend_core(
 
 int agent_load_asset(const char *zAsset, Blob *pOut);
 const char *agent_orchestration_script(const char *zRole, Blob *pScript);
+
+void agent_register_dynamic_capability(
+  const char *zName,
+  const char *zDesc,
+  const char *zSchema,
+  int requiresWrite,
+  int requiresNetwork,
+  int requiresConfirm,
+  const char *zScript
+);
 
 int agent_generate_embedding(const char *zModel, const char *zText, Blob *pOut);
 void ai_schema_ensure(void);

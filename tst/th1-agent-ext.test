@@ -1,0 +1,112 @@
+#
+# Copyright (c) 2026
+#
+# TH1 Agent Extensibility Tests
+#
+
+require_no_open_checkout
+
+set path [file dirname [info script]]
+
+proc agent_http_request {repository method url body} {
+  set requestFile [file join [pwd] agent-http-[getSeqNo].txt]
+  set outFile [file join [pwd] agent-http-out-[getSeqNo].txt]
+  if {$method eq "POST"} {
+    set len [string length $body]
+    write_file $requestFile [subst {POST $url HTTP/1.0\r
+Host: localhost\r
+User-Agent: Fossil-Agent-Test\r
+Content-Type: application/x-www-form-urlencoded\r
+Content-Length: $len\r
+\r
+$body}]
+  } else {
+    write_file $requestFile [subst {GET $url HTTP/1.0\r
+Host: localhost\r
+User-Agent: Fossil-Agent-Test\r
+\r
+}]
+  }
+  fossil http --in $requestFile --out $outFile --ipaddr 127.0.0.1 \
+      $repository --localauth -expectError
+  set result [expr {[file exists $outFile] ? [read_file $outFile] : ""}]
+  catch {file delete $requestFile}
+  catch {file delete $outFile}
+  return $result
+}
+
+proc agent_http_status {response} {
+  set status ""
+  set response [string map [list \r\n \n] $response]
+  regexp {^HTTP/\S+\s+([0-9][0-9][0-9])} $response dummy status
+  return $status
+}
+
+proc agent_http_body {response} {
+  set response [string map [list \r\n \n] $response]
+  set sep [string first "\n\n" $response]
+  if {$sep<0} {
+    return ""
+  }
+  return [string range $response [expr {$sep+2}] end]
+}
+
+test_setup
+
+fossil test-th-eval --open-config {repository}
+set repository [normalize_result]
+
+# Create a mock session table directly
+fossil sqlite "CREATE TABLE IF NOT EXISTS agentchat_session(sid INTEGER PRIMARY KEY, provider TEXT, model TEXT, qid INTEGER, datetime TEXT, mtime TEXT)"
+fossil sqlite "INSERT INTO agentchat_session(sid, provider, model) VALUES(888, 'testp', 'testm')"
+
+# Test 1: Capability Registration Emission
+fossil setting th1-setup {
+  agent_capability_register "test_echo" "Echo tool" "{\"type\":\"string\"}" 0 0 0 {
+    return "TH1 ECHO: $agent_tool_args"
+  }
+  
+  proc th1-agent-pre-tool {} {
+    global agent_tool_name
+    global agent_tool_args
+    if {$agent_tool_name eq "test_block"} {
+      error "Blocked by pre-tool"
+    }
+  }
+
+  agent_capability_register "test_block" "Blocked tool" "" 0 0 0 {
+    return "Should not reach here"
+  }
+  
+  proc th1-agent-post-tool {} {
+    global agent_tool_result
+    return "$agent_tool_result (POST HOOK)"
+  }
+}
+
+fossil agent capabilities
+test th1-ext-caps-1 {[string first "test_echo" [normalize_result]]>=0}
+test th1-ext-caps-2 {[string first "test_block" [normalize_result]]>=0}
+
+# Test 2: Execute successful tool with post hook
+set body "sid=888&tool=test_echo&arguments=hello"
+set response [agent_http_request $repository POST /agent-api/v1/tool/apply $body]
+set RESULT [agent_http_body $response]
+test th1-ext-exec-1 {[agent_http_status $response] eq {200}}
+test th1-ext-exec-2 {[string first "\"ok\":true" $RESULT]>=0}
+test th1-ext-exec-3 {[string first "TH1 ECHO: hello (POST HOOK)" $RESULT]>=0}
+
+# Test 3: Execute blocked tool (pre-hook error)
+set body "sid=888&tool=test_block&arguments=hello"
+set response [agent_http_request $repository POST /agent-api/v1/tool/apply $body]
+set RESULT [agent_http_body $response]
+test th1-ext-exec-4 {[agent_http_status $response] eq {200}}
+test th1-ext-exec-5 {[string first "Blocked by pre-tool" $RESULT]>=0}
+test th1-ext-exec-6 {[string first "\"ok\":false" $RESULT]>=0}
+
+# Test 4: Unknown tool
+set body "sid=888&tool=unknown_tool&arguments=hello"
+set response [agent_http_request $repository POST /agent-api/v1/tool/apply $body]
+set RESULT [agent_http_body $response]
+test th1-ext-exec-7 {[string first "unsupported_tool" $RESULT]>=0}
+

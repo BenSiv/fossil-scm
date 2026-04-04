@@ -161,13 +161,26 @@ static int agent_run_th1(
   int *argl
 ){
   Blob out = BLOB_INITIALIZER;
+  Blob err = BLOB_INITIALIZER;
   int rc;
+  int sid = 0;
+  const char *zSid;
   if( argc!=4 ){
     return Th_WrongNumArgs(interp, "agent_run PROVIDER MODEL MSG");
   }
-  rc = agent_run_backend_core(argv[1], argv[2], argv[3], &out, 0, 0, 0);
-  Th_SetResult(interp, blob_str(&out), blob_size(&out));
+  if( Th_GetVar(interp, "sid", 3)==TH_OK ){
+    int nSid;
+    zSid = Th_GetResult(interp, &nSid);
+    if( zSid ) sid = atoi(zSid);
+  }
+  rc = agent_run_backend(sid, argv[1], argv[2], argv[3], &out, &err);
+  if( rc!=0 ){
+    Th_SetResult(interp, blob_str(&err), blob_size(&err));
+  }else{
+    Th_SetResult(interp, blob_str(&out), blob_size(&out));
+  }
   blob_reset(&out);
+  blob_reset(&err);
   return rc==0 ? TH_OK : TH_ERROR;
 }
 
@@ -180,13 +193,32 @@ static int agent_run_stream_th1(
 ){
   Blob out = BLOB_INITIALIZER;
   Blob err = BLOB_INITIALIZER;
+  AgentSessionContext sCtx = {0};
   int rc;
+  int sid = 0;
+  const char *zSid;
   if( argc!=4 ){
     return Th_WrongNumArgs(interp, "agent_run_stream PROVIDER MODEL MSG");
   }
+  if( Th_GetVar(interp, "sid", 3)==TH_OK ){
+    int nSid;
+    zSid = Th_GetResult(interp, &nSid);
+    if( zSid ) sid = atoi(zSid);
+  }
+  
+  sCtx.sid = sid;
+  sCtx.zProvider = argv[1];
+  sCtx.zModel = argv[2];
+  sCtx.zQuery = argv[3];
+  sCtx.interface = agent_provider_interface(argv[1]);
+  if( sid>0 ) agent_chat_session_context_load(sid, &sCtx);
+
   rc = agent_run_backend_core(
-    argv[1], argv[2], argv[3], &out, &err, agent_sse_handler, 0
+    &sCtx, &out, &err, agent_sse_handler, 0
   );
+  
+  agent_chat_session_context_free(&sCtx);
+
   if( rc!=0 ){
     Th_SetResult(interp, blob_str(&err), blob_size(&err));
     rc = TH_ERROR;
@@ -553,6 +585,22 @@ static int pool_related_th1(
   return TH_OK;
 }
 
+static int agent_capability_register_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  if( argc!=8 ) return Th_WrongNumArgs(interp, "agent_capability_register NAME DESC SCHEMA WRITE_REQ NET_REQ CONFIRM_REQ SCRIPT");
+  agent_register_dynamic_capability(
+    argv[1], argv[2], argv[3],
+    atoi(argv[4]), atoi(argv[5]), atoi(argv[6]),
+    argv[7]
+  );
+  return TH_OK;
+}
+
 void agent_register_th1(Th_Interp *interp){
   static const struct {
     const char *zName;
@@ -572,6 +620,7 @@ void agent_register_th1(Th_Interp *interp){
     {"agent_mcp_call",   agent_mcp_call_th1, 0},
     {"agent_json_extract", agent_json_extract_th1, 0},
     {"agent_asset",        agent_asset_th1, 0},
+    {"agent_capability_register", agent_capability_register_th1, 0},
     {"agent_tool_info",    agent_tool_info_th1, 0},
     {"agent_json_quote",   agent_json_quote_th1, 0},
     {"pool_list_pending", pool_list_pending_th1, 0},

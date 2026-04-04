@@ -14,6 +14,7 @@ char *style_nonce(void);
 int Th_Render(const char *z);
 const unsigned char *builtin_file(const char *zFilename, int *piSize);
 
+#include "th.h"
 void ai_chat_eval_feedback(int sid, int acid, const char *zFeedback);
 void agent_emit_pool_json(void);
 void agent_emit_retrieval_json(int qid);
@@ -998,6 +999,154 @@ void agent_api_v1_approval_apply_page(void){
 */
 void agent_api_v1_approval_apply_flat_page(void){
   agent_api_v1_approval_apply_page();
+}
+
+/*
+** WEBPAGE: agent-api/v1/tool/apply
+**
+** Generic endpoint for applying dynamic TH1 tool operations.
+*/
+void agent_api_v1_tool_apply_page(void){
+  Blob result = BLOB_INITIALIZER;
+  const char *zUser;
+  const char *zTool;
+  const char *zArgs;
+  const char *zRequestIdParam;
+  char *zRequestId = 0;
+  char *zMeta = 0;
+  char *zRowMeta = 0;
+  int sid;
+  int rid = 0;
+  int acid;
+  int rc = 0;
+  const char *zScript;
+
+  login_check_credentials();
+  cgi_set_content_type("application/json");
+  if( !g.perm.Read ){
+    agent_api_v1_emit_error("missing read permissions or not logged in", 0);
+    return;
+  }
+  sid = atoi(PD("sid","0"));
+  zTool = PD("tool", "");
+  zArgs = PD("arguments", "");
+  zRequestIdParam = PD("request_id", "");
+  zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
+
+  if( sid<=0 || !agent_chat_session_exists(sid) ){
+    agent_api_v1_emit_error("missing or unknown sid parameter", "unknown_session");
+    return;
+  }
+  
+  Th_Render(""); /* Initialize TH1 and run setup script to load tools */
+  zScript = agent_capability_script(zTool);
+  if( !zScript ){
+    agent_api_v1_emit_error("unsupported dynamic tool", "unsupported_tool");
+    return;
+  }
+
+  db_begin_write();
+  db_unprotect(PROTECT_READONLY);
+  
+  if( fossil_strcmp(agent_chat_session_request_state(sid), "waiting-approval")==0 ){
+    rid = agent_request_latest_rid(sid);
+    zRequestId = mprintf("%s", agent_chat_session_request_id(sid));
+    agent_request_set_state(rid, "running", 0);
+  }else{
+    rid = agent_request_create(sid, zRequestIdParam, "running");
+    zRequestId = mprintf("%s", agent_chat_session_request_id(sid));
+  }
+
+  zMeta = mprintf(
+    "{\"request_id\":%!j,\"tool\":%!j,\"phase\":\"request\"}",
+    zRequestId, zTool
+  );
+  agent_chat_save_event(sid, zUser, "tool_request",
+                        agent_chat_provider(), agent_chat_session_model(sid, ""),
+                        zMeta, zArgs);
+  fossil_free(zMeta);
+  zMeta = 0;
+
+  Th_SetVar(g.interp, "agent_tool_name", -1, zTool, -1);
+  Th_SetVar(g.interp, "agent_tool_args", -1, zArgs, -1);
+
+  /* Execute Pre-Tool Hook if exists */
+  Th_Eval(g.interp, 0, "info commands th1-agent-pre-tool", -1);
+  if( fossil_strcmp(Th_GetResult(g.interp, 0), "th1-agent-pre-tool")==0 ){
+    rc = Th_Eval(g.interp, 0, "th1-agent-pre-tool", -1);
+    if( rc!=TH_OK ){
+      blob_append(&result, Th_GetResult(g.interp, 0), -1);
+    }
+  }
+
+  /* Execute Primary Tool Script */
+  if( rc==TH_OK ){
+    rc = Th_Eval(g.interp, 0, zScript, -1);
+    blob_append(&result, Th_GetResult(g.interp, 0), -1);
+  }
+
+  /* Execute Post-Tool Hook if exists */
+  if( rc==TH_OK ){
+    Th_SetVar(g.interp, "agent_tool_result", -1, blob_str(&result), blob_size(&result));
+    Th_Eval(g.interp, 0, "info commands th1-agent-post-tool", -1);
+    if( fossil_strcmp(Th_GetResult(g.interp, 0), "th1-agent-post-tool")==0 ){
+      rc = Th_Eval(g.interp, 0, "th1-agent-post-tool", -1);
+      if( rc==TH_OK ){
+        blob_reset(&result);
+        blob_append(&result, Th_GetResult(g.interp, 0), -1);
+      }else{
+        blob_reset(&result);
+        blob_appendf(&result, "Post-hook error: %s", Th_GetResult(g.interp, 0));
+      }
+    }
+  }
+
+  zMeta = mprintf(
+    "{\"request_id\":%!j,\"tool\":%!j,\"phase\":\"result\","
+    "\"status\":%!j}",
+    zRequestId, zTool,
+    rc==TH_OK ? "ok" : "error"
+  );
+  agent_chat_save_event(sid, zUser, "tool_result",
+                        agent_chat_provider(), agent_chat_session_model(sid, ""),
+                        zMeta, blob_str(&result));
+  fossil_free(zMeta);
+  zMeta = 0;
+
+  acid = agent_chat_save(
+    sid, zUser, "agent", rc==TH_OK ? "reply" : "error",
+    agent_chat_provider(), agent_chat_session_model(sid, ""),
+    (zRowMeta = mprintf("{\"request_id\":%!j}", zRequestId)), blob_str(&result)
+  );
+  fossil_free(zRowMeta);
+  agent_request_set_state(rid, rc==TH_OK ? "finished" : "failed", acid);
+  
+  CX("{\"api_version\":\"v1\",\"ok\":%s,\"approval\":{\"tool\":%!j,"
+     "\"applied\":%s,\"message\":%!j},\"request\":",
+     rc==TH_OK ? "true" : "false",
+     zTool,
+     rc==TH_OK ? "true" : "false",
+     blob_str(&result));
+  agent_emit_request_object_json(sid, zRequestId);
+  CX(",\"capabilities\":");
+  agent_api_v1_emit_capabilities();
+  if( rc!=TH_OK ){
+    CX(",\"error\":%!j,\"error_code\":\"tool_failed\"", blob_str(&result));
+  }
+  CX("}\n");
+  db_end_transaction(0);
+
+  blob_reset(&result);
+  fossil_free(zRequestId);
+}
+
+/*
+** WEBPAGE: agent-api-v1-tool-apply
+**
+** Fossil-native flat alias for tool application.
+*/
+void agent_api_v1_tool_apply_flat_page(void){
+  agent_api_v1_tool_apply_page();
 }
 
 /*

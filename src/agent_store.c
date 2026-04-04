@@ -271,6 +271,55 @@ int agent_chat_save(
   return acid;
 }
 
+/*
+** Load the full message history for a session into the provided context.
+** Limits history to the most recent 50 messages to keep context manageable.
+*/
+void agent_chat_session_context_load(int sid, AgentSessionContext *pCtx){
+  Stmt q;
+  int n = 0;
+  int nLimit = db_get_int("agent-history-count", 50);
+  if( sid<=0 ) return;
+  db_prepare(&q,
+    "SELECT role, msg FROM agentchat"
+    " WHERE sid=%d"
+    " ORDER BY acid ASC LIMIT %d",
+    sid, nLimit
+  );
+  while( db_step(&q)==SQLITE_ROW ){
+    n++;
+  }
+  db_reset(&q);
+  if( n>0 ){
+    pCtx->aMsg = fossil_malloc(sizeof(AgentMessage) * n);
+    pCtx->nMsg = 0;
+    while( db_step(&q)==SQLITE_ROW ){
+      AgentMessage *pMsg = &pCtx->aMsg[pCtx->nMsg++];
+      pMsg->zRole = fossil_strdup(db_column_text(&q, 0));
+      pMsg->zContent = fossil_strdup(db_column_text(&q, 1));
+      pMsg->nContent = (int)strlen(pMsg->zContent);
+    }
+  }
+  db_finalize(&q);
+  pCtx->zSystemPrompt = agent_config_get("system_prompt");
+}
+
+/*
+** Free any dynamically allocated memory within the session context.
+*/
+void agent_chat_session_context_free(AgentSessionContext *pCtx){
+  int i;
+  if( pCtx->aMsg ){
+    for(i=0; i<pCtx->nMsg; i++){
+      fossil_free((char*)pCtx->aMsg[i].zRole);
+      fossil_free((char*)pCtx->aMsg[i].zContent);
+    }
+    fossil_free(pCtx->aMsg);
+  }
+  fossil_free((char*)pCtx->zSystemPrompt);
+  memset(pCtx, 0, sizeof(*pCtx));
+}
+
 void agent_chat_save_event(
   int sid,
   const char *zUser,
