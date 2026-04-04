@@ -4494,7 +4494,7 @@ static void agent_phases_cmd(void){
 static void agent_capabilities_cmd(void){
   unsigned int i;
   AgentDynamicCapability *pDyn;
-  Th_Render("");
+  Th_Render("<th1></th1>");
   for(i=0; i<count(aAgentCapabilityBuiltin); i++){
     const AgentCapability *p = &aAgentCapabilityBuiltin[i];
     fossil_print("%s\t%s\twrite=%s\tnetwork=%s\tconfirm=%s\t%s\n",

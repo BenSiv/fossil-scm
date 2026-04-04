@@ -1038,7 +1038,7 @@ void agent_api_v1_tool_apply_page(void){
     return;
   }
   
-  Th_Render(""); /* Initialize TH1 and run setup script to load tools */
+  Th_Render("<th1></th1>"); /* Initialize TH1 and run setup script to load tools */
   zScript = agent_capability_script(zTool);
   if( !zScript ){
     agent_api_v1_emit_error("unsupported dynamic tool", "unsupported_tool");
