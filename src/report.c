@@ -234,8 +234,9 @@ static int report_query_authorizer(
         }
       }
       if( cmp ){
-        /* Always ok to access tables whose names begin with "fx_" */
+        /* Always ok to access tables whose names begin with "fx_" or "ai_" */
         cmp = sqlite3_strnicmp(zArg1, "fx_", 3);
+        if( cmp ) cmp = sqlite3_strnicmp(zArg1, "ai_", 3);
       }
       if( cmp ){
         *(char**)pError = mprintf("access to table \"%s\" is restricted",zArg1);

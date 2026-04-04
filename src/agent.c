@@ -4519,6 +4519,29 @@ static void agent_capabilities_cmd(void){
   }
 }
 
+static void agent_tool_exec_cmd(void){
+  const char *zTool;
+  const char *zArgs;
+  const char *zScript;
+  int nRes;
+  db_find_and_open_repository(OPEN_ANY_SCHEMA, 0);
+  if( g.argc<4 ){
+    usage("agent tool-exec NAME ?JSON_ARGS?");
+  }
+  zTool = g.argv[3];
+  zArgs = g.argc>=5 ? g.argv[4] : "";
+  Th_Render("<th1></th1>");
+  zScript = agent_capability_script(zTool);
+  if( !zScript ){
+    fossil_fatal("unknown dynamic tool: %s", zTool);
+  }
+  Th_SetVar(g.interp, "agent_tool_args", -1, zArgs, -1);
+  if( Th_Eval(g.interp, 0, zScript, -1)!=TH_OK ){
+    fossil_fatal("tool execution failed: %s", Th_GetResult(g.interp, &nRes));
+  }
+  fossil_print("%s\n", Th_GetResult(g.interp, &nRes));
+}
+
 /*
 ** COMMAND: agent
 **
@@ -4584,6 +4607,9 @@ static void agent_capabilities_cmd(void){
 **
 **    fossil agent retrieve QUERY [--limit N]
 **       Retrieve weighted note matches and reinforce them.
+**
+**    fossil agent tool-exec NAME ?JSON_ARGS?
+**       Execute a named dynamic tool using the TH1 interpreter.
 **
 **    fossil agent wiki-sync PAGENAME ?FILE? [--append] [--dry-run]
 **                             [--title TEXT] [--status TEXT]
@@ -4651,6 +4677,8 @@ void agent_cmd(void){
   }else if( fossil_strcmp(zCmd, "mcp")==0 ){
     void agent_mcp_cmd(void);
     agent_mcp_cmd();
+  }else if( fossil_strcmp(zCmd, "tool-exec")==0 ){
+    agent_tool_exec_cmd();
   }else{
     fossil_fatal("unknown agent subcommand: %s", zCmd);
   }

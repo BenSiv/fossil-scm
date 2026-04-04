@@ -57,7 +57,11 @@ static int agent_json_extract_th1(
     zEnd = strchr(zStart, '\"');
     if( zEnd ){
       Th_SetResult(interp, zStart, (int)(zEnd - zStart));
+    }else{
+      Th_SetResult(interp, "", 0);
     }
+  }else{
+    Th_SetResult(interp, "", 0);
   }
   fossil_free(zKey);
   return TH_OK;
