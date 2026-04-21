@@ -287,9 +287,9 @@ in the SQL database.
 The SQL query capabilities of Fossil make it easier to track the
 changes for one particular file within a project.  For example,
 you can easily find
-[/finfo/www/fossil-v-git.wiki|the complete edit history of this one document],
+[/finfo/doc/web/fossil-v-git.wiki|the complete edit history of this one document],
 or even 
-[/finfo/www/fossil-v-git.wiki?ubg|the same history color-coded by committer],
+[/finfo/doc/web/fossil-v-git.wiki?ubg|the same history color-coded by committer],
 Both questions are simple SQL query in Fossil, with procedural code
 only being used to format the result for display.
 The same result could be obtained from Git, but because the data is
@@ -485,7 +485,7 @@ development model:
      occasionally send selected change sets to each other.
  
   *  <b>Private branches are rare:</b>
-     [/doc/trunk/www/private.wiki|Private branches exist in Fossil], but
+     [/doc/trunk/doc/web/private.wiki|Private branches exist in Fossil], but
      they're normally used to handle rare exception cases, whereas in
      many Git projects, they're part of the straight-line development
      process.
@@ -701,7 +701,7 @@ There is nothing like Git's <tt>filter-branch</tt> in Fossil.
 The lone exception is deleting commits. Fossil has two methods for doing
 that, both of which have stringent limitations, on purpose.
 
-The first is [/doc/trunk/www/shunning.wiki | shunning]. See that
+The first is [/doc/trunk/doc/web/shunning.wiki | shunning]. See that
 document for details, but briefly, you only get mandatory compliance
 for shun requests within a single repository. Shun requests do not
 propagate automatically between repository clones. A Fossil repository

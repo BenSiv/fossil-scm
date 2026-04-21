@@ -1,6 +1,6 @@
 <title>How To Create A New Fossil Repository</title>
 
-The [/doc/tip/www/quickstart.wiki|quickstart guide] explains how
+The [/doc/tip/doc/web/quickstart.wiki|quickstart guide] explains how
 to get up and running with fossil. But once you're running, what can
 you do with it? This document will walk you through the process of
 creating a fossil repository, populating it with files, and then
@@ -128,7 +128,7 @@ repository: /path/to/my_repo.fossil
 Make that script executable, and you're all ready to go:
 
 <verbatim>
-$ chmod +x ~/www/cgi-bin/myrepo.cgi
+$ chmod +x ~/doc/web/cgi-bin/myrepo.cgi
 </verbatim>
 
 Now simply point your browser to

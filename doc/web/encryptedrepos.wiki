@@ -3,7 +3,7 @@
 <h2>Introduction</h2>
 
 Fossil can be compiled so that it works with encrypted repositories using
-the [https://www.sqlite.org/see/doc/trunk/www/readme.wiki|SQLite Encryption Extension].
+the [https://www.sqlite.org/see/doc/trunk/doc/web/readme.wiki|SQLite Encryption Extension].
 This technical note explains the process.
 
 <h2>Building An Encryption-Enabled Fossil</h2>

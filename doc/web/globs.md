@@ -279,9 +279,9 @@ of a specific checkin. They may be further restricted by query
 parameters that specify glob patterns that name files to include or
 exclude rather than taking the entire checkin.
 
-[`/timeline`]: /help/www/timeline
-[`/tarball`]:  /help/www/tarball
-[`/zip`]:      /help/www/zip
+[`/timeline`]: /help/doc/web/timeline
+[`/tarball`]:  /help/doc/web/tarball
+[`/zip`]:      /help/doc/web/zip
 
 
 ## Platform Quirks

@@ -295,14 +295,14 @@ pull new unversioned content down.
 
 Thus our recommendation that you refer to in-repo resources exclusively.
 
-[du]:   /help/www/doc
+[du]:   /help/doc/web/doc
 [fp]:   ./forum.wiki
-[ru]:   /help/www/raw
+[ru]:   /help/doc/web/raw
 [spof]: https://en.wikipedia.org/wiki/Single_point_of_failure
 [tkt]:  ./tickets.wiki
 [tn]:   ./event.wiki
 [tls]:  ./server/debian/nginx.md 
-[uu]:   /help/www/uv
+[uu]:   /help/doc/web/uv
 [uv]:   ./unvers.wiki
 [wiki]: ./wikitheory.wiki
 

@@ -127,7 +127,7 @@ tickets to be extended with client-specified fields, so we cannot
 generically make these results fit into the API-wide naming scheme. Full
 details are here:
 
-[](/doc/trunk/www/custom_ticket.wiki)
+[](/doc/trunk/doc/web/custom_ticket.wiki)
 
 and:
 

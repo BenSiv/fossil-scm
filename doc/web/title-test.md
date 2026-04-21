@@ -7,6 +7,6 @@ The title should read:
 
 See also:
 
-  *  [](/doc/trunk/www/title-test.wiki)
+  *  [](/doc/trunk/doc/web/title-test.wiki)
   *  [](/wiki?name=Test+Wiki+>+%26+%22+%27+%3c+Title&p)
   *  [](/forumpost/481ab1f9)

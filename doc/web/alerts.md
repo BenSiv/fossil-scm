@@ -403,7 +403,7 @@ We only need to arrange that the same SQLite DB file be visible both
 inside and outside the chroot jail, which we do by naming the database
 file in the "Store Emails In This Database" setting under Admin →
 Notification.  The Tcl script has this path hard-coded as
-`/home/www/fossil/emailqueue.db`, but you will probably need to adjust
+`/home/doc/web/fossil/emailqueue.db`, but you will probably need to adjust
 that for your local purposes.
 
 This method may work with other similar technologies besides `chroot`:
@@ -419,7 +419,7 @@ You can start this Tcl script as a daemon automatically on most Unix and
 Unix-like systems by adding the following line to the `/etc/rc.local`
 file of the server that hosts the repository sending email alerts:
 
-    /usr/bin/tclsh /home/www/fossil/email-sender.tcl &
+    /usr/bin/tclsh /home/doc/web/fossil/email-sender.tcl &
 
 [cj]:   https://en.wikipedia.org/wiki/Chroot
 [rdbc]: https://www.sqlite.org/howtocorrupt.html#_filesystems_with_broken_or_missing_lock_implementations
@@ -548,16 +548,16 @@ Commands:
 
 Web pages available to users and subscribers:
 
-   *  The [`/subscribe`](/help/www/subscribe) page
-   *  The [`/alerts`](/help/www/alerts) page
-   *  The [`/unsubscribe`](/help/www/unsubscribe) page
-   *  The [`/renew`](/help/www/renew) page
-   *  The [`/contact_admin`](/help/www/contact_admin) page
+   *  The [`/subscribe`](/help/doc/web/subscribe) page
+   *  The [`/alerts`](/help/doc/web/alerts) page
+   *  The [`/unsubscribe`](/help/doc/web/unsubscribe) page
+   *  The [`/renew`](/help/doc/web/renew) page
+   *  The [`/contact_admin`](/help/doc/web/contact_admin) page
 
 Administrator-only web pages:
 
-   *  The [`/setup_notification`](/help/www/setup_notification) page
-   *  The [`/subscribers`](/help/www/subscribers) page
+   *  The [`/setup_notification`](/help/doc/web/setup_notification) page
+   *  The [`/subscribers`](/help/doc/web/subscribers) page
 
 
 <a id="design"></a>

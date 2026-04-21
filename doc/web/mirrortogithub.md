@@ -156,10 +156,10 @@ respectively.  Both repositories are hosted on the same VM at
 [cron job](https://linux.die.net/man/8/cron)
 that runs at 17 minutes after the hour, every hour that does:
 
-    /usr/bin/fossil sync -u -R /home/www/fossil/fossil.fossil
-    /usr/bin/fossil sync -R /home/www/fossil/sqlite.fossil
-    /usr/bin/fossil git export -R /home/www/fossil/fossil.fossil
-    /usr/bin/fossil git export -R /home/www/fossil/sqlite.fossil
+    /usr/bin/fossil sync -u -R /home/doc/web/fossil/fossil.fossil
+    /usr/bin/fossil sync -R /home/doc/web/fossil/sqlite.fossil
+    /usr/bin/fossil git export -R /home/doc/web/fossil/fossil.fossil
+    /usr/bin/fossil git export -R /home/doc/web/fossil/sqlite.fossil
 
 The initial two "sync" commands pull in changes from the primary
 Fossil repositories for Fossil and SQLite.  The last two lines

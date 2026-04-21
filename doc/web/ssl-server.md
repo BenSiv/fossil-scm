@@ -140,7 +140,7 @@ Given a single concatenated file that holds both your private key and your
 cert, you can hand it off to the "[fossil server](/help/server)"
 command using the `--cert` option, like this:
 
-    fossil server --port 443 --cert mycert.pem /home/www/myproject.fossil
+    fossil server --port 443 --cert mycert.pem /home/doc/web/myproject.fossil
 
 The command above is sufficient to run a fully-encrypted web site for
 the "myproject.fossil" Fossil repository.  This command must be run as
@@ -158,7 +158,7 @@ Fossil drops its root privileges, it becomes unable to access the
 private key on disk. Fossil’s `server` feature includes the `--pkey`
 option to allow for that use case:
 
-    fossil server --port 443 --cert fullchain.pem --pkey privkey.pem /home/www/myproject.fossil
+    fossil server --port 443 --cert fullchain.pem --pkey privkey.pem /home/doc/web/myproject.fossil
 
 [^ssattack]: ^How, you ask? Because the keys are known, they can be used
     to provide signed certificates for **any** other domain. One foolish
@@ -274,11 +274,11 @@ should be in that top-level directory.
 Thus, to set up a project website, you should first run Fossil in ordinary
 unencrypted HTTP mode like this:
 
-    fossil server --port 80 --acme /home/www/myproject.fossil
+    fossil server --port 80 --acme /home/doc/web/myproject.fossil
 
 Then you create your public/private key pair and run certbot, giving it
 a --webroot of /home/www.  Certbot will create the sub-directory
-named "/home/www/.well-known" and put token files there, which the CA
+named "/home/doc/web/.well-known" and put token files there, which the CA
 will verify.  Then certbot will store your new cert in a particular file.
 
 Once certbot has obtained your cert,  you may either pass the two halves

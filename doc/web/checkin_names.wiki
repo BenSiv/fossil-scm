@@ -34,7 +34,7 @@ fossil info <i>checkin-name</i>
 You are perhaps reading this page from the following URL:
 
 <verbatim>
-https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki
+https://fossil-scm.org/home/doc/trunk/doc/web/checkin_names.wiki
 </verbatim>
 
 This is an example of an [./embeddeddoc.wiki | embedded documentation]
@@ -184,7 +184,7 @@ For an example of how timestamps are useful,
 consider the homepage for the Fossil website itself:
 
 <pre>
-https://fossil-scm.org/home/doc/<b>trunk</b>/www/index.wiki
+https://fossil-scm.org/home/doc/<b>trunk</b>/doc/web/index.wiki
 </pre>
 
 The bold component of that URL is a check-in name.  To see the stored content
@@ -192,7 +192,7 @@ of the Fossil website repository as of January 1, 2009, one has merely to change
 the URL to the following:
 
 <pre>
-https://fossil-scm.org/home/doc/<b>2009-01-01</b>/www/index.wiki
+https://fossil-scm.org/home/doc/<b>2009-01-01</b>/doc/web/index.wiki
 </pre>
 
 (Note that this won't roll you back to the <i>skin</i> and other

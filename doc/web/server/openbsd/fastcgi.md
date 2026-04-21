@@ -34,10 +34,10 @@ This installs Fossil into the chroot. To facilitate local use, create a
 symbolic link of the fossil executable into `/usr/local/bin`.
 
 ```console
-$ doas ln -s /var/www/bin/fossil /usr/local/bin/fossil
+$ doas ln -s /var/doc/web/bin/fossil /usr/local/bin/fossil
 ```
 
-As a privileged user, create the file `/var/www/cgi-bin/scm` with the
+As a privileged user, create the file `/var/doc/web/cgi-bin/scm` with the
 following contents to make the CGI script that `httpd` will execute in
 response to `fsl.domain.tld` requests; all paths are relative to the
 `/var/www` chroot.
@@ -51,17 +51,17 @@ errorlog: /logs/fossil.log
 ```
 
 The `directory` directive instructs Fossil to serve all repositories
-found in `/var/www/htdocs/fsl.domain.tld`, while `errorlog` sets logging
-to be saved to `/var/www/logs/fossil.log`; create the repository
+found in `/var/doc/web/htdocs/fsl.domain.tld`, while `errorlog` sets logging
+to be saved to `/var/doc/web/logs/fossil.log`; create the repository
 directory and log file—making the latter owned by the `www` user, and
 the script executable.
 
 ```console
-$ doas mkdir /var/www/htdocs/fsl.domain.tld
-$ doas touch /var/www/logs/fossil.log
-$ doas chown www /var/www/logs/fossil.log
-$ doas chmod 660 /var/www/logs/fossil.log
-$ doas chmod 755 /var/www/cgi-bin/scm
+$ doas mkdir /var/doc/web/htdocs/fsl.domain.tld
+$ doas touch /var/doc/web/logs/fossil.log
+$ doas chown www /var/doc/web/logs/fossil.log
+$ doas chmod 660 /var/doc/web/logs/fossil.log
+$ doas chmod 755 /var/doc/web/cgi-bin/scm
 ```
 
 ## <a id="chroot"></a>Setup chroot
@@ -70,19 +70,19 @@ Fossil needs both `/dev/random` and `/dev/null`, which aren't accessible
 from within the chroot, so need to be constructed; `/var`, however, is
 mounted with the `nodev` option. Rather than removing this default
 setting, create a small memory filesystem and then mount it on to
-`/var/www/dev` with [`mount_mfs(8)`][mfs] so that the `random` and
+`/var/doc/web/dev` with [`mount_mfs(8)`][mfs] so that the `random` and
 `null` device files can be created. In order to avoid necessitating a
 startup script to recreate the device files at boot, create a template
 of the needed ``/dev`` tree to automatically populate the memory
 filesystem.
 
 ```console
-$ doas mkdir /var/www/dev
+$ doas mkdir /var/doc/web/dev
 $ doas install -d -g daemon /template/dev
 $ cd /template/dev
 $ doas /dev/MAKEDEV urandom
 $ doas mknod -m 666 null c 2 2
-$ doas mount_mfs -s 1M -P /template/dev /dev/sd0b /var/www/dev
+$ doas mount_mfs -s 1M -P /template/dev /dev/sd0b /var/doc/web/dev
 $ ls -l
 total 0
 crw-rw-rw-  1 root  daemon    2,   2 Jun 20 08:56 null
@@ -97,7 +97,7 @@ a privileged user and add the following line to automate creation of the
 filesystem at startup:
 
 ```console
-swap /var/www/dev mfs rw,-s=1048576,-P=/template/dev 0 0
+swap /var/doc/web/dev mfs rw,-s=1048576,-P=/template/dev 0 0
 ```
 
 The same user that executes the fossil binary must have writable access
@@ -106,8 +106,8 @@ this is `www`. In addition, grant repository directory ownership to the
 user who will push to, pull from, and create repositories.
 
 ```console
-$ doas chown -R user:www /var/www/htdocs/fsl.domain.tld
-$ doas chmod 770 /var/www/htdocs/fsl.domain.tld
+$ doas chown -R user:www /var/doc/web/htdocs/fsl.domain.tld
+$ doas chmod 770 /var/doc/web/htdocs/fsl.domain.tld
 ```
 
 ## <a id="httpdconfig"></a>Configure httpd
@@ -244,7 +244,7 @@ block responsible for serving HTTPS requests before proceeding.
 ## <a id="starthttpd"></a>Start `httpd`
 
 With `httpd` configured to serve Fossil repositories out of
-`/var/www/htdocs/fsl.domain.tld`, and the certificates and key in place,
+`/var/doc/web/htdocs/fsl.domain.tld`, and the certificates and key in place,
 enable and start `slowcgi`—OpenBSD's FastCGI wrapper server that will
 execute the above Fossil CGI script—before checking that the syntax of
 the `httpd.conf` configuration file is correct, and (re)starting the
@@ -273,7 +273,7 @@ finit() {
     fossil open $1.fossil && \
     fossil user password $USER $PASSWD && \
     fossil remote-url https://$USER:$PASSWD@fsl.domain.tld/$1 && \
-    rsync --perms $1.fossil $USER@fsl.domain.tld:/var/www/htdocs/fsl.domain.tld/ >/dev/null && \
+    rsync --perms $1.fossil $USER@fsl.domain.tld:/var/doc/web/htdocs/fsl.domain.tld/ >/dev/null && \
     chmod 644 $1.fossil && \
     fossil ui
 }
@@ -297,6 +297,6 @@ will push to the `remote-url`. It's suggested you read the
 development model, the system is much more efficient and cohesive than
 `git`—so the learning curve is not steep at all.
 
-[documentation]: https://fossil-scm.org/home/doc/trunk/www/permutedindex.html
+[documentation]: https://fossil-scm.org/home/doc/trunk/doc/web/permutedindex.html
 
 *[Return to the top-level Fossil server article.](../)*

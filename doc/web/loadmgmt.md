@@ -73,9 +73,9 @@ jail](./chroot.md) and you have not mounted the `/proc` virtual file
 system inside that jail. On the [self-hosting Fossil repositories][sh],
 this was accomplished by adding a line to the `/etc/fstab` file:
 
-    chroot_jail_proc /home/www/proc proc ro 0 0
+    chroot_jail_proc /home/doc/web/proc proc ro 0 0
 
-The `/home/www/proc` pathname should be adjusted so that the `/proc`
+The `/home/doc/web/proc` pathname should be adjusted so that the `/proc`
 component is at the root of the chroot jail, of course.
 
 To see if the load-average limiter is functional, visit the
@@ -90,7 +90,7 @@ limiter will not function.
 
 
 [503]: http://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html#sec10.5.4
-[hte]: /help/www/test-env
+[hte]: /help/doc/web/test-env
 [gla]: https://linux.die.net/man/3/getloadavg
 [lin]: http://www.linode.com
 [sh]:  ./selfhost.wiki

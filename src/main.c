@@ -209,6 +209,7 @@ struct Global {
   int fullHttpReply;      /* True for full HTTP reply.  False for CGI reply */
   Th_Interp *interp;      /* The TH1 interpreter */
   char *th1Setup;         /* The TH1 post-creation setup script, if any */
+  char *th1AgentSetup;    /* The TH1 agent-specific setup script, if any */
   int th1Flags;           /* The TH1 integration state flags */
   FILE *httpIn;           /* Accept HTTP input from here */
   FILE *httpOut;          /* Send HTTP output here */

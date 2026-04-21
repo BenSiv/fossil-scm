@@ -512,7 +512,7 @@ work.</div>
 
 After that succeeds, we need to run the normal build so that those
 generated files can be compiled in to the fossil binary, accessible
-via the [/help/www/builtin|/builtin page]:
+via the [/help/doc/web/builtin|/builtin page]:
 
 <pre><code>$ make</code></pre>
 

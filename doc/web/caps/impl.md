@@ -99,7 +99,7 @@ Be careful who you give that pair to!
 
 [asd]:  https://fossil-scm.org/forum/forumpost/ce4a3b5f3e
 [bc]:   ../blockchain.md
-[dsp]:  https://fossil-scm.org/fossil/doc/trunk/www/sync.wiki
+[dsp]:  https://fossil-scm.org/fossil/doc/trunk/doc/web/sync.wiki
 [for]:  ./forum.wiki
 [ifvc]: https://en.wikipedia.org/wiki/Inter_frame
 [mn]:   https://en.wikipedia.org/wiki/Mnemonic

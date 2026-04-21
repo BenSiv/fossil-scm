@@ -4524,6 +4524,7 @@ static void agent_tool_exec_cmd(void){
   const char *zArgs;
   const char *zScript;
   int nRes;
+  int rc = TH_OK;
   db_find_and_open_repository(OPEN_ANY_SCHEMA, 0);
   if( g.argc<4 ){
     usage("agent tool-exec NAME ?JSON_ARGS?");
@@ -4535,8 +4536,30 @@ static void agent_tool_exec_cmd(void){
   if( !zScript ){
     fossil_fatal("unknown dynamic tool: %s", zTool);
   }
+
+  Th_SetVar(g.interp, "agent_tool_name", -1, zTool, -1);
   Th_SetVar(g.interp, "agent_tool_args", -1, zArgs, -1);
-  if( Th_Eval(g.interp, 0, zScript, -1)!=TH_OK ){
+
+  /* Execute Pre-Tool Hook */
+  Th_Eval(g.interp, 0, "info commands", -1);
+  if( strstr(Th_GetResult(g.interp, 0), "th1-agent-pre-tool")!=0 ){
+    rc = Th_Eval(g.interp, 0, "th1-agent-pre-tool", -1);
+  }
+
+  if( rc==TH_OK || rc==TH_RETURN ){
+    /* Execute the tool itself */
+    rc = Th_Eval(g.interp, 0, zScript, -1);
+    if( rc==TH_OK || rc==TH_RETURN ){
+      /* Execute Post-Tool Hook */
+      Th_SetVar(g.interp, "agent_tool_result", -1, Th_GetResult(g.interp, &nRes), nRes);
+      Th_Eval(g.interp, 0, "info commands", -1);
+      if( strstr(Th_GetResult(g.interp, 0), "th1-agent-post-tool")!=0 ){
+        rc = Th_Eval(g.interp, 0, "th1-agent-post-tool", -1);
+      }
+    }
+  }
+
+  if( rc!=TH_OK && rc!=TH_RETURN ){
     fossil_fatal("tool execution failed: %s", Th_GetResult(g.interp, &nRes));
   }
   fossil_print("%s\n", Th_GetResult(g.interp, &nRes));

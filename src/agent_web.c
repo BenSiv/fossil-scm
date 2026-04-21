@@ -1071,32 +1071,33 @@ void agent_api_v1_tool_apply_page(void){
   Th_SetVar(g.interp, "agent_tool_args", -1, zArgs, -1);
 
   /* Execute Pre-Tool Hook if exists */
-  Th_Eval(g.interp, 0, "info commands th1-agent-pre-tool", -1);
-  if( fossil_strcmp(Th_GetResult(g.interp, 0), "th1-agent-pre-tool")==0 ){
+  Th_Eval(g.interp, 0, "info commands", -1); /* TH1 info commands takes no arguments */
+  if( strstr(Th_GetResult(g.interp, 0), "th1-agent-pre-tool")!=0 ){
     rc = Th_Eval(g.interp, 0, "th1-agent-pre-tool", -1);
-    if( rc!=TH_OK ){
+    if( rc!=TH_OK && rc!=TH_RETURN ){
       blob_append(&result, Th_GetResult(g.interp, 0), -1);
     }
   }
 
   /* Execute Primary Tool Script */
-  if( rc==TH_OK ){
+  if( rc==TH_OK || rc==TH_RETURN ){
     rc = Th_Eval(g.interp, 0, zScript, -1);
     blob_append(&result, Th_GetResult(g.interp, 0), -1);
   }
 
   /* Execute Post-Tool Hook if exists */
-  if( rc==TH_OK ){
+  if( rc==TH_OK || rc==TH_RETURN ){
     Th_SetVar(g.interp, "agent_tool_result", -1, blob_str(&result), blob_size(&result));
-    Th_Eval(g.interp, 0, "info commands th1-agent-post-tool", -1);
-    if( fossil_strcmp(Th_GetResult(g.interp, 0), "th1-agent-post-tool")==0 ){
-      rc = Th_Eval(g.interp, 0, "th1-agent-post-tool", -1);
-      if( rc==TH_OK ){
+    Th_Eval(g.interp, 0, "info commands", -1);
+    if( strstr(Th_GetResult(g.interp, 0), "th1-agent-post-tool")!=0 ){
+      int prc = Th_Eval(g.interp, 0, "th1-agent-post-tool", -1);
+      if( prc==TH_OK || prc==TH_RETURN ){
         blob_reset(&result);
         blob_append(&result, Th_GetResult(g.interp, 0), -1);
       }else{
         blob_reset(&result);
         blob_appendf(&result, "Post-hook error: %s", Th_GetResult(g.interp, 0));
+        rc = prc;
       }
     }
   }
@@ -1105,7 +1106,7 @@ void agent_api_v1_tool_apply_page(void){
     "{\"request_id\":%!j,\"tool\":%!j,\"phase\":\"result\","
     "\"status\":%!j}",
     zRequestId, zTool,
-    rc==TH_OK ? "ok" : "error"
+    (rc==TH_OK || rc==TH_RETURN) ? "ok" : "error"
   );
   agent_chat_save_event(sid, zUser, "tool_result",
                         agent_chat_provider(), agent_chat_session_model(sid, ""),
@@ -1114,23 +1115,23 @@ void agent_api_v1_tool_apply_page(void){
   zMeta = 0;
 
   acid = agent_chat_save(
-    sid, zUser, "agent", rc==TH_OK ? "reply" : "error",
+    sid, zUser, "agent", (rc==TH_OK || rc==TH_RETURN) ? "reply" : "error",
     agent_chat_provider(), agent_chat_session_model(sid, ""),
     (zRowMeta = mprintf("{\"request_id\":%!j}", zRequestId)), blob_str(&result)
   );
   fossil_free(zRowMeta);
-  agent_request_set_state(rid, rc==TH_OK ? "finished" : "failed", acid);
+  agent_request_set_state(rid, (rc==TH_OK || rc==TH_RETURN) ? "finished" : "failed", acid);
   
   CX("{\"api_version\":\"v1\",\"ok\":%s,\"approval\":{\"tool\":%!j,"
      "\"applied\":%s,\"message\":%!j},\"request\":",
-     rc==TH_OK ? "true" : "false",
+     (rc==TH_OK || rc==TH_RETURN) ? "true" : "false",
      zTool,
-     rc==TH_OK ? "true" : "false",
+     (rc==TH_OK || rc==TH_RETURN) ? "true" : "false",
      blob_str(&result));
   agent_emit_request_object_json(sid, zRequestId);
   CX(",\"capabilities\":");
   agent_api_v1_emit_capabilities();
-  if( rc!=TH_OK ){
+  if( rc!=TH_OK && rc!=TH_RETURN ){
     CX(",\"error\":%!j,\"error_code\":\"tool_failed\"", blob_str(&result));
   }
   CX("}\n");

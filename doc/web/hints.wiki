@@ -39,7 +39,7 @@ A collection of useful hints and tricks in no particular order:
 
   7.  Further to the previous two hints, there are lots of query parameters
       that you can add to timeline pages.  The available query parameters
-      are tersely documented [/help/www/timeline | here].
+      are tersely documented [/help/doc/web/timeline | here].
 
   8.  You can run "[/help/xdiff | fossil xdiff --tk $file1 $file2]"
       to get a Tk pop-up window with side-by-side diffs of two files, even if

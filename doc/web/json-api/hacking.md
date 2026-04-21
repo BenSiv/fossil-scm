@@ -26,7 +26,7 @@ improve via feedback from those working on the code.
 Because this code lives in the trunk, there are certain
 guidelines which must be followed before committing any changes:
 
-1.  Read the [checkin preparation list](/doc/trunk/www/checkin.wiki).
+1.  Read the [checkin preparation list](/doc/trunk/doc/web/checkin.wiki).
 2.  Changes to the files `src/json_*.*`, and its related support code
     (e.g. `ajax/*.*`), may be made freely without affecting mainline
     users. Changes to other files, unless they are trivial or made for

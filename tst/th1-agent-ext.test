@@ -57,19 +57,22 @@ fossil test-th-eval --open-config {repository}
 set repository [normalize_result]
 
 # Create a mock session table directly
-fossil sqlite "CREATE TABLE IF NOT EXISTS agentchat_session(sid INTEGER PRIMARY KEY, provider TEXT, model TEXT, qid INTEGER, datetime TEXT, mtime TEXT)"
-fossil sqlite "INSERT INTO agentchat_session(sid, provider, model) VALUES(888, 'testp', 'testm')"
+set body "provider=testp&model=testm&title=Test+Session"
+set response [agent_http_request $repository POST "/agent-api-v1-session-create" $body]
+set RESULT [agent_http_body $response]
+regexp {"sid":(\d+)} $RESULT dummy sid
+if {![info exists sid]} {
+  set sid 888
+}
 
 # Test 1: Capability Registration Emission
 fossil setting th1-setup {
   agent_capability_register "test_echo" "Echo tool" "{\"type\":\"string\"}" 0 0 0 {
-    return "TH1 ECHO: $agent_tool_args"
+    return "TH1 ECHO: $::agent_tool_args"
   }
   
   proc th1-agent-pre-tool {} {
-    global agent_tool_name
-    global agent_tool_args
-    if {$agent_tool_name eq "test_block"} {
+    if {$::agent_tool_name eq "test_block"} {
       error "Blocked by pre-tool"
     }
   }
@@ -79,8 +82,7 @@ fossil setting th1-setup {
   }
   
   proc th1-agent-post-tool {} {
-    global agent_tool_result
-    return "$agent_tool_result (POST HOOK)"
+    return "$::agent_tool_result (POST HOOK)"
   }
 }
 
@@ -89,24 +91,24 @@ test th1-ext-caps-1 {[string first "test_echo" [normalize_result]]>=0}
 test th1-ext-caps-2 {[string first "test_block" [normalize_result]]>=0}
 
 # Test 2: Execute successful tool with post hook
-set body "sid=888&tool=test_echo&arguments=hello"
-set response [agent_http_request $repository POST /agent-api/v1/tool/apply $body]
+set body "sid=$sid&tool=test_echo&arguments=hello"
+set response [agent_http_request $repository POST /agent-api-v1-tool-apply $body]
 set RESULT [agent_http_body $response]
 test th1-ext-exec-1 {[agent_http_status $response] eq {200}}
 test th1-ext-exec-2 {[string first "\"ok\":true" $RESULT]>=0}
 test th1-ext-exec-3 {[string first "TH1 ECHO: hello (POST HOOK)" $RESULT]>=0}
 
 # Test 3: Execute blocked tool (pre-hook error)
-set body "sid=888&tool=test_block&arguments=hello"
-set response [agent_http_request $repository POST /agent-api/v1/tool/apply $body]
+set body "sid=$sid&tool=test_block&arguments=hello"
+set response [agent_http_request $repository POST /agent-api-v1-tool-apply $body]
 set RESULT [agent_http_body $response]
 test th1-ext-exec-4 {[agent_http_status $response] eq {200}}
 test th1-ext-exec-5 {[string first "Blocked by pre-tool" $RESULT]>=0}
 test th1-ext-exec-6 {[string first "\"ok\":false" $RESULT]>=0}
 
 # Test 4: Unknown tool
-set body "sid=888&tool=unknown_tool&arguments=hello"
-set response [agent_http_request $repository POST /agent-api/v1/tool/apply $body]
+set body "sid=$sid&tool=unknown_tool&arguments=hello"
+set response [agent_http_request $repository POST /agent-api-v1-tool-apply $body]
 set RESULT [agent_http_body $response]
 test th1-ext-exec-7 {[string first "unsupported_tool" $RESULT]>=0}
 

@@ -408,8 +408,8 @@ following template:
       <li>
        Heading Text
        <ul>
-        <li><a href="$home/doc/trunk/www/customskin.md">Link: Theming</a></li>
-        <li><a href="$home/doc/trunk/www/th1.md">Link: TH1 Scripts</a></li>
+        <li><a href="$home/doc/trunk/doc/web/customskin.md">Link: Theming</a></li>
+        <li><a href="$home/doc/trunk/doc/web/th1.md">Link: TH1 Scripts</a></li>
        </ul>
       </li>
       <!-- NEXT GROUP GOES HERE -->
@@ -476,11 +476,11 @@ making it safe for output in HTML code.
 
    *   **`current_checkin`** - The [check-in name](./checkin_names.wiki) to
        which the current
-         [/ci](/help/www/ci),
-         [/dir](/help/www/dir),
-         [/tree](/help/www/tree),
-         [/timeline](/help/www/timeline) or
-         [/vinfo](/help/www/vinfo)
+         [/ci](/help/doc/web/ci),
+         [/dir](/help/doc/web/dir),
+         [/tree](/help/doc/web/tree),
+         [/timeline](/help/doc/web/timeline) or
+         [/vinfo](/help/doc/web/vinfo)
        page refers, or undefined for all other pages.  This variable is
        derived from query parameters and is therefore a [tainted string]
        (./th1.md#taint).

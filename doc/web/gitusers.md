@@ -419,10 +419,10 @@ intermediate like “`f time desc curr`”, which is reasonably clear.
 [btree]: https://sqlite.org/btreemodule.html
 [gcn]:   https://git-scm.com/docs/gitrevisions
 [infoc]: /help/info
-[infow]: /help/www/info
+[infow]: /help/doc/web/info
 [ocomp]: https://www.bigocheatsheet.com/
 [tlc]:   /help/timeline
-[tlw]:   /help/www/timeline
+[tlw]:   /help/doc/web/timeline
 [up]:    /help/update
 [wdm]:   ./fossil-v-git.wiki#durable
 
@@ -543,7 +543,7 @@ third-party tool [`fnc`][fnc] and [its interactive `stash`
 command][fncsta]. We merely await someone’s [contribution][ctrb] of this
 feature into Fossil proper.
 
-[ctrb]:      https://fossil-scm.org/fossil/doc/trunk/www/contribute.wiki
+[ctrb]:      https://fossil-scm.org/fossil/doc/trunk/doc/web/contribute.wiki
 [fnc]:       https://fnc.bsdbox.org/
 [fncsta]:    https://fnc.bsdbox.org/uv/doc/fnc.1.html#stash
 [gcspl]:     https://git-scm.com/docs/git-rebase#_splitting_commits

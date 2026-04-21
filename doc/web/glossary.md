@@ -95,10 +95,10 @@ history of that project being a valuable record.
 [IGS]:     /help/ignore-glob
 [IFRS]:    ./image-format-vs-repo-size.md
 [tarball]: /help/tarball
-[tw]:      /help/www/tarball
+[tw]:      /help/doc/web/tarball
 [Vim]:     https://www.vim.org/
 [zip]:     /help/zip
-[zw]:      /help/www/zip
+[zw]:      /help/doc/web/zip
 
 
 ## Repository <a id="repository" name="repo"></a>
@@ -440,7 +440,7 @@ files, but under Fossil’s powerful version control features.
 
     (This very file is embedded documentation: clone
     [Fossil’s self-hosting repository][fshr] and you will find it as
-    `www/glossary.md`.)
+    `doc/web/glossary.md`.)
 
 [edoc]: ./embeddeddoc.wiki
 [fef]:  ./fileedit-page.md
