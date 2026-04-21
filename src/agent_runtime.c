@@ -12,12 +12,12 @@ void blob_resize(Blob *pBlob, unsigned int newSize);
 int fossil_strnicmp(const char *zA, const char *zB, int nByte);
 
 static const AgentToolDef aAgentTools[] = {
-  {"chat-backend", "Invoke the configured chat backend", "backend", 0, 1},
-  {"list_files", "List repository files from the current checkout", "repo", 0, 1},
-  {"read_file", "Read a file from the working tree", "file", 0, 1},
-  {"edit_file", "Apply a proposed file edit", "file", 1, 1},
-  {"semantic_search", "Search indexed repository knowledge", "knowledge", 0, 1},
-  {0, 0, 0, 0, 0}
+  {"chat-backend", "Invoke the configured chat backend", "backend", 0, 0, 1},
+  {"list_files", "List repository files from the current checkout", "repo", 0, 0, 1},
+  {"read_file", "Read a file from the working tree", "file", 0, 0, 1},
+  {"edit_file", "Apply a proposed file edit", "file", "w", 1, 1},
+  {"semantic_search", "Search indexed repository knowledge", "knowledge", 0, 0, 1},
+  {0, 0, 0, 0, 0, 0}
 };
 
 const AgentToolDef *agent_tool_find(const char *zName){
@@ -31,27 +31,44 @@ const AgentToolDef *agent_tool_find(const char *zName){
   return 0;
 }
 
-void agent_emit_tool_json(const char *zName){
+void agent_emit_tool_json_to_blob(const char *zName, Blob *pOut){
   const AgentToolDef *pTool = agent_tool_find(zName);
   if( pTool==0 ){
-    CX("null");
+    blob_append(pOut, "null", 4);
     return;
   }
-  CX("{\"name\":%!j,\"description\":%!j,\"kind\":%!j,"
-     "\"requires_confirmation\":%s,\"builtin\":%s}",
-     pTool->zName, pTool->zDescription, pTool->zKind,
-     pTool->bRequiresConfirm ? "true" : "false",
-     pTool->bBuiltin ? "true" : "false");
+  blob_appendf(pOut, "{\"name\":%!j,\"description\":%!j,\"kind\":%!j,"
+               "\"requires_confirmation\":%s,\"builtin\":%s}",
+               pTool->zName, pTool->zDescription, pTool->zKind,
+               pTool->bRequiresConfirm ? "true" : "false",
+               pTool->bBuiltin ? "true" : "false");
+}
+
+void agent_emit_tool_json(const char *zName){
+  Blob out = BLOB_INITIALIZER;
+  agent_emit_tool_json_to_blob(zName, &out);
+  CX("%s", blob_str(&out));
+  blob_reset(&out);
+}
+
+void agent_emit_tool_array_json_to_blob(Blob *pOut){
+  int i;
+  int first = 1;
+  blob_append(pOut, "[", 1);
+  for(i=0; aAgentTools[i].zName; i++){
+    if( !agent_tool_is_allowed(aAgentTools[i].zPerm) ) continue;
+    if( !first ) blob_append(pOut, ",", 1);
+    agent_emit_tool_json_to_blob(aAgentTools[i].zName, pOut);
+    first = 0;
+  }
+  blob_append(pOut, "]", 1);
 }
 
 void agent_emit_tool_array_json(void){
-  int i;
-  CX("[");
-  for(i=0; aAgentTools[i].zName; i++){
-    if( i>0 ) CX(",");
-    agent_emit_tool_json(aAgentTools[i].zName);
-  }
-  CX("]");
+  Blob out = BLOB_INITIALIZER;
+  agent_emit_tool_array_json_to_blob(&out);
+  CX("%s", blob_str(&out));
+  blob_reset(&out);
 }
 
 /*
@@ -296,6 +313,10 @@ int agent_run_backend_core(
 
   if( pReply ) blob_zero(pReply);
   blob_zero(pErrUse);
+  
+  /* Apply dynamic prompt modification via TH1 hook */
+  agent_apply_pre_prompt_hook((AgentSessionContext*)pCtx);
+
   if( agent_validate_provider_model(pCtx->zProvider, pCtx->zModel, pErrUse) ){
     if( pErr==0 ) blob_reset(&err);
     return 1;

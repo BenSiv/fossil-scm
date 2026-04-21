@@ -49,7 +49,7 @@ CFLAGS = -g -Os
 CFLAGS_INCLUDE = -I. -I$(SRCDIR) -I$(SRCDIR_extsrc)
 LIB =	  -lresolv -lssl -lcrypto -lz -ldl -lpthread -lm
 BCCFLAGS =	 $(CFLAGS)
-TCCFLAGS =	-Wall -Wdeclaration-after-statement -DFOSSIL_ENABLE_JSON -DFOSSIL_ENABLE_TH1_DOCS -DFOSSIL_ENABLE_TH1_HOOKS -DFOSSIL_DYNAMIC_BUILD=1  $(CFLAGS) -DHAVE_AUTOCONFIG_H
+TCCFLAGS =	-Wall -Wdeclaration-after-statement -DFOSSIL_ENABLE_TH1_DOCS -DFOSSIL_ENABLE_TH1_HOOKS -DFOSSIL_DYNAMIC_BUILD=1  $(CFLAGS) -DHAVE_AUTOCONFIG_H
 #
 # Fuzzing may be enable by appending -fsanitize=fuzzer -DFOSSIL_FUZZ
 # to the TCCFLAGS variable.
@@ -103,7 +103,7 @@ distclean: clean
 	-rm -f cscope.out tags
 
 reconfig:
-	./configure --conf=/home/bensiv/Projects/fossil-scm/bld/auto.def --json --with-th1-docs --with-th1-hooks --with-zlib=auto
+	./configure --conf=/home/bensiv/Projects/fossil-scm/bld/auto.def --with-th1-docs --with-th1-hooks
 
 tags:
 	ctags -R ./src
@@ -124,7 +124,7 @@ tags:
 # of delegating to it with "$(MAKE) reconfig": having children running
 # around interfering makes this failure mode even worse.
 Makefile: ./bld/Makefile.in $(SRCDIR)/main.mk /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/autosetup /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/local.tcl /home/bensiv/Projects/fossil-scm/bld/auto.def /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/system.tcl /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/cc.tcl /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/cc-lib.tcl
-	./configure --conf=/home/bensiv/Projects/fossil-scm/bld/auto.def --json --with-th1-docs --with-th1-hooks --with-zlib=auto
+	./configure --conf=/home/bensiv/Projects/fossil-scm/bld/auto.def --with-th1-docs --with-th1-hooks
 	touch /home/bensiv/Projects/fossil-scm/Makefile
 
 # Container stuff

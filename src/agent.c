@@ -28,6 +28,7 @@
 #endif
 
 void ai_schema_ensure(void);
+void agent_apply_pre_prompt_hook(AgentSessionContext *pCtx);
 void ai_require_enabled(void);
 int ai_is_enabled(void);
 int ai_note_create(
@@ -131,6 +132,7 @@ struct AgentCapability {
   const char *zName;
   const char *zKind;
   const char *zDescription;
+  const char *zPerm;
   int requiresWrite;
   int requiresNetwork;
   int requiresConfirm;
@@ -181,6 +183,7 @@ void agent_register_dynamic_capability(
   const char *zName,
   const char *zDesc,
   const char *zSchema,
+  const char *zPerm,
   int requiresWrite,
   int requiresNetwork,
   int requiresConfirm,
@@ -191,6 +194,7 @@ void agent_register_dynamic_capability(
   p->cap.zName = fossil_strdup(zName);
   p->cap.zKind = "th1";
   p->cap.zDescription = fossil_strdup(zDesc);
+  p->cap.zPerm = zPerm && zPerm[0] ? fossil_strdup(zPerm) : 0;
   p->cap.requiresWrite = requiresWrite;
   p->cap.requiresNetwork = requiresNetwork;
   p->cap.requiresConfirm = requiresConfirm;
@@ -201,12 +205,49 @@ void agent_register_dynamic_capability(
 }
 
 /*
+** Return non-zero if the current user has the required permissions to
+** use the specified tool capability.
+*/
+int agent_tool_is_allowed(const char *zPerm){
+  if( zPerm==0 || zPerm[0]==0 ) return 1;
+  while( zPerm[0] ){
+    char c = zPerm[0];
+    if( !login_has_capability(&c, 1, 0) ) return 0;
+    zPerm++;
+  }
+  return 1;
+}
+
+/*
 ** Repo-local config file for agent integration. When present, this file
 ** overrides the corresponding Fossil settings for the agent runtime.
 */
 static const char zAgentConfigFile[] = "cfg/ai-agent.json";
 static const char *zAgentConfigPath = 0;
-static int agentLastRetrievalQid = 0;
+/*
+** Check for and execute the th1-agent-pre-prompt hook if it exists.
+** This allows dynamic modification of the system prompt based on session
+** context before it is sent to the AI backend.
+*/
+void agent_apply_pre_prompt_hook(AgentSessionContext *pCtx){
+  if( g.interp==0 ) return;
+  Th_SetVar(g.interp, "sid", 3, mprintf("%d", pCtx->sid), -1);
+  Th_SetVar(g.interp, "provider", 8, pCtx->zProvider ? pCtx->zProvider : "", -1);
+  Th_SetVar(g.interp, "model", 5, pCtx->zModel ? pCtx->zModel : "", -1);
+  Th_SetVar(g.interp, "system_prompt", 13, pCtx->zSystemPrompt ? pCtx->zSystemPrompt : "", -1);
+  
+  Th_Eval(g.interp, 0, "info commands", -1);
+  if( strstr(Th_GetResult(g.interp, 0), "th1-agent-pre-prompt")!=0 ){
+    if( Th_Eval(g.interp, 0, "th1-agent-pre-prompt", -1)==TH_OK ){
+      int n;
+      const char *zRes = Th_GetResult(g.interp, &n);
+      if( zRes && n>0 ){
+        fossil_free((char*)pCtx->zSystemPrompt);
+        pCtx->zSystemPrompt = fossil_strdup(zRes);
+      }
+    }
+  }
+}
 
 /*
 ** SETTING: agent-command width=60
@@ -4565,6 +4606,23 @@ static void agent_tool_exec_cmd(void){
   fossil_print("%s\n", Th_GetResult(g.interp, &nRes));
 }
 
+static void agent_eval_cmd(void){
+  Blob script = BLOB_INITIALIZER;
+  if( g.argc!=4 ){
+    usage("eval FILE");
+  }
+  if( blob_read_from_file(&script, g.argv[3], ExtFILE)<0 ){
+    fossil_fatal("cannot read script: %s", g.argv[3]);
+  }
+  Th_FossilInit(TH_INIT_DEFAULT);
+  if( Th_Eval(g.interp, 0, blob_str(&script), -1)==TH_ERROR ){
+    int n;
+    const char *z = Th_GetResult(g.interp, &n);
+    fossil_fatal("eval error: %.*s", n, z ? z : "");
+  }
+  blob_reset(&script);
+}
+
 /*
 ** COMMAND: agent
 **
@@ -4594,6 +4652,9 @@ static void agent_tool_exec_cmd(void){
 **       Print a compact diagnostics bundle covering config, verification,
 **       runtime counts, recipe registry sanity, recent sessions, and evals.
 **       With --save, persist the diagnostics payload in repository storage.
+**
+**    fossil agent eval FILE
+**       Execute the TH1 script in FILE with full agent capability.
 **
 **    fossil agent capabilities
 **       List the built-in capability registry for recipe and agent use.
@@ -4638,6 +4699,7 @@ static void agent_tool_exec_cmd(void){
 **                             [--title TEXT] [--status TEXT]
 **       Create or update PAGENAME with an agent-authored manager update.
 **       The body comes from FILE or stdin.  Checkout metadata and current
+**       The body comes from FILE or stdin.  Checkout metadata and current
 **       pending changes are added as context for the human reader.
 */
 void agent_cmd(void){
@@ -4675,6 +4737,8 @@ void agent_cmd(void){
     blob_reset(&v);
   }else if( fossil_strcmp(zCmd, "diagnostics")==0 ){
     agent_diagnostics_cmd();
+  }else if( fossil_strcmp(zCmd, "eval")==0 ){
+    agent_eval_cmd();
   }else if( fossil_strcmp(zCmd, "run-log")==0 ){
     agent_run_log_cmd();
   }else if( fossil_strcmp(zCmd, "run-show")==0 ){

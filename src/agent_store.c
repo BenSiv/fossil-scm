@@ -40,6 +40,7 @@ static const char zAgentChatSchema[] =
 @   request_id TEXT,
 @   state TEXT NOT NULL,
 @   terminal_acid INTEGER,
+@   reason TEXT,
 @   ctime JULIANDAY DEFAULT (julianday('now')),
 @   mtime JULIANDAY DEFAULT (julianday('now'))
 @ );
@@ -99,6 +100,9 @@ static void agent_chat_create_tables(void){
     if( !db_table_has_column("repository","agent_request","terminal_acid") ){
       db_multi_exec("ALTER TABLE agent_request ADD COLUMN terminal_acid INTEGER");
     }
+    if( !db_table_has_column("repository","agent_request","reason") ){
+      db_multi_exec("ALTER TABLE agent_request ADD COLUMN reason TEXT");
+    }
   }
 }
 
@@ -124,17 +128,19 @@ int agent_request_create(int sid, const char *zRequestId, const char *zState){
   return rid;
 }
 
-void agent_request_set_state(int rid, const char *zState, int terminalAcid){
+void agent_request_set_state(int rid, const char *zState, int terminalAcid, const char *zReason){
   if( rid<=0 ) return;
   db_multi_exec(
     "UPDATE agent_request"
     " SET state=%Q,"
     " terminal_acid=CASE WHEN %d>0 THEN %d ELSE terminal_acid END,"
+    " reason=coalesce(%Q, reason),"
     " mtime=julianday('now')"
     " WHERE rid=%d",
     zState && zState[0] ? zState : "finished",
     terminalAcid,
     terminalAcid,
+    zReason,
     rid
   );
 }
@@ -149,10 +155,10 @@ int agent_request_latest_rid(int sid){
   );
 }
 
-void agent_request_set_latest_state(int sid, const char *zState, int terminalAcid){
+void agent_request_set_latest_state(int sid, const char *zState, int terminalAcid, const char *zReason){
   int rid = agent_request_latest_rid(sid);
   if( rid>0 ){
-    agent_request_set_state(rid, zState, terminalAcid);
+    agent_request_set_state(rid, zState, terminalAcid, zReason);
   }
 }
 
@@ -289,7 +295,7 @@ void agent_chat_session_context_load(int sid, AgentSessionContext *pCtx){
   while( db_step(&q)==SQLITE_ROW ){
     n++;
   }
-  db_reset(&q);
+  sqlite3_reset(q.pStmt);
   if( n>0 ){
     pCtx->aMsg = fossil_malloc(sizeof(AgentMessage) * n);
     pCtx->nMsg = 0;
@@ -391,13 +397,17 @@ int agent_chat_session_request_count(int sid){
   return db_int(0, "SELECT count(*) FROM agent_request WHERE sid=%d", sid);
 }
 
-void agent_emit_request_object_json(int sidCurrent, const char *zRequestId){
+void agent_emit_request_object_json_to_blob(
+  int sidCurrent,
+  const char *zRequestId,
+  Blob *pOut
+){
   Stmt q;
   const char *zState;
   int isActive;
   int isTerminal;
   if( sidCurrent<=0 || !db_table_exists("repository","agent_request") ){
-    CX("null");
+    blob_append(pOut, "null", 4);
     return;
   }
   if( zRequestId && zRequestId[0] ){
@@ -405,7 +415,8 @@ void agent_emit_request_object_json(int sidCurrent, const char *zRequestId){
       "SELECT rid, coalesce(request_id,''), coalesce(state,''),"
       "       coalesce(terminal_acid,0),"
       "       coalesce(datetime(ctime,toLocal()),''),"
-      "       coalesce(datetime(mtime,toLocal()),'')"
+      "       coalesce(datetime(mtime,toLocal()),''),"
+      "       coalesce(reason,'')"
       "  FROM agent_request"
       " WHERE sid=%d AND request_id=%Q"
       " ORDER BY mtime DESC, rid DESC LIMIT 1",
@@ -416,7 +427,8 @@ void agent_emit_request_object_json(int sidCurrent, const char *zRequestId){
       "SELECT rid, coalesce(request_id,''), coalesce(state,''),"
       "       coalesce(terminal_acid,0),"
       "       coalesce(datetime(ctime,toLocal()),''),"
-      "       coalesce(datetime(mtime,toLocal()),'')"
+      "       coalesce(datetime(mtime,toLocal()),''),"
+      "       coalesce(reason,'')"
       "  FROM agent_request"
       " WHERE sid=%d"
       " ORDER BY mtime DESC, rid DESC LIMIT 1",
@@ -435,20 +447,29 @@ void agent_emit_request_object_json(int sidCurrent, const char *zRequestId){
        || fossil_strcmp(zState, "cancelled")==0
        || fossil_strcmp(zState, "reply")==0
        || fossil_strcmp(zState, "error")==0);
-    CX("{\"rid\":%d,\"request_id\":%!j,\"state\":%!j,\"terminal_acid\":%d,"
-       "\"ctime\":%!j,\"mtime\":%!j,\"is_active\":%s,\"is_terminal\":%s}",
-       db_column_int(&q, 0),
-       db_column_text(&q, 1),
-       zState,
-       db_column_int(&q, 3),
-       db_column_text(&q, 4),
-       db_column_text(&q, 5),
-       isActive ? "true" : "false",
-       isTerminal ? "true" : "false");
+    blob_appendf(pOut, "{\"rid\":%d,\"request_id\":%!j,\"state\":%!j,\"terminal_acid\":%d,"
+                 "\"ctime\":%!j,\"mtime\":%!j,\"reason\":%!j,"
+                 "\"is_active\":%s,\"is_terminal\":%s}",
+                 db_column_int(&q, 0),
+                 db_column_text(&q, 1),
+                 zState,
+                 db_column_int(&q, 3),
+                 db_column_text(&q, 4),
+                 db_column_text(&q, 5),
+                 db_column_text(&q, 6),
+                 isActive ? "true" : "false",
+                 isTerminal ? "true" : "false");
   }else{
-    CX("null");
+    blob_append(pOut, "null", 4);
   }
   db_finalize(&q);
+}
+
+void agent_emit_request_object_json(int sidCurrent, const char *zRequestId){
+  Blob out = BLOB_INITIALIZER;
+  agent_emit_request_object_json_to_blob(sidCurrent, zRequestId, &out);
+  CX("%s", blob_str(&out));
+  blob_reset(&out);
 }
 
 void agent_emit_latest_request_json(int sidCurrent){

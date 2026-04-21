@@ -11,6 +11,7 @@ struct AgentToolDef {
   const char *zName;
   const char *zDescription;
   const char *zKind;
+  const char *zPerm;
   int bRequiresConfirm;
   int bBuiltin;
 };
@@ -62,10 +63,14 @@ void agent_emit_events_array_json(int sidCurrent, int afterAcid, int *pLastAcid)
 void agent_emit_session_array_json(const char *zUser);
 void agent_emit_active_request_ids_json(int sidCurrent);
 void agent_emit_request_object_json(int sidCurrent, const char *zRequestId);
+void agent_emit_request_object_json_to_blob(int sidCurrent, const char *zRequestId, Blob *pOut);
 void agent_emit_latest_request_json(int sidCurrent);
 const AgentToolDef *agent_tool_find(const char *zName);
+int agent_tool_is_allowed(const char *zPerm);
 void agent_emit_tool_json(const char *zName);
+void agent_emit_tool_json_to_blob(const char *zName, Blob *pOut);
 void agent_emit_tool_array_json(void);
+void agent_emit_tool_array_json_to_blob(Blob *pOut);
 int agent_apply_edit_tool(
   const char *zPath,
   const char *zReplace,
@@ -74,9 +79,9 @@ int agent_apply_edit_tool(
 );
 
 int agent_request_create(int sid, const char *zRequestId, const char *zState);
-void agent_request_set_state(int rid, const char *zState, int terminalAcid);
+void agent_request_set_state(int rid, const char *zState, int terminalAcid, const char *zReason);
 int agent_request_latest_rid(int sid);
-void agent_request_set_latest_state(int sid, const char *zState, int terminalAcid);
+void agent_request_set_latest_state(int sid, const char *zState, int terminalAcid, const char *zReason);
 
 const char *agent_chat_session_model(int sid, const char *zDefault);
 const char *agent_chat_session_provider(int sid, const char *zDefault);
@@ -141,11 +146,14 @@ void agent_register_dynamic_capability(
   const char *zName,
   const char *zDesc,
   const char *zSchema,
+  const char *zPerm,
   int requiresWrite,
   int requiresNetwork,
   int requiresConfirm,
   const char *zScript
 );
+
+void agent_apply_pre_prompt_hook(AgentSessionContext *pCtx);
 
 int agent_generate_embedding(const char *zModel, const char *zText, Blob *pOut);
 void ai_schema_ensure(void);

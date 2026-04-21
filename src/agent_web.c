@@ -398,7 +398,7 @@ static void agent_chat_page_impl(int bApiV1){
   Th_StoreInt("context_enabled", PB("context"));
 
   if( agent_orchestration_script("json-default", &script)==0 ){
-    agent_request_set_state(rid, "failed", 0);
+    agent_request_set_state(rid, "failed", 0, "missing default orchestration script");
     if( bApiV1 ){
       agent_api_v1_emit_error("missing default orchestration script", "missing_asset");
     }else{
@@ -410,7 +410,7 @@ static void agent_chat_page_impl(int bApiV1){
     const char *zResult = Th_GetResult(g.interp, &nResult);
     if( thRc==TH_ERROR ){
       terminalAcid = agent_chat_latest_terminal_acid(sid);
-      agent_request_set_state(rid, "failed", terminalAcid);
+      agent_request_set_state(rid, "failed", terminalAcid, zResult ? zResult : "TH1 eval failed");
       if( bApiV1 ){
         agent_api_v1_emit_error(zResult ? zResult : "TH1 eval failed", "th1_error");
       }else{
@@ -418,7 +418,7 @@ static void agent_chat_page_impl(int bApiV1){
       }
     }else{
       terminalAcid = agent_chat_latest_terminal_acid(sid);
-      agent_request_set_state(rid, "finished", terminalAcid);
+      agent_request_set_state(rid, "finished", terminalAcid, 0);
       if( bApiV1 ){
         CX("{\"api_version\":\"v1\",\"ok\":true,\"capabilities\":");
         agent_api_v1_emit_capabilities();
@@ -511,7 +511,7 @@ void agent_chat_stream_page(void){
   Th_StoreInt("context_enabled", PB("context"));
 
   if( agent_orchestration_script(zRoleParam, &script)==0 ){
-    agent_request_set_state(rid, "failed", 0);
+    agent_request_set_state(rid, "failed", 0, "role script not found");
     CX("data: {\"error\":\"Role script not found: %s\"}\n\n",
        zRoleParam[0] ? zRoleParam : "default");
   }else{
@@ -520,12 +520,12 @@ void agent_chat_stream_page(void){
       int nResult = 0;
       const char *zResult = Th_GetResult(g.interp, &nResult);
       terminalAcid = agent_chat_latest_terminal_acid(sid);
-      agent_request_set_state(rid, "failed", terminalAcid);
+      agent_request_set_state(rid, "failed", terminalAcid, zResult ? zResult : "TH1 eval failed");
       CX("data: {\"error\":%!j}\n\n", zResult ? zResult : "TH1 eval failed");
     }else{
       terminalAcid = agent_chat_latest_terminal_acid(sid);
       if( fossil_strcmp(agent_chat_session_request_state(sid), "waiting-approval")!=0 ){
-        agent_request_set_state(rid, "finished", terminalAcid);
+        agent_request_set_state(rid, "finished", terminalAcid, 0);
       }
     }
   }
@@ -867,7 +867,7 @@ void agent_api_v1_approval_waiting_page(void){
   }
   db_begin_write();
   db_unprotect(PROTECT_READONLY);
-  agent_request_set_latest_state(sid, "waiting-approval", 0);
+  agent_request_set_latest_state(sid, "waiting-approval", 0, 0);
   db_end_transaction(0);
   CX("{\"api_version\":\"v1\",\"ok\":true,\"approval\":{\"tool\":%!j,"
      "\"state\":\"waiting-approval\"},\"request\":", zTool);
@@ -939,7 +939,7 @@ void agent_api_v1_approval_apply_page(void){
   if( fossil_strcmp(agent_chat_session_request_state(sid), "waiting-approval")==0 ){
     rid = agent_request_latest_rid(sid);
     zRequestId = mprintf("%s", agent_chat_session_request_id(sid));
-    agent_request_set_state(rid, "running", 0);
+    agent_request_set_state(rid, "running", 0, 0);
   }else{
     rid = agent_request_create(sid, zRequestIdParam, "running");
     zRequestId = mprintf("%s", agent_chat_session_request_id(sid));
@@ -973,7 +973,7 @@ void agent_api_v1_approval_apply_page(void){
     (zRowMeta = mprintf("{\"request_id\":%!j}", zRequestId)), blob_str(&result)
   );
   fossil_free(zRowMeta);
-  agent_request_set_state(rid, rc==0 ? "finished" : "failed", acid);
+  agent_request_set_state(rid, rc==0 ? "finished" : "failed", acid, rc==0 ? 0 : blob_str(&result));
   CX("{\"api_version\":\"v1\",\"ok\":%s,\"approval\":{\"tool\":\"edit_file\","
      "\"applied\":%s,\"message\":%!j},\"request\":",
      rc==0 ? "true" : "false",
@@ -1051,7 +1051,7 @@ void agent_api_v1_tool_apply_page(void){
   if( fossil_strcmp(agent_chat_session_request_state(sid), "waiting-approval")==0 ){
     rid = agent_request_latest_rid(sid);
     zRequestId = mprintf("%s", agent_chat_session_request_id(sid));
-    agent_request_set_state(rid, "running", 0);
+    agent_request_set_state(rid, "running", 0, 0);
   }else{
     rid = agent_request_create(sid, zRequestIdParam, "running");
     zRequestId = mprintf("%s", agent_chat_session_request_id(sid));
@@ -1120,7 +1120,8 @@ void agent_api_v1_tool_apply_page(void){
     (zRowMeta = mprintf("{\"request_id\":%!j}", zRequestId)), blob_str(&result)
   );
   fossil_free(zRowMeta);
-  agent_request_set_state(rid, (rc==TH_OK || rc==TH_RETURN) ? "finished" : "failed", acid);
+  agent_request_set_state(rid, (rc==TH_OK || rc==TH_RETURN) ? "finished" : "failed", acid,
+                          (rc==TH_OK || rc==TH_RETURN) ? 0 : blob_str(&result));
   
   CX("{\"api_version\":\"v1\",\"ok\":%s,\"approval\":{\"tool\":%!j,"
      "\"applied\":%s,\"message\":%!j},\"request\":",
