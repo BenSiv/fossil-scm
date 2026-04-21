@@ -112,10 +112,10 @@ prior to being displayed.  The "class='fossil-doc'" attribute is
 required for this to occur.  The "data-title='...'" attribute is
 optional, but if it is present the text will become the title displayed
 in the Fossil header.  An example of this can be seen in Fossil
-Documentation Index www/permutedindex.html:
+Documentation Index doc/web/permutedindex.html:
 
-  *  [/file/www/permutedindex.html?txt|source text for <b>www/permutedindex.html</b>]
-  *  [/doc/trunk/www/permutedindex.html|<b>www/permutedindex.html</b> rendered as HTML]
+  *  [/file/doc/web/permutedindex.html?txt|source text for <b>doc/web/permutedindex.html</b>]
+  *  [/doc/trunk/doc/web/permutedindex.html|<b>doc/web/permutedindex.html</b> rendered as HTML]
 
 Beware that such HTML files render in the same browser security context
 as all other embedded documentation served from Fossil; they are not
@@ -168,11 +168,11 @@ the "$CURRENT" text.  This feature, in combination with the "$ROOT"
 substitution above, allows an absolute path to be used for hyperlinks.
 
 For example, if an embedded document documented wanted to reference
-some other document in a separate file named "www/otherdoc.md",
+some other document in a separate file named "doc/web/otherdoc.md",
 it could use a URL like this:
 
 <verbatim>
-[Other Document]($ROOT/doc/$CURRENT/www/otherdoc.md)
+[Other Document]($ROOT/doc/$CURRENT/doc/web/otherdoc.md)
 </verbatim>
 
 As with "$ROOT", this substitution only works for Markdown and HTML
@@ -206,11 +206,11 @@ before enabling the use of TH1 within embedded documentation.
 
 This file that you are currently reading is an example of
 embedded documentation.  The name of this file in the fossil
-source tree is "<b>www/embeddeddoc.wiki</b>".
+source tree is "<b>doc/web/embeddeddoc.wiki</b>".
 You are perhaps looking at this
 file using the URL:
 
-<pre>[https://fossil-scm.org/home/doc/trunk/www/embeddeddoc.wiki]</pre>
+<pre>[https://fossil-scm.org/home/doc/trunk/doc/web/embeddeddoc.wiki]</pre>
 
 The first part of this path, the "[https://fossil-scm.org/home]",
 is the base URL.  You might have originally typed:
@@ -251,18 +251,18 @@ of the document that was most recently checked in as of the date
 and time specified.  So, for example, to see what the fossil website
 looked like at the beginning of 2010, enter:
 
-<pre><a href="https://fossil-scm.org/home/doc/2010-01-01/www/index.wiki">https://fossil-scm.org/home/doc/<b>2010-01-01</b>/www/index.wiki
+<pre><a href="https://fossil-scm.org/home/doc/2010-01-01/doc/web/index.wiki">https://fossil-scm.org/home/doc/<b>2010-01-01</b>/doc/web/index.wiki
 </a></pre>
 
 The file that encodes this document is stored in the fossil source tree under
-the name "<b>www/embeddeddoc.wiki</b>" and so that name forms the
+the name "<b>doc/web/embeddeddoc.wiki</b>" and so that name forms the
 last part of the URL for this document.
 
 As I sit writing this documentation file, I am testing my work by
 running the "<b>fossil ui</b>" command line and viewing
-<b>http://localhost:8080/doc/ckout/www/embeddeddoc.wiki</b> in
+<b>http://localhost:8080/doc/ckout/doc/web/embeddeddoc.wiki</b> in
 Firefox.  I am doing this even though I have not yet checked in
-the "<b>www/embeddeddoc.wiki</b>" file for the first time.  Using
+the "<b>doc/web/embeddeddoc.wiki</b>" file for the first time.  Using
 the special "<b>ckout</b>" version identifier on the "<b>/doc</b>" page
 it is easy to make multiple changes to multiple files and see how they all
 look together before committing anything to the repository.

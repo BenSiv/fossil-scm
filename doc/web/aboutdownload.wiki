@@ -6,7 +6,7 @@ The [/uv/download.html|Download] page for the Fossil self-hosting
 repository is implemented using [./unvers.wiki|unversioned files].
 The "download.html" screen itself, and the various build products
 are all stored as unversioned content.  The download.html page
-uses XMLHttpRequest() to retrieve the [/help/www/juvlist|/juvlist] webpage
+uses XMLHttpRequest() to retrieve the [/help/doc/web/juvlist|/juvlist] webpage
 for a list of all unversioned files.  Javascript in the
 [/uv/download.js?mimetype=text/plain|download.js] file (which is
 sourced by "download.html") then figures out which unversioned files are
@@ -15,7 +15,7 @@ download page.
 
 Except, the "Source Tarball" download products are not stored as
 unversioned files.  They are computed on-demand by the
-[/help/www/tarball|/tarball web page].
+[/help/doc/web/tarball|/tarball web page].
 
 When a new version is generated, the developers use the
 [/help/uv|fossil uv edit] command to make minor changes

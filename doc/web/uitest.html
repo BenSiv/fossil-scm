@@ -59,7 +59,7 @@
 <a id="x-pass" target="fossiltest" onclick="passTest()">Test Passes</a>
 <p id="x-done" style="color:green;">Testing Complete!</p>
 <script>
-  var re = new RegExp("/doc/[^/]+/www/.*$");
+  var re = new RegExp("/doc/[^/]+/doc/web/.*$");
   var baseURI = document.location.href.replace(re,"/");
   gebi("x1").innerHTML = '"' + baseURI + '"';
   gebi("x3").innerHTML = nTest;

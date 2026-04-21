@@ -149,6 +149,6 @@ rename the file.
 [jtim]: ./json-api/api-timeline.md
 [mset]: /help/manifest
 [th1]:  ./th1.md
-[trss]: /help/www/timeline.rss
+[trss]: /help/doc/web/timeline.rss
 [tvb]:  ./branching.wiki
 [uuid]: https://en.wikipedia.org/wiki/Universally_unique_identifier

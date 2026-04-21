@@ -99,7 +99,7 @@ like the following:
 
 <pre>
 #!/usr/bin/fossil
-repository: /home/www/repos/project.fossil
+repository: /home/doc/web/repos/project.fossil
 </pre>
 
 The first line of the script is a
@@ -110,7 +110,7 @@ a shebang, the operating system runs the program identified by the
 shebang with a single argument that is the full pathname of the script
 itself.
 In our example, the interpreter is Fossil, and the argument might
-be something like "/var/www/cgi-bin/one/two" (depending on how your
+be something like "/var/doc/web/cgi-bin/one/two" (depending on how your
 particular web server is configured).
 
 The Fossil program that is run as the script interpreter
@@ -133,7 +133,7 @@ Usually, the webpage being requested is the first term of the
 PATH_INFO environment variable.  (Exceptions to this rule are noted
 in the sequel.)  For our example, the first term of PATH_INFO
 is "timeline", which means that Fossil will generate
-the [/help/www/timeline|/timeline] webpage.
+the [/help/doc/web/timeline|/timeline] webpage.
 
 With Fossil, terms of PATH_INFO beyond the webpage name are converted into
 the "name" query parameter.  Hence, the following two URLs mean
@@ -145,7 +145,7 @@ exactly the same thing to Fossil:
 
 In both cases, the CGI script is called "/fossil".  For case (A),
 the PATH_INFO variable will be "info/c14ecc43" and so the
-"[/help/www/info|/info]" webpage will be generated and the suffix of
+"[/help/doc/web/info|/info]" webpage will be generated and the suffix of
 PATH_INFO will be converted into the "name" query parameter, which
 identifies the artifact about which information is requested.
 In case (B), the PATH_INFO is just "info", but the same "name"
@@ -167,10 +167,10 @@ with ".fossil".  For example:
 
 <pre>
 #!/usr/bin/fossil
-directory: /home/www/repos
+directory: /home/doc/web/repos
 </pre>
 
-Suppose the /home/www/repos directory contains files named
+Suppose the /home/doc/web/repos directory contains files named
 <b>one.fossil</b>, <b>two.fossil</b>, and <b>subdir/three.fossil</b>.
 Further suppose that the name of the CGI script (relative to the root
 of the webserver document area) is "cgis/example2".  Then to
@@ -189,10 +189,10 @@ Here is what happens:
      PATH_INFO to the "subdir/three/timeline" suffix and invokes the
      "cgis/example2" script.
 <li> Fossil runs and sees the "directory:" line pointing to
-     "/home/www/repos".  Fossil then starts pulling terms off the
+     "/home/doc/web/repos".  Fossil then starts pulling terms off the
      front of the PATH_INFO looking for a repository.  It first looks
-     at "/home/www/resps/subdir.fossil" but there is no such repository.
-     So then it looks at "/home/www/repos/subdir/three.fossil" and finds
+     at "/home/doc/web/resps/subdir.fossil" but there is no such repository.
+     So then it looks at "/home/doc/web/repos/subdir/three.fossil" and finds
      a repository.  The PATH_INFO is shortened by removing
      "subdir/three/" leaving it at just "timeline".
 <li> Fossil looks at the rest of PATH_INFO to see that the webpage

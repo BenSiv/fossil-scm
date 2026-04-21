@@ -5201,6 +5201,11 @@ struct Setting {
 ** is empty and no extra setup is performed.
 */
 /*
+** SETTING: th1-agent-setup  width=40 block-text sensitive
+** This is the setup script evaluated after th1-setup for agent
+** environments, to register capabilities and hooks for agents.
+*/
+/*
 ** SETTING: th1-uri-regexp   width=40 block-text
 ** Specify which URI's are allowed in HTTP requests from
 ** TH1 scripts.  If empty, no HTTP requests are allowed

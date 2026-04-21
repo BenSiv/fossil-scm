@@ -27,7 +27,7 @@ like this:
 
 <verbatim>
 #!/usr/bin/fossil
-repository: /home/www/fossils/myproject.fossil
+repository: /home/doc/web/fossils/myproject.fossil
 </verbatim>
 
 Of course, pathnames will likely be different.  The first line 

@@ -55,7 +55,7 @@ If there are two or more unrelated changes present, consider
 breaking up the commit into two or more separate commits.
 Always make 100% sure that all changes are compatible with the
 BSD license, that you have the authority to commit the code in accordance
-with the [/doc/trunk/www/copyright-release.html | CLA] that you have
+with the [/doc/trunk/doc/web/copyright-release.html | CLA] that you have
 signed and have on file, and that
 no NDAs, copyrights, patents, or trademarks are infringed by the check-in.
 Also check very carefully to make sure that

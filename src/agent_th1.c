@@ -57,7 +57,11 @@ static int agent_json_extract_th1(
     zEnd = strchr(zStart, '\"');
     if( zEnd ){
       Th_SetResult(interp, zStart, (int)(zEnd - zStart));
+    }else{
+      Th_SetResult(interp, "", 0);
     }
+  }else{
+    Th_SetResult(interp, "", 0);
   }
   fossil_free(zKey);
   return TH_OK;
@@ -161,13 +165,26 @@ static int agent_run_th1(
   int *argl
 ){
   Blob out = BLOB_INITIALIZER;
+  Blob err = BLOB_INITIALIZER;
   int rc;
+  int sid = 0;
+  const char *zSid;
   if( argc!=4 ){
     return Th_WrongNumArgs(interp, "agent_run PROVIDER MODEL MSG");
   }
-  rc = agent_run_backend_core(argv[1], argv[2], argv[3], &out, 0, 0, 0);
-  Th_SetResult(interp, blob_str(&out), blob_size(&out));
+  if( Th_GetVar(interp, "sid", 3)==TH_OK ){
+    int nSid;
+    zSid = Th_GetResult(interp, &nSid);
+    if( zSid ) sid = atoi(zSid);
+  }
+  rc = agent_run_backend(sid, argv[1], argv[2], argv[3], &out, &err);
+  if( rc!=0 ){
+    Th_SetResult(interp, blob_str(&err), blob_size(&err));
+  }else{
+    Th_SetResult(interp, blob_str(&out), blob_size(&out));
+  }
   blob_reset(&out);
+  blob_reset(&err);
   return rc==0 ? TH_OK : TH_ERROR;
 }
 
@@ -180,13 +197,32 @@ static int agent_run_stream_th1(
 ){
   Blob out = BLOB_INITIALIZER;
   Blob err = BLOB_INITIALIZER;
+  AgentSessionContext sCtx = {0};
   int rc;
+  int sid = 0;
+  const char *zSid;
   if( argc!=4 ){
     return Th_WrongNumArgs(interp, "agent_run_stream PROVIDER MODEL MSG");
   }
+  if( Th_GetVar(interp, "sid", 3)==TH_OK ){
+    int nSid;
+    zSid = Th_GetResult(interp, &nSid);
+    if( zSid ) sid = atoi(zSid);
+  }
+  
+  sCtx.sid = sid;
+  sCtx.zProvider = argv[1];
+  sCtx.zModel = argv[2];
+  sCtx.zQuery = argv[3];
+  sCtx.interface = agent_provider_interface(argv[1]);
+  if( sid>0 ) agent_chat_session_context_load(sid, &sCtx);
+
   rc = agent_run_backend_core(
-    argv[1], argv[2], argv[3], &out, &err, agent_sse_handler, 0
+    &sCtx, &out, &err, agent_sse_handler, 0
   );
+  
+  agent_chat_session_context_free(&sCtx);
+
   if( rc!=0 ){
     Th_SetResult(interp, blob_str(&err), blob_size(&err));
     rc = TH_ERROR;
@@ -207,14 +243,18 @@ static int agent_request_state_th1(
 ){
   int sid;
   int terminalAcid = 0;
-  if( argc!=3 && argc!=4 ){
-    return Th_WrongNumArgs(interp, "agent_request_state SID STATE ?TERMINAL_ACID?");
+  const char *zReason = 0;
+  if( argc<3 || argc>5 ){
+    return Th_WrongNumArgs(interp, "agent_request_state SID STATE ?TERMINAL_ACID? ?REASON?");
   }
   sid = atoi(argv[1]);
-  if( argc==4 ){
+  if( argc>=4 ){
     terminalAcid = atoi(argv[3]);
   }
-  agent_request_set_latest_state(sid, argv[2], terminalAcid);
+  if( argc>=5 ){
+    zReason = argv[4];
+  }
+  agent_request_set_latest_state(sid, argv[2], terminalAcid, zReason);
   Th_SetResultInt(interp, agent_request_latest_rid(sid));
   return TH_OK;
 }
@@ -553,6 +593,88 @@ static int pool_related_th1(
   return TH_OK;
 }
 
+static int agent_capability_register_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  if( argc!=9 ) return Th_WrongNumArgs(interp, "agent_capability_register NAME DESC SCHEMA PERM WRITE_REQ NET_REQ CONFIRM_REQ SCRIPT");
+  agent_register_dynamic_capability(
+    argv[1], argv[2], argv[3], argv[4],
+    atoi(argv[5]), atoi(argv[6]), atoi(argv[7]),
+    argv[8]
+  );
+  return TH_OK;
+}
+
+static int agent_tool_array_json_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  Blob out = BLOB_INITIALIZER;
+  agent_emit_tool_array_json_to_blob(&out);
+  Th_SetResult(interp, blob_str(&out), blob_size(&out));
+  blob_reset(&out);
+  return TH_OK;
+}
+
+static int agent_session_create_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  const char *zUser, *zProv, *zModel;
+  if( argc!=4 ) return Th_WrongNumArgs(interp, "agent_session_create USER PROVIDER MODEL");
+  zUser = argv[1];
+  zProv = argv[2];
+  zModel = argv[3];
+  Th_SetResultInt(interp, agent_chat_session_create(zUser, zProv, zModel));
+  return TH_OK;
+}
+
+static int agent_request_init_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  int sid;
+  const char *zRid, *zState;
+  if( argc!=4 ) return Th_WrongNumArgs(interp, "agent_request_init SID RID STATE");
+  sid = atoi(argv[1]);
+  zRid = argv[2];
+  zState = argv[3];
+  Th_SetResultInt(interp, agent_request_create(sid, zRid, zState));
+  return TH_OK;
+}
+
+static int agent_request_object_json_th1(
+  Th_Interp *interp,
+  void *ctx,
+  int argc,
+  const char **argv,
+  int *argl
+){
+  int sid;
+  const char *zRid = 0;
+  Blob out = BLOB_INITIALIZER;
+  if( argc!=2 && argc!=3 ) return Th_WrongNumArgs(interp, "agent_request_object_json SID ?RID?");
+  sid = atoi(argv[1]);
+  if( argc==3 ) zRid = argv[2];
+  agent_emit_request_object_json_to_blob(sid, zRid, &out);
+  Th_SetResult(interp, blob_str(&out), blob_size(&out));
+  blob_reset(&out);
+  return TH_OK;
+}
+
 void agent_register_th1(Th_Interp *interp){
   static const struct {
     const char *zName;
@@ -572,6 +694,7 @@ void agent_register_th1(Th_Interp *interp){
     {"agent_mcp_call",   agent_mcp_call_th1, 0},
     {"agent_json_extract", agent_json_extract_th1, 0},
     {"agent_asset",        agent_asset_th1, 0},
+    {"agent_capability_register", agent_capability_register_th1, 0},
     {"agent_tool_info",    agent_tool_info_th1, 0},
     {"agent_json_quote",   agent_json_quote_th1, 0},
     {"pool_list_pending", pool_list_pending_th1, 0},
@@ -579,6 +702,10 @@ void agent_register_th1(Th_Interp *interp){
     {"pool_put",          pool_put_th1, 0},
     {"pool_link",         pool_link_th1, 0},
     {"pool_related",      pool_related_th1, 0},
+    {"agent_session_create", agent_session_create_th1, 0},
+    {"agent_request_init",   agent_request_init_th1, 0},
+    {"agent_tool_array_json", agent_tool_array_json_th1, 0},
+    {"agent_request_object_json", agent_request_object_json_th1, 0},
     {0, 0, 0}
   };
   int i;

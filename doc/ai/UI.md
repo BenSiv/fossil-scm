@@ -14,6 +14,8 @@ Primary interfaces exposed to the user.
   pair for debugging
 
 ## Data Pool
+- `/semantic-search`: Minimal input bar that executes k-nearest-neighbors (k-NN) queries against the `ai_vector` table. Results are listed dynamically by Cosine Similarity.
+- `/note`: Artifact viewer endpoint (e.g., `?id=X`) that exposes the unstructured note payload along with metadata (`source_type`, `process_level`).
 - Note browser with tier, processing level, and source filters
 - Retrieval count and related-note graph
 - Semantic retrieval can use a separate embedding model from the chat model

@@ -14,6 +14,7 @@ char *style_nonce(void);
 int Th_Render(const char *z);
 const unsigned char *builtin_file(const char *zFilename, int *piSize);
 
+#include "th.h"
 void ai_chat_eval_feedback(int sid, int acid, const char *zFeedback);
 void agent_emit_pool_json(void);
 void agent_emit_retrieval_json(int qid);
@@ -397,7 +398,7 @@ static void agent_chat_page_impl(int bApiV1){
   Th_StoreInt("context_enabled", PB("context"));
 
   if( agent_orchestration_script("json-default", &script)==0 ){
-    agent_request_set_state(rid, "failed", 0);
+    agent_request_set_state(rid, "failed", 0, "missing default orchestration script");
     if( bApiV1 ){
       agent_api_v1_emit_error("missing default orchestration script", "missing_asset");
     }else{
@@ -409,7 +410,7 @@ static void agent_chat_page_impl(int bApiV1){
     const char *zResult = Th_GetResult(g.interp, &nResult);
     if( thRc==TH_ERROR ){
       terminalAcid = agent_chat_latest_terminal_acid(sid);
-      agent_request_set_state(rid, "failed", terminalAcid);
+      agent_request_set_state(rid, "failed", terminalAcid, zResult ? zResult : "TH1 eval failed");
       if( bApiV1 ){
         agent_api_v1_emit_error(zResult ? zResult : "TH1 eval failed", "th1_error");
       }else{
@@ -417,7 +418,7 @@ static void agent_chat_page_impl(int bApiV1){
       }
     }else{
       terminalAcid = agent_chat_latest_terminal_acid(sid);
-      agent_request_set_state(rid, "finished", terminalAcid);
+      agent_request_set_state(rid, "finished", terminalAcid, 0);
       if( bApiV1 ){
         CX("{\"api_version\":\"v1\",\"ok\":true,\"capabilities\":");
         agent_api_v1_emit_capabilities();
@@ -510,7 +511,7 @@ void agent_chat_stream_page(void){
   Th_StoreInt("context_enabled", PB("context"));
 
   if( agent_orchestration_script(zRoleParam, &script)==0 ){
-    agent_request_set_state(rid, "failed", 0);
+    agent_request_set_state(rid, "failed", 0, "role script not found");
     CX("data: {\"error\":\"Role script not found: %s\"}\n\n",
        zRoleParam[0] ? zRoleParam : "default");
   }else{
@@ -519,12 +520,12 @@ void agent_chat_stream_page(void){
       int nResult = 0;
       const char *zResult = Th_GetResult(g.interp, &nResult);
       terminalAcid = agent_chat_latest_terminal_acid(sid);
-      agent_request_set_state(rid, "failed", terminalAcid);
+      agent_request_set_state(rid, "failed", terminalAcid, zResult ? zResult : "TH1 eval failed");
       CX("data: {\"error\":%!j}\n\n", zResult ? zResult : "TH1 eval failed");
     }else{
       terminalAcid = agent_chat_latest_terminal_acid(sid);
       if( fossil_strcmp(agent_chat_session_request_state(sid), "waiting-approval")!=0 ){
-        agent_request_set_state(rid, "finished", terminalAcid);
+        agent_request_set_state(rid, "finished", terminalAcid, 0);
       }
     }
   }
@@ -866,7 +867,7 @@ void agent_api_v1_approval_waiting_page(void){
   }
   db_begin_write();
   db_unprotect(PROTECT_READONLY);
-  agent_request_set_latest_state(sid, "waiting-approval", 0);
+  agent_request_set_latest_state(sid, "waiting-approval", 0, 0);
   db_end_transaction(0);
   CX("{\"api_version\":\"v1\",\"ok\":true,\"approval\":{\"tool\":%!j,"
      "\"state\":\"waiting-approval\"},\"request\":", zTool);
@@ -938,7 +939,7 @@ void agent_api_v1_approval_apply_page(void){
   if( fossil_strcmp(agent_chat_session_request_state(sid), "waiting-approval")==0 ){
     rid = agent_request_latest_rid(sid);
     zRequestId = mprintf("%s", agent_chat_session_request_id(sid));
-    agent_request_set_state(rid, "running", 0);
+    agent_request_set_state(rid, "running", 0, 0);
   }else{
     rid = agent_request_create(sid, zRequestIdParam, "running");
     zRequestId = mprintf("%s", agent_chat_session_request_id(sid));
@@ -972,7 +973,7 @@ void agent_api_v1_approval_apply_page(void){
     (zRowMeta = mprintf("{\"request_id\":%!j}", zRequestId)), blob_str(&result)
   );
   fossil_free(zRowMeta);
-  agent_request_set_state(rid, rc==0 ? "finished" : "failed", acid);
+  agent_request_set_state(rid, rc==0 ? "finished" : "failed", acid, rc==0 ? 0 : blob_str(&result));
   CX("{\"api_version\":\"v1\",\"ok\":%s,\"approval\":{\"tool\":\"edit_file\","
      "\"applied\":%s,\"message\":%!j},\"request\":",
      rc==0 ? "true" : "false",
@@ -998,6 +999,156 @@ void agent_api_v1_approval_apply_page(void){
 */
 void agent_api_v1_approval_apply_flat_page(void){
   agent_api_v1_approval_apply_page();
+}
+
+/*
+** WEBPAGE: agent-api/v1/tool/apply
+**
+** Generic endpoint for applying dynamic TH1 tool operations.
+*/
+void agent_api_v1_tool_apply_page(void){
+  Blob result = BLOB_INITIALIZER;
+  const char *zUser;
+  const char *zTool;
+  const char *zArgs;
+  const char *zRequestIdParam;
+  char *zRequestId = 0;
+  char *zMeta = 0;
+  char *zRowMeta = 0;
+  int sid;
+  int rid = 0;
+  int acid;
+  int rc = 0;
+  const char *zScript;
+
+  login_check_credentials();
+  cgi_set_content_type("application/json");
+  if( !g.perm.Read ){
+    agent_api_v1_emit_error("missing read permissions or not logged in", 0);
+    return;
+  }
+  sid = atoi(PD("sid","0"));
+  zTool = PD("tool", "");
+  zArgs = PD("arguments", "");
+  zRequestIdParam = PD("request_id", "");
+  zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
+
+  if( sid<=0 || !agent_chat_session_exists(sid) ){
+    agent_api_v1_emit_error("missing or unknown sid parameter", "unknown_session");
+    return;
+  }
+  
+  Th_Render("<th1></th1>"); /* Initialize TH1 and run setup script to load tools */
+  zScript = agent_capability_script(zTool);
+  if( !zScript ){
+    agent_api_v1_emit_error("unsupported dynamic tool", "unsupported_tool");
+    return;
+  }
+
+  db_begin_write();
+  db_unprotect(PROTECT_READONLY);
+  
+  if( fossil_strcmp(agent_chat_session_request_state(sid), "waiting-approval")==0 ){
+    rid = agent_request_latest_rid(sid);
+    zRequestId = mprintf("%s", agent_chat_session_request_id(sid));
+    agent_request_set_state(rid, "running", 0, 0);
+  }else{
+    rid = agent_request_create(sid, zRequestIdParam, "running");
+    zRequestId = mprintf("%s", agent_chat_session_request_id(sid));
+  }
+
+  zMeta = mprintf(
+    "{\"request_id\":%!j,\"tool\":%!j,\"phase\":\"request\"}",
+    zRequestId, zTool
+  );
+  agent_chat_save_event(sid, zUser, "tool_request",
+                        agent_chat_provider(), agent_chat_session_model(sid, ""),
+                        zMeta, zArgs);
+  fossil_free(zMeta);
+  zMeta = 0;
+
+  Th_SetVar(g.interp, "agent_tool_name", -1, zTool, -1);
+  Th_SetVar(g.interp, "agent_tool_args", -1, zArgs, -1);
+
+  /* Execute Pre-Tool Hook if exists */
+  Th_Eval(g.interp, 0, "info commands", -1); /* TH1 info commands takes no arguments */
+  if( strstr(Th_GetResult(g.interp, 0), "th1-agent-pre-tool")!=0 ){
+    rc = Th_Eval(g.interp, 0, "th1-agent-pre-tool", -1);
+    if( rc!=TH_OK && rc!=TH_RETURN ){
+      blob_append(&result, Th_GetResult(g.interp, 0), -1);
+    }
+  }
+
+  /* Execute Primary Tool Script */
+  if( rc==TH_OK || rc==TH_RETURN ){
+    rc = Th_Eval(g.interp, 0, zScript, -1);
+    blob_append(&result, Th_GetResult(g.interp, 0), -1);
+  }
+
+  /* Execute Post-Tool Hook if exists */
+  if( rc==TH_OK || rc==TH_RETURN ){
+    Th_SetVar(g.interp, "agent_tool_result", -1, blob_str(&result), blob_size(&result));
+    Th_Eval(g.interp, 0, "info commands", -1);
+    if( strstr(Th_GetResult(g.interp, 0), "th1-agent-post-tool")!=0 ){
+      int prc = Th_Eval(g.interp, 0, "th1-agent-post-tool", -1);
+      if( prc==TH_OK || prc==TH_RETURN ){
+        blob_reset(&result);
+        blob_append(&result, Th_GetResult(g.interp, 0), -1);
+      }else{
+        blob_reset(&result);
+        blob_appendf(&result, "Post-hook error: %s", Th_GetResult(g.interp, 0));
+        rc = prc;
+      }
+    }
+  }
+
+  zMeta = mprintf(
+    "{\"request_id\":%!j,\"tool\":%!j,\"phase\":\"result\","
+    "\"status\":%!j}",
+    zRequestId, zTool,
+    (rc==TH_OK || rc==TH_RETURN) ? "ok" : "error"
+  );
+  agent_chat_save_event(sid, zUser, "tool_result",
+                        agent_chat_provider(), agent_chat_session_model(sid, ""),
+                        zMeta, blob_str(&result));
+  fossil_free(zMeta);
+  zMeta = 0;
+
+  acid = agent_chat_save(
+    sid, zUser, "agent", (rc==TH_OK || rc==TH_RETURN) ? "reply" : "error",
+    agent_chat_provider(), agent_chat_session_model(sid, ""),
+    (zRowMeta = mprintf("{\"request_id\":%!j}", zRequestId)), blob_str(&result)
+  );
+  fossil_free(zRowMeta);
+  agent_request_set_state(rid, (rc==TH_OK || rc==TH_RETURN) ? "finished" : "failed", acid,
+                          (rc==TH_OK || rc==TH_RETURN) ? 0 : blob_str(&result));
+  
+  CX("{\"api_version\":\"v1\",\"ok\":%s,\"approval\":{\"tool\":%!j,"
+     "\"applied\":%s,\"message\":%!j},\"request\":",
+     (rc==TH_OK || rc==TH_RETURN) ? "true" : "false",
+     zTool,
+     (rc==TH_OK || rc==TH_RETURN) ? "true" : "false",
+     blob_str(&result));
+  agent_emit_request_object_json(sid, zRequestId);
+  CX(",\"capabilities\":");
+  agent_api_v1_emit_capabilities();
+  if( rc!=TH_OK && rc!=TH_RETURN ){
+    CX(",\"error\":%!j,\"error_code\":\"tool_failed\"", blob_str(&result));
+  }
+  CX("}\n");
+  db_end_transaction(0);
+
+  blob_reset(&result);
+  fossil_free(zRequestId);
+}
+
+/*
+** WEBPAGE: agent-api-v1-tool-apply
+**
+** Fossil-native flat alias for tool application.
+*/
+void agent_api_v1_tool_apply_flat_page(void){
+  agent_api_v1_tool_apply_page();
 }
 
 /*
@@ -1072,4 +1223,131 @@ void agent_api_v1_chat_page(void){
 */
 void agent_api_v1_chat_flat_page(void){
   agent_api_v1_chat_page();
+}
+
+/*
+** WEBPAGE: semantic-search
+**
+** Run a semantic search against the ai_vector table and display results.
+*/
+void semantic_search_page(void){
+  const char *zQuery = P("q");
+  Blob vQuery = BLOB_INITIALIZER;
+  Stmt q;
+  int nLimit = atoi(PD("n", "20"));
+
+  login_check_credentials();
+  if( !g.perm.Read ){
+    login_needed(g.anon.Read);
+    return;
+  }
+  style_header("Semantic Search");
+
+  @ <form method="GET" action="%R/semantic-search">
+  @ <input type="text" name="q" size="60" value="%h(zQuery?zQuery:"")">
+  @ <input type="submit" value="Search">
+  @ </form>
+  @ <hr>
+
+  if( zQuery && zQuery[0] ){
+    if( !db_table_exists("repository","ai_note")
+     || !db_table_exists("repository","ai_vector") ){
+      @ <p class="error">Knowledge pool not initialized. Run <code>fossil ai init</code> first.</p>
+    }else if( agent_generate_embedding(agent_embedding_model(), zQuery, &vQuery)==0 ){
+      db_prepare(&q,
+        "SELECT n.nid, n.title, n.source_type, vec_distance(v.vector, :vec) AS dist"
+        "  FROM repository.ai_note n"
+        "  JOIN repository.ai_vector v ON v.source_id=n.nid AND v.source_type='note'"
+        " ORDER BY dist ASC LIMIT %d",
+        nLimit<1?20:nLimit
+      );
+      db_bind_blob(&q, ":vec", &vQuery);
+      @ <ul>
+      while( db_step(&q)==SQLITE_ROW ){
+        int nid = db_column_int(&q, 0);
+        const char *zTitle = db_column_text(&q, 1);
+        const char *zSrcType = db_column_text(&q, 2);
+        double dist = db_column_double(&q, 3);
+        @ <li><a href="%R/note?id=%d(nid)">%h(zTitle)</a>
+        @ (distance: %.3f(dist), type: %h(zSrcType))</li>
+      }
+      @ </ul>
+      db_finalize(&q);
+    }else{
+      @ <p class="error">Failed to generate embedding for query.</p>
+    }
+    blob_reset(&vQuery);
+  }
+
+  style_finish_page();
+}
+
+/*
+** WEBPAGE: note
+**
+** Display an AI Note.
+*/
+void agent_note_page(void){
+  int nid = atoi(PD("id", "0"));
+  Stmt q;
+
+  login_check_credentials();
+  if( !g.perm.Read ){
+    login_needed(g.anon.Read);
+    return;
+  }
+  
+  if( nid<=0 ){
+    style_header("Note Not Found");
+    @ <p>Missing or invalid note ID.</p>
+    style_finish_page();
+    return;
+  }
+
+  if( !db_table_exists("repository","ai_note") ){
+    style_header("Semantic Notes");
+    @ <p>Knowledge pool not initialized. Run <code>fossil ai init</code> first.</p>
+    style_finish_page();
+    return;
+  }
+  db_prepare(&q,
+    "SELECT title, body, source_type, source_ref, process_level, metadata, created_at "
+    "FROM repository.ai_note WHERE nid=%d", nid);
+
+  if( db_step(&q)==SQLITE_ROW ){
+    const char *zTitle = db_column_text(&q, 0);
+    const char *zBody = db_column_text(&q, 1);
+    const char *zSrcType = db_column_text(&q, 2);
+    const char *zSrcRef = db_column_text(&q, 3);
+    const char *zLevel = db_column_text(&q, 4);
+    const char *zMeta = db_column_text(&q, 5);
+    const char *zCreated = db_column_text(&q, 6);
+
+    style_header("Note: %h", zTitle);
+    
+    @ <div class="section">Metadata</div>
+    @ <table class="label-value">
+    @ <tr><th>ID:</th><td>%d(nid)</td></tr>
+    @ <tr><th>Created:</th><td>%h(zCreated)</td></tr>
+    @ <tr><th>Type:</th><td>%h(zSrcType)</td></tr>
+    if( zSrcRef && zSrcRef[0] ){
+      @ <tr><th>Ref:</th><td>%h(zSrcRef)</td></tr>
+    }
+    @ <tr><th>Level:</th><td>%h(zLevel)</td></tr>
+    if( zMeta && zMeta[0] ){
+      @ <tr><th>Meta:</th><td><pre>%h(zMeta)</pre></td></tr>
+    }
+    @ </table>
+    
+    @ <div class="section">Content</div>
+    @ <div class="markdown">
+    @ %h(zBody)
+    @ </div>
+
+  }else{
+    style_header("Note Not Found");
+    @ <p>Note %d(nid) not found.</p>
+  }
+  db_finalize(&q);
+  style_finish_page();
 }

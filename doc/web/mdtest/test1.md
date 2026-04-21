@@ -45,11 +45,11 @@ currently being displayed.  This conversion happens after translation
 into HTML and only occurs on href='...' attributes so it does not occur
 for plain text.
 
-  *   Document index:  [](/doc/$CURRENT/www/index.wiki)
+  *   Document index:  [](/doc/$CURRENT/doc/web/index.wiki)
 
 Both the $ROOT and the $CURRENT conversions can occur on the same link.
 
-  *   Document index:  []($ROOT/doc/$CURRENT/www/index.wiki)
+  *   Document index:  []($ROOT/doc/$CURRENT/doc/web/index.wiki)
 
 The translations must be contained within HTML markup in order to work.
 They do not work for ordinary text that appears to be an href= attribute.

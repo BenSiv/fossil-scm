@@ -267,7 +267,7 @@ When compiling sqlite.c, the following macros are recommended:
 
 The first three symbol definitions above are required; the others are merely
 recommended.  Extension loading is omitted as a security measure. The dbstat
-virtual table is needed for the [/help/www/repo-tabsize|/repo-tabsize] page.
+virtual table is needed for the [/help/doc/web/repo-tabsize|/repo-tabsize] page.
 FTS4 is needed for the search feature.  Fossil is single-threaded so mutexing
 is disabled in SQLite as a performance enhancement.  The
 SQLITE_ENABLE_EXPLAIN_COMMENTS option makes the output of "EXPLAIN" queries

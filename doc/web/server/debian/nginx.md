@@ -161,7 +161,7 @@ The configuration for our `example.com` web site, stored in
         # also lets us set aggressive caching on these docs, since
         # they rarely change.
         location /code/doc/html {
-            root /var/www/example.com/code/doc/html;
+            root /var/doc/web/example.com/code/doc/html;
 
             location ~* \.(html|ico|css|js|gif|jpg|png)$ {
                 add_header Vary Accept-Encoding;
@@ -215,7 +215,7 @@ Fossil-based site considerably faster.
 Similarly, the `local/generic` file referenced above helps us reduce unnecessary
 repetition among the multiple sites this configuration hosts:
 
-    root /var/www/$host;
+    root /var/doc/web/$host;
 
     listen 80;
     listen [::]:80;

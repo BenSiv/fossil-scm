@@ -2496,6 +2496,23 @@ void Th_FossilInit(u32 flags){
       Th_Trace("th1-setup {%h} => %h<br>\n", g.th1Setup,
                Th_ReturnCodeName(rc, 0));
     }
+    if( rc==TH_OK ){
+      if( !g.th1AgentSetup ){
+        g.th1AgentSetup = db_get("th1-agent-setup", 0);
+      }
+      if( g.th1AgentSetup ){
+        rc = Th_Eval(g.interp, 0, g.th1AgentSetup, -1);
+        if( rc==TH_ERROR ){
+          int nResult = 0;
+          char *zResult = (char*)Th_GetResult(g.interp, &nResult);
+          sendError(0,zResult, nResult, 0);
+        }
+        if( g.thTrace ){
+          Th_Trace("th1-agent-setup {%h} => %h<br>\n", g.th1AgentSetup,
+                   Th_ReturnCodeName(rc, 0));
+        }
+      }
+    }
   }
   g.th1Flags &= ~TH_INIT_MASK;
   g.th1Flags |= (flags & TH_INIT_MASK);

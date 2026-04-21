@@ -1,0 +1,72 @@
+#
+# Copyright (c) 2026 D. Richard Hipp
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the Simplified BSD License (also
+# known as the "2-Clause License" or "FreeBSD License".)
+#
+# This program is distributed in the hope that it will be useful,
+# but without any warranty; without even the implied warranty of
+# merchantability or fitness for a particular purpose.
+#
+# Author contact information:
+#   drh@hwaci.com
+#   http://www.hwaci.com/drh/
+#
+############################################################################
+#
+# Test for agent alignment features (th1-agent-setup, CLI tool-exec hooks)
+#
+
+test_setup
+
+fossil test-th-eval --open-config {repository}
+set repository [normalize_result]
+
+# -------------------------------------------------------------------------
+# Test 1: th1-agent-setup hook evaluation
+# We test this by adding a capability in th1-agent-setup and seeing if it 
+# shows up in `agent capabilities`.
+# -------------------------------------------------------------------------
+
+fossil setting th1-agent-setup {
+  agent_capability_register "test_hook_tool" "Hook installed tool" "" 0 0 0 {
+    return "From hook tool"
+  }
+} -R $repository
+
+fossil agent capabilities -R $repository
+test agent-hook-1 {[string first "test_hook_tool" [normalize_result]]>=0}
+
+# -------------------------------------------------------------------------
+# Test 2: CLI tool-exec with pre/post hooks
+# -------------------------------------------------------------------------
+
+fossil setting th1-setup {
+  agent_capability_register "align_test" "Align test tool" "" 0 0 0 {
+    return "Inside Tool"
+  }
+  
+  proc th1-agent-pre-tool {} {
+    if {$::agent_tool_name eq "align_block"} {
+      error "Blocked by CLI pre-tool"
+    }
+  }
+
+  agent_capability_register "align_block" "Blocked tool" "" 0 0 0 {
+    return "Never outputs"
+  }
+  
+  proc th1-agent-post-tool {} {
+    return "$::agent_tool_result (CLI POST)"
+  }
+} -R $repository
+
+fossil agent tool-exec align_test -R $repository
+test agent-cli-hooks-1 {[string first "Inside Tool (CLI POST)" [normalize_result]]>=0}
+
+fossil agent tool-exec align_block -R $repository -expectError
+test agent-cli-hooks-2 {[string first "tool execution failed" [normalize_result]]>=0}
+test agent-cli-hooks-3 {[string first "Blocked by CLI pre-tool" [normalize_result]]>=0}
+
+test_cleanup

@@ -12,12 +12,12 @@ void blob_resize(Blob *pBlob, unsigned int newSize);
 int fossil_strnicmp(const char *zA, const char *zB, int nByte);
 
 static const AgentToolDef aAgentTools[] = {
-  {"chat-backend", "Invoke the configured chat backend", "backend", 0, 1},
-  {"list_files", "List repository files from the current checkout", "repo", 0, 1},
-  {"read_file", "Read a file from the working tree", "file", 0, 1},
-  {"edit_file", "Apply a proposed file edit", "file", 1, 1},
-  {"semantic_search", "Search indexed repository knowledge", "knowledge", 0, 1},
-  {0, 0, 0, 0, 0}
+  {"chat-backend", "Invoke the configured chat backend", "backend", 0, 0, 1},
+  {"list_files", "List repository files from the current checkout", "repo", 0, 0, 1},
+  {"read_file", "Read a file from the working tree", "file", 0, 0, 1},
+  {"edit_file", "Apply a proposed file edit", "file", "w", 1, 1},
+  {"semantic_search", "Search indexed repository knowledge", "knowledge", 0, 0, 1},
+  {0, 0, 0, 0, 0, 0}
 };
 
 const AgentToolDef *agent_tool_find(const char *zName){
@@ -31,27 +31,44 @@ const AgentToolDef *agent_tool_find(const char *zName){
   return 0;
 }
 
-void agent_emit_tool_json(const char *zName){
+void agent_emit_tool_json_to_blob(const char *zName, Blob *pOut){
   const AgentToolDef *pTool = agent_tool_find(zName);
   if( pTool==0 ){
-    CX("null");
+    blob_append(pOut, "null", 4);
     return;
   }
-  CX("{\"name\":%!j,\"description\":%!j,\"kind\":%!j,"
-     "\"requires_confirmation\":%s,\"builtin\":%s}",
-     pTool->zName, pTool->zDescription, pTool->zKind,
-     pTool->bRequiresConfirm ? "true" : "false",
-     pTool->bBuiltin ? "true" : "false");
+  blob_appendf(pOut, "{\"name\":%!j,\"description\":%!j,\"kind\":%!j,"
+               "\"requires_confirmation\":%s,\"builtin\":%s}",
+               pTool->zName, pTool->zDescription, pTool->zKind,
+               pTool->bRequiresConfirm ? "true" : "false",
+               pTool->bBuiltin ? "true" : "false");
+}
+
+void agent_emit_tool_json(const char *zName){
+  Blob out = BLOB_INITIALIZER;
+  agent_emit_tool_json_to_blob(zName, &out);
+  CX("%s", blob_str(&out));
+  blob_reset(&out);
+}
+
+void agent_emit_tool_array_json_to_blob(Blob *pOut){
+  int i;
+  int first = 1;
+  blob_append(pOut, "[", 1);
+  for(i=0; aAgentTools[i].zName; i++){
+    if( !agent_tool_is_allowed(aAgentTools[i].zPerm) ) continue;
+    if( !first ) blob_append(pOut, ",", 1);
+    agent_emit_tool_json_to_blob(aAgentTools[i].zName, pOut);
+    first = 0;
+  }
+  blob_append(pOut, "]", 1);
 }
 
 void agent_emit_tool_array_json(void){
-  int i;
-  CX("[");
-  for(i=0; aAgentTools[i].zName; i++){
-    if( i>0 ) CX(",");
-    agent_emit_tool_json(aAgentTools[i].zName);
-  }
-  CX("]");
+  Blob out = BLOB_INITIALIZER;
+  agent_emit_tool_array_json_to_blob(&out);
+  CX("%s", blob_str(&out));
+  blob_reset(&out);
 }
 
 /*
@@ -97,33 +114,37 @@ void agent_expand_command(
 }
 
 /*
-** Wrap zCmd in a stable shell invocation with exported agent env vars.
+** Wrap the command in a stable shell invocation with exported agent env vars.
 */
 void agent_prepare_command(
   Blob *pOut,
   const char *zMode,
-  const char *zProvider,
-  const char *zModel,
+  const AgentSessionContext *pCtx,
   Blob *pCmd
 ){
   Blob model = BLOB_INITIALIZER;
   Blob mode = BLOB_INITIALIZER;
   Blob provider = BLOB_INITIALIZER;
+  Blob interface = BLOB_INITIALIZER;
   Blob cmd = BLOB_INITIALIZER;
-  blob_append_escaped_arg(&model, zModel ? zModel : "", 0);
+  blob_append_escaped_arg(&model, pCtx->zModel ? pCtx->zModel : "", 0);
   blob_append_escaped_arg(&mode, zMode ? zMode : "", 0);
-  blob_append_escaped_arg(&provider, zProvider ? zProvider : "", 0);
+  blob_append_escaped_arg(&provider, pCtx->zProvider ? pCtx->zProvider : "", 0);
+  blob_append_escaped_arg(&interface, 
+    pCtx->interface == PROV_IFACE_JSON_STDIO ? "json-stdio" : "prompt", 0);
   blob_append_escaped_arg(&cmd, blob_str(pCmd), 0);
   blob_zero(pOut);
   blob_appendf(
     pOut,
-    "env FOSSIL_AGENT_MODEL=%s FOSSIL_AGENT_MODE=%s FOSSIL_AGENT_PROVIDER=%s"
-    " sh -lc %s 2>&1",
-    blob_str(&model), blob_str(&mode), blob_str(&provider), blob_str(&cmd)
+    "env FOSSIL_AGENT_MODEL=%s FOSSIL_AGENT_MODE=%s FOSSIL_AGENT_PROVIDER=%s "
+    "FOSSIL_AGENT_INTERFACE=%s sh -lc %s 2>&1",
+    blob_str(&model), blob_str(&mode), blob_str(&provider), 
+    blob_str(&interface), blob_str(&cmd)
   );
   blob_reset(&model);
   blob_reset(&mode);
   blob_reset(&provider);
+  blob_reset(&interface);
   blob_reset(&cmd);
 }
 
@@ -222,6 +243,23 @@ void agent_strip_prefix_noise(Blob *pText){
 }
 
 /*
+** Serialize the session context into a standardized JSON object for
+** consumption by the provider bridge.
+*/
+void agent_serialize_context_json(Blob *pOut, const AgentSessionContext *pCtx){
+  int i;
+  blob_appendf(pOut, "{\"sid\":%d,\"provider\":%!j,\"model\":%!j,",
+    pCtx->sid, pCtx->zProvider, pCtx->zModel);
+  blob_appendf(pOut, "\"system_prompt\":%!j,\"messages\":[",
+    pCtx->zSystemPrompt ? pCtx->zSystemPrompt : "");
+  for(i=0; i<pCtx->nMsg; i++){
+    blob_appendf(pOut, "%s{\"role\":%!j,\"content\":%!j}",
+      i ? "," : "", pCtx->aMsg[i].zRole, pCtx->aMsg[i].zContent);
+  }
+  blob_appendf(pOut, "],\"query\":%!j}", pCtx->zQuery ? pCtx->zQuery : "");
+}
+
+/*
 ** SSE chunk handler: emits text as a "data:" SSE event.
 */
 void agent_sse_handler(const char *zChunk, int nChunk, void *pApp){
@@ -231,7 +269,17 @@ void agent_sse_handler(const char *zChunk, int nChunk, void *pApp){
     blob_append(&tmp, zChunk, nChunk);
     agent_strip_ansi(&tmp);
     if( blob_size(&tmp)>0 ){
-      CX("data: %!j\n\n", blob_str(&tmp));
+      const char *z = blob_str(&tmp);
+      const char *zOrig = z;
+      while( fossil_isspace(z[0]) ) z++;
+      if( z[0]=='{' ){
+        /* This is likely a structured event from a modern bridge.
+        ** Emit it literally (assumed to be a single message object). */
+        CX("data: %s\n\n", z);
+      }else{
+        /* Legacy raw text chunk. Shield it as a JSON string literal. */
+        CX("data: %!j\n\n", zOrig);
+      }
       fflush(stdout);
     }
     blob_reset(&tmp);
@@ -245,9 +293,7 @@ void agent_sse_handler(const char *zChunk, int nChunk, void *pApp){
 ** Returns 0 on success and non-zero on error.
 */
 int agent_run_backend_core(
-  const char *zProvider,
-  const char *zModel,
-  const char *zPrompt,
+  const AgentSessionContext *pCtx,
   Blob *pReply,
   Blob *pErr,
   void (*xChunk)(const char*, int, void*),
@@ -255,6 +301,7 @@ int agent_run_backend_core(
 ){
   Blob cmd = BLOB_INITIALIZER;
   Blob envCmd = BLOB_INITIALIZER;
+  Blob prompt = BLOB_INITIALIZER;
   Blob err = BLOB_INITIALIZER;
   Blob *pErrUse = pErr ? pErr : &err;
   FILE *in;
@@ -266,21 +313,33 @@ int agent_run_backend_core(
 
   if( pReply ) blob_zero(pReply);
   blob_zero(pErrUse);
-  if( agent_validate_provider_model(zProvider, zModel, pErrUse) ){
+  
+  /* Apply dynamic prompt modification via TH1 hook */
+  agent_apply_pre_prompt_hook((AgentSessionContext*)pCtx);
+
+  if( agent_validate_provider_model(pCtx->zProvider, pCtx->zModel, pErrUse) ){
     if( pErr==0 ) blob_reset(&err);
     return 1;
   }
-  agent_expand_command(&cmd, zCmdTmpl, zModel);
-  agent_prepare_command(&envCmd, "chat", zProvider, zModel, &cmd);
+  agent_expand_command(&cmd, zCmdTmpl, pCtx->zModel);
+  agent_prepare_command(&envCmd, "chat", pCtx, &cmd);
+  
+  if( pCtx->interface == PROV_IFACE_JSON_STDIO ){
+    agent_serialize_context_json(&prompt, pCtx);
+  }else{
+    blob_append(&prompt, pCtx->zQuery ? pCtx->zQuery : "", -1);
+  }
+
   rc = popen2(blob_str(&envCmd), &fdIn, &out, &childPid, 0);
   if( rc!=0 || fdIn<0 || out==0 ){
     blob_appendf(pErrUse, "unable to run configured agent command");
     blob_reset(&cmd);
     blob_reset(&envCmd);
+    blob_reset(&prompt);
     if( pErr==0 ) blob_reset(&err);
     return 1;
   }
-  fprintf(out, "%s", zPrompt);
+  fprintf(out, "%s", blob_str(&prompt));
   fclose(out);
   out = 0;
   in = fdopen(fdIn, "rb");
@@ -289,6 +348,7 @@ int agent_run_backend_core(
     blob_appendf(pErrUse, "unable to read output from configured agent command");
     blob_reset(&cmd);
     blob_reset(&envCmd);
+    blob_reset(&prompt);
     if( pErr==0 ) blob_reset(&err);
     return 1;
   }
@@ -305,6 +365,8 @@ int agent_run_backend_core(
   }
   pclose2(fdIn, out, childPid);
   if( pReply ){
+    /* For JSON interface, we might eventually want to parse but for now
+    ** we treat the output as semi-structured text or raw response. */
     agent_strip_ansi(pReply);
     agent_strip_prefix_noise(pReply);
     blob_trim(pReply);
@@ -312,12 +374,14 @@ int agent_run_backend_core(
       blob_appendf(pErrUse, "agent backend returned an empty reply");
       blob_reset(&cmd);
       blob_reset(&envCmd);
+      blob_reset(&prompt);
       if( pErr==0 ) blob_reset(&err);
       return 1;
     }
   }
   blob_reset(&cmd);
   blob_reset(&envCmd);
+  blob_reset(&prompt);
   if( pErr==0 ) blob_reset(&err);
   return 0;
 }

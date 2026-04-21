@@ -175,7 +175,7 @@ F src/VERSION 24bbb3aad63325ff33c56d777007d7cd63dc19ea
 F src/add.c 1a5dfcdbfd24c65fa04da865b2e21486d075e154
 F src/blob.c 8ec1e279a6cd0cfd5f1e3f8a39f2e9a1682e0113
 <SNIP>
-F www/selfcheck.html 849df9860df602dc2c55163d658c6b138213122f
+F doc/web/selfcheck.html 849df9860df602dc2c55163d658c6b138213122f
 P 01e7596a984e2cd2bc12abc0a741415b902cbeea
 R 74a0432d81b956bfc3ff5a1a2bb46eb5
 U drh

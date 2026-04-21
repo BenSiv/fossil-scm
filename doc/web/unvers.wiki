@@ -30,7 +30,7 @@ The content of unversioned files can also be retrieved using the
 or [/help/unversioned|fossil unvers export <i>FILENAME</i>] commands.
 
 A list of all unversioned files on a server can be seen using
-the [/help/www/uvlist|/uvlist] URL.  ([/uvlist|example].)
+the [/help/doc/web/uvlist|/uvlist] URL.  ([/uvlist|example].)
 
 <h2>Syncing Unversioned Files</h2>
 

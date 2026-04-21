@@ -263,9 +263,9 @@ Setup users can do many things that Admin users cannot. They may not
 only use all of the Admin UI features, they may also:
 
 *   See record IDs (RIDs) on screens that show them
-*   See the MIME type of attachments on [`/ainfo` pages](/help/www/ainfo)
-*   See a remote repo’s HTTP [cache status](/help/www/cachestat)
-    and [pull cache entries](/help/www/cacheget)
+*   See the MIME type of attachments on [`/ainfo` pages](/help/doc/web/ainfo)
+*   See a remote repo’s HTTP [cache status](/help/doc/web/cachestat)
+    and [pull cache entries](/help/doc/web/cacheget)
 *   Edit a Setup user’s account!
 
 The “Admin” feature of Fossil UI is so-named because Admin users can use
@@ -453,7 +453,7 @@ accidental push.
 [forum]: https://fossil-scm.org/forum/
 [fui]:   /help/ui
 [lg]:    ./login-groups.md
-[rs]:    https://fossil-scm.org/home/doc/trunk/www/settings.wiki
+[rs]:    https://fossil-scm.org/home/doc/trunk/doc/web/settings.wiki
 [sia]:   https://fossil-scm.org/home/artifact?ln=1259-1260&name=0fda31b6683c206a
 [snoy]:  https://fossil-scm.org/forum/forumpost/00e1c4ecff
 [th1]:   ../th1.md

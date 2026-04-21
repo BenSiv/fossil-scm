@@ -51,7 +51,7 @@ Files in the DOCUMENT_ROOT are accessed via URLs like this:
 </pre>
 
 In other words, access files in DOCUMENT_ROOT by appending the filename
-relative to DOCUMENT_ROOT to the [/help/www/ext|/ext]
+relative to DOCUMENT_ROOT to the [/help/doc/web/ext|/ext]
 page of the Fossil server.
 
   *  Files that are readable but not executable are returned as static
@@ -137,7 +137,7 @@ periodically pressing "Reload" on the web browser to instantly view the
 rendered results.
 
 For example, the author of this documentation page is running
-"<tt>fossil ui --extpage www/serverext.wiki</tt>" while editing this
+"<tt>fossil ui --extpage doc/web/serverext.wiki</tt>" while editing this
 very paragraph, and presses Reload from time to time to view his
 edits.
 

@@ -57,7 +57,7 @@ from the repository database.
 ## <a id="usage"></a>Usage
 
 For users with appropriate permissions, simply browse to the
-[/chat](/help/www/chat) to start up a chat session.  The default
+[/chat](/help/doc/web/chat) to start up a chat session.  The default
 skin includes a "Chat" entry on the menu bar on wide screens for
 people with chat privilege.  There is also a "Chat" option on
 the [Sitemap page](/sitemap), which means that chat will appear
@@ -191,7 +191,7 @@ the notification is sent via chat instead of via email.
 But many developers prefer to know how their tools work.
 This section is provided for the benefit of those curious developers.*
 
-The [/chat](/help/www/chat) webpage downloads a small amount of HTML
+The [/chat](/help/doc/web/chat) webpage downloads a small amount of HTML
 and a small amount of javascript to run the chat session.  The
 javascript uses XMLHttpRequest (XHR) to download chat content, post
 new content, or delete historical messages.  The following web
@@ -253,7 +253,7 @@ is dropped when running [fossil scrub --verily](/help/scrub).
 On the server-side, message text is stored exactly as entered by the
 users.  The /chat-poll page queries the CHAT table and constructs a
 JSON reply described in the [/chat-poll
-documentation](/help/www/chat-poll).  The message text is translated
+documentation](/help/doc/web/chat-poll).  The message text is translated
 into HTML before being converted to JSON so that the text can be
 safely added to the display using assignment to `innerHTML`. Though
 `innerHTML` assignment is generally considered unsafe, it is only so

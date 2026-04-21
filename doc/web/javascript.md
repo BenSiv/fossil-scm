@@ -268,8 +268,8 @@ ones we’ve heard before and give our stock answers to them here:
 [fcgi]:   /help/cgi
 [ffor]:   https://fossil-scm.org/forum/
 [flic]:   /doc/trunk/LICENCE.md
-[fshome]: /doc/trunk/www/server/
-[fslpl]:  /doc/trunk/www/fossil-v-git.wiki#portable
+[fshome]: /doc/trunk/doc/web/server/
+[fslpl]:  /doc/trunk/doc/web/fossil-v-git.wiki#portable
 [fsrc]:   https://fossil-scm.org/home/file/src
 [fsrv]:   /help/server
 [hljs]:   https://fossil-scm.org/forum/forumpost/9150bc22ca
@@ -421,8 +421,8 @@ would have no local backup if something crashes, etc. Still, we are
 likely to accept such a [contribution][cg] as long as it doesn’t
 interfere with the new editor.
 
-[edoc]:  /doc/trunk/www/embeddeddoc.wiki
-[fedit]: /doc/trunk/www/fileedit-page.md
+[edoc]:  /doc/trunk/doc/web/embeddeddoc.wiki
+[fedit]: /doc/trunk/doc/web/fileedit-page.md
 
 
 ### <a id="ln"></a>Line Numbering
@@ -432,7 +432,7 @@ cases. ([Example][mainc].) Toggling them on and off is currently handled
 in JavaScript, rather than forcing a page-reload via a button click.
 
 _Workaround:_ Manually edit the URL to give the “`ln`” query parameter
-per [the `/file` docs](/help/www/file).
+per [the `/file` docs](/help/doc/web/file).
 
 _Potential Better Workaround:_ Someone sufficiently interested could
 [provide a patch][cg] to add a `<noscript>` wrapped HTML button that

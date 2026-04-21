@@ -21,12 +21,14 @@
 #include "agent.h"
 #include "agent_internal.h"
 #include <assert.h>
+#include "th.h"
 #ifdef FOSSIL_ENABLE_JSON
 #include "cson_amalgamation.h"
 #include "json_detail.h"
 #endif
 
 void ai_schema_ensure(void);
+void agent_apply_pre_prompt_hook(AgentSessionContext *pCtx);
 void ai_require_enabled(void);
 int ai_is_enabled(void);
 int ai_note_create(
@@ -65,7 +67,7 @@ char *ai_note_related_nids(int nid, int limit);
 double ai_note_authority_score(int nid);
 void ai_chat_eval_feedback(int sid, int acid, const char *zFeedback);
 
-static int agent_generate_embedding(
+int agent_generate_embedding(
   const char *zModel,
   const char *zText,
   Blob *pOut
@@ -94,10 +96,11 @@ static int agent_provider_match_command(
   const char *zCmdExec
 );
 #endif
-static int agent_run_backend(
+int agent_run_backend(
+  int sid,
   const char *zProvider,
   const char *zModel,
-  const char *zPrompt,
+  const char *zQuery,
   Blob *pReply,
   Blob *pErr
 );
@@ -129,10 +132,91 @@ struct AgentCapability {
   const char *zName;
   const char *zKind;
   const char *zDescription;
+  const char *zPerm;
   int requiresWrite;
   int requiresNetwork;
   int requiresConfirm;
 };
+
+#if INTERFACE
+typedef enum {
+  PROV_IFACE_PROMPT = 0,     /* Legacy: raw string on stdin */
+  PROV_IFACE_JSON_STDIO = 1  /* Modern: JSON object on stdin/stdout */
+} AgentProviderInterface;
+
+typedef struct AgentMessage AgentMessage;
+struct AgentMessage {
+  const char *zRole;    /* system, user, assistant, tool */
+  const char *zContent;
+  int nContent;
+};
+
+typedef struct AgentSessionContext AgentSessionContext;
+struct AgentSessionContext {
+  int sid;
+  const char *zProvider;
+  const char *zModel;
+  AgentProviderInterface interface;
+  const char *zSystemPrompt;
+  AgentMessage *aMsg;
+  int nMsg;
+  const char *zQuery;   /* Current user input/query */
+};
+#endif
+
+/*
+** Dynamic capabilities registered at runtime, typically via TH1 config hooks.
+*/
+typedef struct AgentDynamicCapability AgentDynamicCapability;
+struct AgentDynamicCapability {
+  AgentCapability cap;
+  const char *zSchema;
+  const char *zScript;
+  AgentDynamicCapability *pNext;
+};
+static AgentDynamicCapability *pDynamicCapabilities = 0;
+
+/*
+** Expose dynamic registration for TH1 scripts.
+*/
+void agent_register_dynamic_capability(
+  const char *zName,
+  const char *zDesc,
+  const char *zSchema,
+  const char *zPerm,
+  int requiresWrite,
+  int requiresNetwork,
+  int requiresConfirm,
+  const char *zScript
+){
+  AgentDynamicCapability *p = fossil_malloc(sizeof(*p));
+  memset(p, 0, sizeof(*p));
+  p->cap.zName = fossil_strdup(zName);
+  p->cap.zKind = "th1";
+  p->cap.zDescription = fossil_strdup(zDesc);
+  p->cap.zPerm = zPerm && zPerm[0] ? fossil_strdup(zPerm) : 0;
+  p->cap.requiresWrite = requiresWrite;
+  p->cap.requiresNetwork = requiresNetwork;
+  p->cap.requiresConfirm = requiresConfirm;
+  if( zSchema && zSchema[0] ) p->zSchema = fossil_strdup(zSchema);
+  if( zScript && zScript[0] ) p->zScript = fossil_strdup(zScript);
+  p->pNext = pDynamicCapabilities;
+  pDynamicCapabilities = p;
+}
+
+/*
+** Return non-zero if the current user has the required permissions to
+** use the specified tool capability.
+*/
+int agent_tool_is_allowed(const char *zPerm){
+  if( zPerm==0 || zPerm[0]==0 ) return 1;
+  while( zPerm[0] ){
+    char c = zPerm[0];
+    if( !login_has_capability(&c, 1, 0) ) return 0;
+    zPerm++;
+  }
+  return 1;
+}
 
 /*
 ** Repo-local config file for agent integration. When present, this file
@@ -140,7 +224,30 @@ struct AgentCapability {
 */
 static const char zAgentConfigFile[] = "cfg/ai-agent.json";
 static const char *zAgentConfigPath = 0;
-static int agentLastRetrievalQid = 0;
+/*
+** Check for and execute the th1-agent-pre-prompt hook if it exists.
+** This allows dynamic modification of the system prompt based on session
+** context before it is sent to the AI backend.
+*/
+void agent_apply_pre_prompt_hook(AgentSessionContext *pCtx){
+  if( g.interp==0 ) return;
+  Th_SetVar(g.interp, "sid", 3, mprintf("%d", pCtx->sid), -1);
+  Th_SetVar(g.interp, "provider", 8, pCtx->zProvider ? pCtx->zProvider : "", -1);
+  Th_SetVar(g.interp, "model", 5, pCtx->zModel ? pCtx->zModel : "", -1);
+  Th_SetVar(g.interp, "system_prompt", 13, pCtx->zSystemPrompt ? pCtx->zSystemPrompt : "", -1);
+  
+  Th_Eval(g.interp, 0, "info commands", -1);
+  if( strstr(Th_GetResult(g.interp, 0), "th1-agent-pre-prompt")!=0 ){
+    if( Th_Eval(g.interp, 0, "th1-agent-pre-prompt", -1)==TH_OK ){
+      int n;
+      const char *zRes = Th_GetResult(g.interp, &n);
+      if( zRes && n>0 ){
+        fossil_free((char*)pCtx->zSystemPrompt);
+        pCtx->zSystemPrompt = fossil_strdup(zRes);
+      }
+    }
+  }
+}
 
 /*
 ** SETTING: agent-command width=60
@@ -744,6 +851,17 @@ int agent_chat_provider_locked(void){
 }
 
 /*
+** Return the protocol interface type for the named provider.
+*/
+AgentProviderInterface agent_provider_interface(const char *zProvider){
+  const char *zIface = agent_provider_string_property(zProvider, "interface");
+  if( zIface && fossil_strcmp(zIface, "json-stdio")==0 ){
+    return PROV_IFACE_JSON_STDIO;
+  }
+  return PROV_IFACE_PROMPT;
+}
+
+/*
 ** Emit the configured provider choice names. Falls back to the current
 ** provider when no explicit catalog is present.
 */
@@ -1201,13 +1319,32 @@ static int agent_capability_registry_count(void){
 }
 
 /*
-** Locate a built-in capability definition by name.
+** Locate a built-in or dynamic capability definition by name.
 */
 static const AgentCapability *agent_capability_find(const char *zName){
   unsigned int i;
+  AgentDynamicCapability *pDyn;
   for(i=0; i<count(aAgentCapabilityBuiltin); i++){
     if( fossil_strcmp(aAgentCapabilityBuiltin[i].zName, zName)==0 ){
       return &aAgentCapabilityBuiltin[i];
+    }
+  }
+  for(pDyn=pDynamicCapabilities; pDyn; pDyn=pDyn->pNext){
+    if( fossil_strcmp(pDyn->cap.zName, zName)==0 ){
+      return &pDyn->cap;
+    }
+  }
+  return 0;
+}
+
+/*
+** Return the TH1 script associated with a dynamic capability, if any.
+*/
+const char *agent_capability_script(const char *zName){
+  AgentDynamicCapability *pDyn;
+  for(pDyn=pDynamicCapabilities; pDyn; pDyn=pDyn->pNext){
+    if( fossil_strcmp(pDyn->cap.zName, zName)==0 ){
+      return pDyn->zScript;
     }
   }
   return 0;
@@ -1305,19 +1442,43 @@ static void agent_append_capability_name_array(Blob *pOut, const char *zList){
 }
 
 /*
-** Emit a JSON array describing all built-in capabilities.
+** Emit a JSON array describing all built-in and dynamic capabilities.
 */
 static void agent_emit_capability_registry_json(void){
   unsigned int i;
+  AgentDynamicCapability *pDyn;
+  int first = 1;
   fossil_print("[");
   for(i=0; i<count(aAgentCapabilityBuiltin); i++){
     const AgentCapability *p = &aAgentCapabilityBuiltin[i];
     CX("%s{\"name\":%!j,\"kind\":%!j,\"description\":%!j,"
        "\"requires_write\":%d,\"requires_network\":%d,"
        "\"requires_confirmation\":%d}",
-       i ? "," : "",
+       first ? "" : ",",
        p->zName, p->zKind, p->zDescription,
        p->requiresWrite, p->requiresNetwork, p->requiresConfirm);
+    first = 0;
+  }
+  for(pDyn=pDynamicCapabilities; pDyn; pDyn=pDyn->pNext){
+    const AgentCapability *p = &pDyn->cap;
+    if( pDyn->zSchema ){
+      /* Expect zSchema to be a valid pre-formatted JSON string */
+      CX("%s{\"name\":%!j,\"kind\":%!j,\"description\":%!j,"
+         "\"requires_write\":%d,\"requires_network\":%d,"
+         "\"requires_confirmation\":%d,\"schema\":%s}",
+         first ? "" : ",",
+         p->zName, p->zKind, p->zDescription,
+         p->requiresWrite, p->requiresNetwork, p->requiresConfirm,
+         pDyn->zSchema);
+    }else{
+      CX("%s{\"name\":%!j,\"kind\":%!j,\"description\":%!j,"
+         "\"requires_write\":%d,\"requires_network\":%d,"
+         "\"requires_confirmation\":%d}",
+         first ? "" : ",",
+         p->zName, p->zKind, p->zDescription,
+         p->requiresWrite, p->requiresNetwork, p->requiresConfirm);
+    }
+    first = 0;
   }
   CX("]");
 }
@@ -3153,14 +3314,31 @@ int agent_assemble_context(
   return nAdded;
 }
 
-static int agent_run_backend(
+/*
+** High-level backend runner that assembles session context (history, etc.)
+** before invoking the core backend process.
+*/
+int agent_run_backend(
+  int sid,
   const char *zProvider,
   const char *zModel,
-  const char *zPrompt,
+  const char *zQuery,
   Blob *pReply,
   Blob *pErr
 ){
-  return agent_run_backend_core(zProvider, zModel, zPrompt, pReply, pErr, 0, 0);
+  AgentSessionContext ctx = {0};
+  int rc;
+  ctx.sid = sid;
+  ctx.zProvider = zProvider;
+  ctx.zModel = zModel;
+  ctx.zQuery = zQuery;
+  ctx.interface = agent_provider_interface(zProvider);
+  if( sid>0 ){
+    agent_chat_session_context_load(sid, &ctx);
+  }
+  rc = agent_run_backend_core(&ctx, pReply, pErr, 0, 0);
+  agent_chat_session_context_free(&ctx);
+  return rc;
 }
 
 /*
@@ -3219,7 +3397,7 @@ static void agent_verify_cmd(void){
   zSource = agent_config_source();
   if( chatSmokeFlag && chatOk ){
     chatSmokeOk = agent_run_backend(
-      zChatProvider, zChatModel, "verify", &smokeReply, &smokeErr
+      0, zChatProvider, zChatModel, "verify", &smokeReply, &smokeErr
     )==0;
     zChatSmoke = chatSmokeOk ? "ok" : blob_str(&smokeErr);
     blob_reset(&smokeReply);
@@ -3347,7 +3525,7 @@ static void agent_verify_cmd(void){
 ** Returns 0 on success, non-zero on error.
 ** The result is stored as an array of floats in pOut.
 */
-static int agent_generate_embedding(
+int agent_generate_embedding(
   const char *zModel,
   const char *zText,
   Blob *pOut
@@ -3372,8 +3550,11 @@ static int agent_generate_embedding(
   blob_reset(&err);
 
   if( zCmdTmpl[0] ){
+    AgentSessionContext ctx = {0};
     agent_expand_command(&cmd, zCmdTmpl, zModel);
-    agent_prepare_command(&envCmd, "embed", zProvider, zModel, &cmd);
+    ctx.zProvider = zProvider;
+    ctx.zModel = zModel;
+    agent_prepare_command(&envCmd, "embed", &ctx, &cmd);
     rc = popen2(blob_str(&envCmd), &fdFromChild, &pOutToChild, &childPid, 0);
     if( rc!=0 || fdFromChild<0 || pOutToChild==0 ){
       blob_reset(&cmd);
@@ -4388,6 +4569,8 @@ static void agent_phases_cmd(void){
 */
 static void agent_capabilities_cmd(void){
   unsigned int i;
+  AgentDynamicCapability *pDyn;
+  Th_Render("<th1></th1>");
   for(i=0; i<count(aAgentCapabilityBuiltin); i++){
     const AgentCapability *p = &aAgentCapabilityBuiltin[i];
     fossil_print("%s\t%s\twrite=%s\tnetwork=%s\tconfirm=%s\t%s\n",
@@ -4399,6 +4582,80 @@ static void agent_capabilities_cmd(void){
       p->zDescription
     );
   }
+  for(pDyn=pDynamicCapabilities; pDyn; pDyn=pDyn->pNext){
+    const AgentCapability *p = &pDyn->cap;
+    fossil_print("%s\t%s\twrite=%s\tnetwork=%s\tconfirm=%s\t%s\n",
+      p->zName,
+      p->zKind,
+      p->requiresWrite ? "yes" : "no",
+      p->requiresNetwork ? "yes" : "no",
+      p->requiresConfirm ? "yes" : "no",
+      p->zDescription
+    );
+  }
+}
+
+static void agent_tool_exec_cmd(void){
+  const char *zTool;
+  const char *zArgs;
+  const char *zScript;
+  int nRes;
+  int rc = TH_OK;
+  db_find_and_open_repository(OPEN_ANY_SCHEMA, 0);
+  if( g.argc<4 ){
+    usage("agent tool-exec NAME ?JSON_ARGS?");
+  }
+  zTool = g.argv[3];
+  zArgs = g.argc>=5 ? g.argv[4] : "";
+  Th_Render("<th1></th1>");
+  zScript = agent_capability_script(zTool);
+  if( !zScript ){
+    fossil_fatal("unknown dynamic tool: %s", zTool);
+  }
+
+  Th_SetVar(g.interp, "agent_tool_name", -1, zTool, -1);
+  Th_SetVar(g.interp, "agent_tool_args", -1, zArgs, -1);
+
+  /* Execute Pre-Tool Hook */
+  Th_Eval(g.interp, 0, "info commands", -1);
+  if( strstr(Th_GetResult(g.interp, 0), "th1-agent-pre-tool")!=0 ){
+    rc = Th_Eval(g.interp, 0, "th1-agent-pre-tool", -1);
+  }
+
+  if( rc==TH_OK || rc==TH_RETURN ){
+    /* Execute the tool itself */
+    rc = Th_Eval(g.interp, 0, zScript, -1);
+    if( rc==TH_OK || rc==TH_RETURN ){
+      /* Execute Post-Tool Hook */
+      Th_SetVar(g.interp, "agent_tool_result", -1, Th_GetResult(g.interp, &nRes), nRes);
+      Th_Eval(g.interp, 0, "info commands", -1);
+      if( strstr(Th_GetResult(g.interp, 0), "th1-agent-post-tool")!=0 ){
+        rc = Th_Eval(g.interp, 0, "th1-agent-post-tool", -1);
+      }
+    }
+  }
+
+  if( rc!=TH_OK && rc!=TH_RETURN ){
+    fossil_fatal("tool execution failed: %s", Th_GetResult(g.interp, &nRes));
+  }
+  fossil_print("%s\n", Th_GetResult(g.interp, &nRes));
+}
+
+static void agent_eval_cmd(void){
+  Blob script = BLOB_INITIALIZER;
+  if( g.argc!=4 ){
+    usage("eval FILE");
+  }
+  if( blob_read_from_file(&script, g.argv[3], ExtFILE)<0 ){
+    fossil_fatal("cannot read script: %s", g.argv[3]);
+  }
+  Th_FossilInit(TH_INIT_DEFAULT);
+  if( Th_Eval(g.interp, 0, blob_str(&script), -1)==TH_ERROR ){
+    int n;
+    const char *z = Th_GetResult(g.interp, &n);
+    fossil_fatal("eval error: %.*s", n, z ? z : "");
+  }
+  blob_reset(&script);
 }
 
 /*
@@ -4430,6 +4687,9 @@ static void agent_capabilities_cmd(void){
 **       Print a compact diagnostics bundle covering config, verification,
 **       runtime counts, recipe registry sanity, recent sessions, and evals.
 **       With --save, persist the diagnostics payload in repository storage.
+**
+**    fossil agent eval FILE
+**       Execute the TH1 script in FILE with full agent capability.
 **
 **    fossil agent capabilities
 **       List the built-in capability registry for recipe and agent use.
@@ -4467,9 +4727,13 @@ static void agent_capabilities_cmd(void){
 **    fossil agent retrieve QUERY [--limit N]
 **       Retrieve weighted note matches and reinforce them.
 **
+**    fossil agent tool-exec NAME ?JSON_ARGS?
+**       Execute a named dynamic tool using the TH1 interpreter.
+**
 **    fossil agent wiki-sync PAGENAME ?FILE? [--append] [--dry-run]
 **                             [--title TEXT] [--status TEXT]
 **       Create or update PAGENAME with an agent-authored manager update.
+**       The body comes from FILE or stdin.  Checkout metadata and current
 **       The body comes from FILE or stdin.  Checkout metadata and current
 **       pending changes are added as context for the human reader.
 */
@@ -4508,6 +4772,8 @@ void agent_cmd(void){
     blob_reset(&v);
   }else if( fossil_strcmp(zCmd, "diagnostics")==0 ){
     agent_diagnostics_cmd();
+  }else if( fossil_strcmp(zCmd, "eval")==0 ){
+    agent_eval_cmd();
   }else if( fossil_strcmp(zCmd, "run-log")==0 ){
     agent_run_log_cmd();
   }else if( fossil_strcmp(zCmd, "run-show")==0 ){
@@ -4533,6 +4799,8 @@ void agent_cmd(void){
   }else if( fossil_strcmp(zCmd, "mcp")==0 ){
     void agent_mcp_cmd(void);
     agent_mcp_cmd();
+  }else if( fossil_strcmp(zCmd, "tool-exec")==0 ){
+    agent_tool_exec_cmd();
   }else{
     fossil_fatal("unknown agent subcommand: %s", zCmd);
   }

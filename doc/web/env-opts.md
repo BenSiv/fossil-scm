@@ -179,7 +179,7 @@ Username below for a lot more detail.
 additional measures for password security will be enabled (also see
 [How To Use Encrypted Repositories][encryptedrepos.wiki]):
 
-[encryptedrepos.wiki]: /doc/trunk/www/encryptedrepos.wiki
+[encryptedrepos.wiki]: /doc/trunk/doc/web/encryptedrepos.wiki
 
   * _≥1_ &mdash; Do not remember passwords.
 

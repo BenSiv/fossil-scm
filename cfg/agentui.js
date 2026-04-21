@@ -233,13 +233,30 @@
               var content;
               try { content = JSON.parse(dataStr); } catch(e) { return; }
 
-              if(content && typeof content === 'object' && content.error){
-                sawPayload = true;
-                setStatus('Backend error', 'error');
-                addMsg('System', content.error);
-              }else if(content && typeof content === 'object' && content.type === 'propose_edit'){
-                renderApprovalCard(content);
+              if(content && typeof content === 'object'){
+                if(content.error){
+                  sawPayload = true;
+                  setStatus('Backend error', 'error');
+                  addMsg('System', content.error);
+                }else if(content.type === 'propose_edit'){
+                  renderApprovalCard(content);
+                }else{
+                  var delta = typeof content.delta === 'string' ? content.delta :
+                              (content.type === 'chunk' ? content.content : null);
+                  if(delta !== null){
+                    if(!agentDiv){
+                      agentDiv = document.createElement('div');
+                      agentDiv.style.marginBottom = '0.8em';
+                      agentDiv.innerHTML = '<b>Agent:</b> <pre style="white-space:pre-wrap;display:inline;margin:0"></pre>';
+                      log.appendChild(agentDiv);
+                      agentPre = agentDiv.querySelector('pre');
+                    }
+                    sawPayload = true;
+                    agentPre.textContent += delta;
+                  }
+                }
               }else{
+                /* Legacy raw string chunk */
                 if(!agentDiv){
                   agentDiv = document.createElement('div');
                   agentDiv.style.marginBottom = '0.8em';

@@ -37,7 +37,7 @@ but you cannot make Fossil hold onto root privileges.  Fossil always drops
 root privilege before accepting inputs, for security.
 
 
-[bld]: https://fossil-scm.org/home/doc/trunk/www/build.wiki
+[bld]: https://fossil-scm.org/home/doc/trunk/doc/web/build.wiki
 [cj]:  https://en.wikipedia.org/wiki/Chroot
 [fls]: ./loadmgmt.md
 [mnl]: https://fossil-scm.org/forum/forumpost/90caff30cb

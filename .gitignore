@@ -5,3 +5,4 @@
 .fslckout
 /scm/*.fossil
 /scm/*.marks
+test-session*

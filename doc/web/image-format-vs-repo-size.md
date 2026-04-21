@@ -110,7 +110,7 @@ in your own repository?  Easily done with a small amount of code.
 [im]:  https://www.imagemagick.org/
 [jl]:  https://jupyter.org/
 [nbd]: ./image-format-vs-repo-size.ipynb
-[nbp]: https://nbviewer.jupyter.org/urls/fossil-scm.org/fossil/doc/trunk/www/image-format-vs-repo-size.ipynb
+[nbp]: https://nbviewer.jupyter.org/urls/fossil-scm.org/fossil/doc/trunk/doc/web/image-format-vs-repo-size.ipynb
 [wp]:  http://wand-py.org/
 
 

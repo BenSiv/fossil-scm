@@ -180,7 +180,7 @@ included in the response (only the metadata).
     don't have a way to do this at the moment (they can as of late 2019).
     Since fossil wiki commits have always had the same default commit message, this is not a
     high-priority addition. See:\  
-    [](/doc/trunk/www/fileformat.wiki#wikichng)
+    [](/doc/trunk/doc/web/fileformat.wiki#wikichng)
 -   **Potential TODO:** we *could* optionally also support
     multi-page saving using an array of pages in the request payload:\  
     `[… page objects … ]`
