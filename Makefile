@@ -103,7 +103,7 @@ distclean: clean
 	-rm -f cscope.out tags
 
 reconfig:
-	./configure --conf=/home/bensiv/Projects/fossil-scm/bld/auto.def --with-th1-docs --with-th1-hooks
+	./configure --conf=/root/projects/fossil-scm/bld/auto.def --with-th1-docs --with-th1-hooks
 
 tags:
 	ctags -R ./src
@@ -123,9 +123,9 @@ tags:
 # This is also why we repeat the reconfig target's command here instead
 # of delegating to it with "$(MAKE) reconfig": having children running
 # around interfering makes this failure mode even worse.
-Makefile: ./bld/Makefile.in $(SRCDIR)/main.mk /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/autosetup /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/local.tcl /home/bensiv/Projects/fossil-scm/bld/auto.def /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/system.tcl /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/cc.tcl /home/bensiv/Projects/fossil-scm/dep/vendor/autosetup/cc-lib.tcl
-	./configure --conf=/home/bensiv/Projects/fossil-scm/bld/auto.def --with-th1-docs --with-th1-hooks
-	touch /home/bensiv/Projects/fossil-scm/Makefile
+Makefile: ./bld/Makefile.in $(SRCDIR)/main.mk /root/projects/fossil-scm/dep/vendor/autosetup/autosetup /root/projects/fossil-scm/dep/vendor/autosetup/local.tcl /root/projects/fossil-scm/bld/auto.def /root/projects/fossil-scm/dep/vendor/autosetup/system.tcl /root/projects/fossil-scm/dep/vendor/autosetup/cc.tcl /root/projects/fossil-scm/dep/vendor/autosetup/cc-lib.tcl
+	./configure --conf=/root/projects/fossil-scm/bld/auto.def --with-th1-docs --with-th1-hooks
+	touch /root/projects/fossil-scm/Makefile
 
 # Container stuff
 SRCTB := src-1cf64a94569d.tar.gz
