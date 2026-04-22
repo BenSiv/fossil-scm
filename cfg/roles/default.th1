@@ -7,8 +7,10 @@ if {[string compare $thinking_tag ""] == 0} {set thinking_tag "thought"}
 set system_prompt "You are the Fossil AI Agent. You have access to the following tools:\n$tools_json\n\nTo use a tool, output: <tool_call>{\"name\":\"tool_name\",\"args\":{...}}</tool_call>\nIf you need to reason, put it inside <$thinking_tag>...</$thinking_tag> and do not include it in the final answer.\n"
 
 set context ""
+set retrieval_qid 0
 if {$context_enabled} {
   set context [agent_context $msg $model]
+  set retrieval_qid [agent_last_retrieval_qid]
   if {[string compare $context ""] != 0} {
     # Collective Synthesis Phase
     if {[string first "Knowledge Graph Expansion" $context] != -1} {
@@ -78,5 +80,13 @@ if {[catch {agent_run_stream $provider $model $full_prompt} reply]} {
   set acid [agent_save $sid $user "agent" "reply" $provider $model "" $clean_reply]
   if {[string compare $thinking ""] != 0} {
     agent_save_reasoning $sid $acid $provider $model $thinking
+  }
+  if {$retrieval_qid > 0 && [string compare [string trim $clean_reply] ""] != 0} {
+    set event_meta "{\"stage\":\"pool\",\"status\":\"running\",\"retrieval_qid\":$retrieval_qid}"
+    agent_save_event $sid $user "progress" $provider $model $event_meta "Creating Tier 1 note from retrieved answer..."
+    set note_meta "{\"source\":\"agentchat\",\"sid\":$sid,\"acid\":$acid,\"retrieval_qid\":$retrieval_qid,\"provider\":[agent_json_quote $provider],\"model\":[agent_json_quote $model]}"
+    set derived_note_nid [pool_put 1 $clean_reply $note_meta]
+    set event_meta "{\"stage\":\"pool\",\"status\":\"ok\",\"retrieval_qid\":$retrieval_qid,\"nid\":$derived_note_nid}"
+    agent_save_event $sid $user "progress" $provider $model $event_meta "Tier 1 note created"
   }
 }

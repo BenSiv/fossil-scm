@@ -111,6 +111,15 @@
     var html;
     try{ meta = msg.meta ? JSON.parse(msg.meta) : {}; }catch(e){ meta = {}; }
     if(meta.hidden || msg.kind==='context') return;
+    if(msg.role==='user' && msg.kind==='prompt'){
+      if(msg.acid && msg.acid>lastAcid) lastAcid = msg.acid;
+      return;
+    }
+    if(msg.role==='agent' && msg.kind==='reply'){
+      if(msg.acid && msg.acid>lastAcid) lastAcid = msg.acid;
+      setFeedbackState(msg.acid || 0, msg.feedback || '');
+      return;
+    }
     div = document.createElement('div');
     div.style.marginBottom = '0.8em';
     html = '<b>' + (msg.role==='user' ? 'You' : (msg.role==='system' ? 'System' : 'Agent')) + ':</b>';

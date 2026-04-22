@@ -5,6 +5,7 @@ set system_prompt "You are the Fossil AI Agent. Provide concise, direct answers.
 set full_prompt "$system_prompt\n\nUser request:\n$msg"
 set context ""
 set retrieval_qid 0
+set derived_note_nid 0
 
 if {$context_enabled} {
   set event_meta "{\"request_id\":\"$request_id\",\"stage\":\"context\",\"status\":\"running\"}"
@@ -95,5 +96,15 @@ set acid [agent_save $sid $user "agent" "reply" $provider $model $meta $clean_re
 if {[string compare $thinking ""] != 0} {
   agent_save_reasoning $sid $acid $provider $model $thinking
 }
+if {$retrieval_qid > 0 && [string compare [string trim $clean_reply] ""] != 0} {
+  set event_meta "{\"request_id\":\"$request_id\",\"stage\":\"pool\",\"status\":\"running\",\"retrieval_qid\":$retrieval_qid}"
+  set event_msg "Creating Tier 1 note from retrieved answer..."
+  agent_save_event $sid $user "progress" $provider $model $event_meta $event_msg
+  set note_meta "{\"source\":\"agentchat\",\"sid\":$sid,\"acid\":$acid,\"request_id\":[agent_json_quote $request_id],\"retrieval_qid\":$retrieval_qid,\"provider\":[agent_json_quote $provider],\"model\":[agent_json_quote $model]}"
+  set derived_note_nid [pool_put 1 $clean_reply $note_meta]
+  set event_meta "{\"request_id\":\"$request_id\",\"stage\":\"pool\",\"status\":\"ok\",\"retrieval_qid\":$retrieval_qid,\"nid\":$derived_note_nid}"
+  set event_msg "Tier 1 note created"
+  agent_save_event $sid $user "progress" $provider $model $event_meta $event_msg
+}
 agent_eval $sid $acid $provider $model "reply" $reply
-return "{\"sid\":$sid,\"provider\":[agent_json_quote $provider],\"model\":[agent_json_quote $model],\"reply\":[agent_json_quote $clean_reply]}"
+return "{\"sid\":$sid,\"provider\":[agent_json_quote $provider],\"model\":[agent_json_quote $model],\"reply\":[agent_json_quote $clean_reply],\"derived_note_nid\":$derived_note_nid}"

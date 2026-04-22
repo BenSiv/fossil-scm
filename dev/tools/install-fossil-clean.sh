@@ -14,6 +14,27 @@ CURRENT_STEP=0
 
 mkdir -p "$SESSION_DIR"
 
+clean_generated_artifacts() {
+  rm -rf out/*
+  rm -f \
+    bin/fossil \
+    Makefile \
+    compile_commands.json \
+    cscope.out \
+    log/config.log \
+    out/autoconfig.h \
+    tags
+}
+
+run_clean_step() {
+  if make clean; then
+    return 0
+  fi
+
+  printf 'make clean failed; removing generated build artifacts and continuing with a fresh configure\n' >&2
+  clean_generated_artifacts
+}
+
 draw_progress() {
   local completed="$1"
   local total="$2"
@@ -81,7 +102,7 @@ fi
 
 run_step "clean" \
   "$SESSION_DIR/01-clean.log" \
-  make clean
+  bash -lc "$(declare -f clean_generated_artifacts run_clean_step); run_clean_step"
 
 run_step "configure" \
   "$SESSION_DIR/02-configure.log" \
