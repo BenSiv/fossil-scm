@@ -211,6 +211,24 @@ test agent-note-6 {[normalize_result] eq {doc|knowledge/tier3/artifact-note.md|k
 fossil agent --agent-config [file join $cfgDir agent.json] embed {probe text}
 test agent-embed-1 {[normalize_result] eq {0.125000, 0.250000, 0.500000, 1.000000}}
 
+set codexEmbedBackend [file normalize [file join [pwd] codex-embed-backend.sh]]
+write_file $codexEmbedBackend {#!/usr/bin/env bash
+printf '{"object":"list","data":[{"object":"embedding","embedding":[0.5,0.25,0.125,0.0625],"index":0}],"model":"text-embedding-3-small"}\n'
+}
+file attributes $codexEmbedBackend -permissions 0755
+write_file [file join $cfgDir codex-embed.json] [subst -nocommands {
+{
+  "provider": "codex",
+  "model": "auto",
+  "command": "$backend",
+  "embedding_provider": "codex",
+  "embedding_model": "text-embedding-3-small",
+  "embedding_command": "$codexEmbedBackend"
+}
+}]
+fossil agent --agent-config [file join $cfgDir codex-embed.json] embed {codex embed probe}
+test agent-embed-codex-1 {[normalize_result] eq {0.500000, 0.250000, 0.125000, 0.062500}}
+
 fossil agent --agent-config [file join $cfgDir agent.json] semantic-index
 test agent-index-1 {[normalize_result] eq {Indexed 4 notes.}}
 

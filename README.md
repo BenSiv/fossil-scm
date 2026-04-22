@@ -69,6 +69,7 @@ Notes:
 - `embedding_model` is used by `fossil agent embed`, `semantic-index`, and `retrieve`.
 - Maintained helper scripts live in [`dev/agents/fossil-ollama-agent.sh`](dev/agents/fossil-ollama-agent.sh)
   [`dev/agents/fossil-codex-agent.sh`](dev/agents/fossil-codex-agent.sh),
+  [`dev/agents/fossil-codex-embed.sh`](dev/agents/fossil-codex-embed.sh),
   [`dev/agents/fossil-gemini-agent.sh`](dev/agents/fossil-gemini-agent.sh),
   and [`dev/agents/fossil-claude-agent.sh`](dev/agents/fossil-claude-agent.sh).
 - Optional `providers` metadata in the config file declares provider names,
@@ -81,6 +82,9 @@ Notes:
 - `embedding_command` may be left empty if the selected embedding provider has a
   configured `builtin_embedding_fallback`, such as the bundled Ollama example
   using `curl` against `/api/embed`.
+- The bundled Codex config now supports embeddings directly through the OpenAI
+  embeddings API via `dev/agents/fossil-codex-embed.sh`. This requires
+  `OPENAI_API_KEY` or `FOSSIL_AGENT_OPENAI_API_KEY`.
 - `qwen3.5:0.8b` does not provide embeddings in Ollama, so a separate embedding model is required.
 - When `provider` or `embedding_provider` is omitted, Fossil infers it from the
   configured command for compatibility with older configs.

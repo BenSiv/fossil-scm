@@ -25,7 +25,7 @@
       "rejects_ollama_models": 1,
       "supports_streaming": 0,
       "supports_model_discovery": 0,
-      "model_suggestions": ["auto"]
+      "model_suggestions": ["auto", "gpt-5", "text-embedding-3-small"]
     },
     {
       "name": "gemini",
