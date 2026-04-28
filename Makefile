@@ -47,9 +47,9 @@ TCLSH = tclsh
 
 CFLAGS = -g -Os
 CFLAGS_INCLUDE = -I. -I$(SRCDIR) -I$(SRCDIR_extsrc)
-LIB =	  -lresolv -lssl -lcrypto -lz -ldl -lpthread -lm
+LIB =	  -lresolv /root/projects/fossil-scm/dep/vendor/compat/zlib/libz.a -lssl -lcrypto /root/projects/fossil-scm/dep/vendor/compat/zlib/libz.a -ldl -lpthread -lm
 BCCFLAGS =	 $(CFLAGS)
-TCCFLAGS =	-Wall -Wdeclaration-after-statement -DFOSSIL_ENABLE_TH1_DOCS -DFOSSIL_ENABLE_TH1_HOOKS -DFOSSIL_DYNAMIC_BUILD=1  $(CFLAGS) -DHAVE_AUTOCONFIG_H
+TCCFLAGS =	-Wall -Wdeclaration-after-statement -DFOSSIL_ENABLE_JSON -DFOSSIL_DYNAMIC_BUILD=1 -I/root/projects/fossil-scm/dep/vendor/compat/zlib  $(CFLAGS) -DHAVE_AUTOCONFIG_H
 #
 # Fuzzing may be enable by appending -fsanitize=fuzzer -DFOSSIL_FUZZ
 # to the TCCFLAGS variable.
@@ -103,7 +103,7 @@ distclean: clean
 	-rm -f cscope.out tags
 
 reconfig:
-	./configure --conf=./bld/auto.def --with-th1-docs --with-th1-hooks
+	./configure --conf=/root/projects/fossil-scm/bld/auto.def --json --with-zlib=tree
 
 tags:
 	ctags -R ./src
@@ -123,9 +123,9 @@ tags:
 # This is also why we repeat the reconfig target's command here instead
 # of delegating to it with "$(MAKE) reconfig": having children running
 # around interfering makes this failure mode even worse.
-Makefile: ./bld/Makefile.in $(SRCDIR)/main.mk ./dep/vendor/autosetup/autosetup ./dep/vendor/autosetup/local.tcl ./bld/auto.def ./dep/vendor/autosetup/system.tcl ./dep/vendor/autosetup/cc.tcl ./dep/vendor/autosetup/cc-lib.tcl
-	./configure --conf=./bld/auto.def --with-th1-docs --with-th1-hooks
-	touch ./Makefile
+Makefile: ./bld/Makefile.in $(SRCDIR)/main.mk /root/projects/fossil-scm/dep/vendor/autosetup/autosetup /root/projects/fossil-scm/dep/vendor/autosetup/local.tcl /root/projects/fossil-scm/bld/auto.def /root/projects/fossil-scm/dep/vendor/autosetup/system.tcl /root/projects/fossil-scm/dep/vendor/autosetup/cc.tcl /root/projects/fossil-scm/dep/vendor/autosetup/cc-lib.tcl
+	./configure --conf=/root/projects/fossil-scm/bld/auto.def --json --with-zlib=tree
+	touch /root/projects/fossil-scm/Makefile
 
 # Container stuff
 SRCTB := src-1cf64a94569d.tar.gz

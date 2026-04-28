@@ -27,7 +27,7 @@ User-Agent: Fossil-Agent-V1-Smoke\r
 }]
   }
   fossil http --in $requestFile --out $outFile --ipaddr 127.0.0.1 \
-      $repository --localauth -expectError
+      $repository --localauth --nojail -expectError
   set result [expr {[file exists $outFile] ? [read_file $outFile] : ""}]
   catch {file delete $requestFile}
   catch {file delete $outFile}
@@ -68,22 +68,13 @@ if {[string length $repository] == 0} {
   test_cleanup_then_return
 }
 
-set cfgDir [file normalize [file join [pwd] agent-v1-smoke-config]]
-file mkdir $cfgDir
-
-write_file [file join $cfgDir agent.json] [subst -nocommands {
-{
-  "provider": "codex",
-  "model": "test-chat-model",
-  "command": "$backend",
-  "embedding_provider": "ollama",
-  "embedding_model": "test-embed-model",
-  "embedding_command": "$backend",
-  "chat_provider_locked": 1
-}
-}]
-
-fossil set agent-config-path [file join $cfgDir agent.json]
+fossil set agent-provider codex
+fossil set agent-model test-chat-model
+fossil set agent-command $backend
+fossil set agent-embedding-provider ollama
+fossil set agent-embedding-model test-embed-model
+fossil set agent-embedding-command $backend
+fossil set agent-chat-provider-locked on
 fossil ai init
 write_file approval.txt "old-value\n"
 

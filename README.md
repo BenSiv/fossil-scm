@@ -44,52 +44,64 @@ Canonical documents for this fork live under [`doc/`](doc/):
 
 ## AI Agent Configuration
 
-The local agent integration supports separate models for chat and embeddings.
+The local agent integration supports separate chat and embedding backends using
+Fossil's normal settings system. There is no separate agent JSON config-file
+resolver: local repository settings override global settings, and settings
+marked versionable can also be supplied through `.fossil-settings/SETTING`.
 
-Checkout-local config lives in [`cfg/ai-agent.json`](cfg/ai-agent.json):
+### Basic Setup
 
-```json
-{
-  "provider": "ollama",
-  "model": "qwen3.5:0.8b",
-  "command": "/home/you/.config/fossil/agents/fossil-ollama-agent.sh",
-  "embedding_provider": "ollama",
-  "embedding_model": "mxbai-embed-large",
-  "embedding_command": ""
-}
+```bash
+fossil set agent-provider ollama
+fossil set agent-model qwen3.5:0.8b
+fossil set agent-command /absolute/path/to/dev/agents/fossil-ollama-agent.sh
+fossil set agent-embedding-provider ollama
+fossil set agent-embedding-model mxbai-embed-large
+fossil set agent-embedding-command /absolute/path/to/embed-wrapper
+fossil agent verify
 ```
+
+Use `--global` with `fossil set` for user-wide defaults. For team-shared,
+versionable values such as provider/model choices, use Fossil's standard
+`.fossil-settings/<setting-name>` files:
+
+```bash
+mkdir -p .fossil-settings
+printf 'codex\n' > .fossil-settings/agent-provider
+printf 'auto\n' > .fossil-settings/agent-model
+```
+
+See [`doc/ai/AGENT_CONFIG_MIGRATION.md`](doc/ai/AGENT_CONFIG_MIGRATION.md)
+for the migration path from old JSON agent configs.
 
 Notes:
 
-- `provider` selects the chat backend. Current built-in compatibility values are
-  driven by the config file's `providers` catalog. The bundled examples include
+- `agent-provider` selects the chat backend. Built-in compatibility values are
   `claude`, `codex`, `gemini`, `ollama`, and `custom`.
-- `model` is the chat model used by `/agentui` and `/agent-chat`.
-- `embedding_provider` selects the embedding backend independently from chat.
-- `embedding_model` is used by `fossil agent embed`, `semantic-index`, and `retrieve`.
+- `agent-model` is the chat model used by `/agentui` and `/agent-chat`.
+- `agent-embedding-provider` selects the embedding backend independently from
+  chat.
+- `agent-embedding-model` is used by `fossil agent embed`, `semantic-index`,
+  and `retrieve`.
 - Maintained helper scripts live in [`dev/agents/fossil-ollama-agent.sh`](dev/agents/fossil-ollama-agent.sh)
   [`dev/agents/fossil-codex-agent.sh`](dev/agents/fossil-codex-agent.sh),
   [`dev/agents/fossil-codex-embed.sh`](dev/agents/fossil-codex-embed.sh),
   [`dev/agents/fossil-gemini-agent.sh`](dev/agents/fossil-gemini-agent.sh),
   and [`dev/agents/fossil-claude-agent.sh`](dev/agents/fossil-claude-agent.sh).
-- Optional `providers` metadata in the config file declares provider names,
-  model suggestions, validation rules such as whether `auto` is allowed, and
-  lightweight UI capability flags. This lets Fossil treat provider policy as
-  configuration instead of hard-coded C branches.
-- The shared provider catalog normally lives in `ai-agent.json`. Vendor-specific
-  configs such as `ai-agent-gemini.json` override the active provider/model but
-  inherit provider metadata from the sibling `ai-agent.json`.
-- `embedding_command` may be left empty if the selected embedding provider has a
+- Provider metadata for validation, model suggestions, and UI capability flags
+  is built into Fossil so provider policy is available without a parallel config
+  file format.
+- `agent-embedding-command` may be left empty if the selected embedding provider has a
   configured `builtin_embedding_fallback`, such as the bundled Ollama example
   using `curl` against `/api/embed`.
-- The bundled Codex config now supports embeddings directly through the OpenAI
-  embeddings API via `dev/agents/fossil-codex-embed.sh`. This requires
+- Codex embeddings can be wired through the OpenAI embeddings API via
+  `dev/agents/fossil-codex-embed.sh`. This requires
   `OPENAI_API_KEY` or `FOSSIL_AGENT_OPENAI_API_KEY`.
 - `qwen3.5:0.8b` does not provide embeddings in Ollama, so a separate embedding model is required.
-- When `provider` or `embedding_provider` is omitted, Fossil infers it from the
-  configured command for compatibility with older configs.
+- When `agent-provider` or `agent-embedding-provider` is omitted, Fossil infers
+  it from the configured command for compatibility.
 - Fossil rejects obvious provider/model mismatches before launching the backend,
-  based on the active provider metadata from config.
+  based on the built-in provider metadata.
 - `/agentui` stores the effective provider/model with each chat session and
   restores that pair when an existing session is reopened.
 - `/agent-config` exposes the effective chat and embedding config as JSON for
@@ -123,31 +135,14 @@ Notes:
   [`doc/STATE_PROJECTION.md`](doc/STATE_PROJECTION.md).
 - chat rows now also support a lightweight `meta` field for structured event
   metadata such as whether context assembly was enabled for a prompt.
-- Runtime config lookup order is: `--agent-config`, `FOSSIL_AGENT_CONFIG`,
-  repo setting `agent-config-path`, user config
-  `${XDG_CONFIG_HOME:-$HOME/.config}/fossil/ai-agent.json`, then checkout-local
-  `cfg/ai-agent.json`, then repo settings such as `agent-command`,
-  `agent-model`, `agent-provider`, `agent-embedding-model`, and
-  `agent-embedding-provider`.
-- To point Fossil at a shared config file, set `agent-config-path` in the
-  repository, pass `fossil agent --agent-config /absolute/path/to/fossil-agent.json ...`,
-  or export `FOSSIL_AGENT_CONFIG=/absolute/path/to/fossil-agent.json`.
 - For Claude-backed chat, use `fossil-claude-agent.sh`. By default it calls
   `claude` with `-p` and `--model`, and both flags can be overridden with
   `FOSSIL_AGENT_CLAUDE_PROMPT_FLAG` and `FOSSIL_AGENT_CLAUDE_MODEL_FLAG`.
-- For Codex-backed chat, use `fossil-codex-agent.sh` and set `"model": "auto"`
+- For Codex-backed chat, use `fossil-codex-agent.sh` and set `agent-model` to `auto`
   unless your Codex account supports an explicit model name.
 - For Gemini-backed chat, use `fossil-gemini-agent.sh`. By default it calls
   `gemini` with `--prompt` and `--model`, and both flags can be overridden with
   `FOSSIL_AGENT_GEMINI_PROMPT_FLAG` and `FOSSIL_AGENT_GEMINI_MODEL_FLAG`.
-- `make install` also creates `${XDG_CONFIG_HOME:-$HOME/.config}/fossil/agents`
-  and populates it with `ai-agent.json`, `ai-agent-claude.json`,
-  `ai-agent-codex.json`, `ai-agent-gemini.json`, and the agent wrapper scripts
-  when `DESTDIR` is empty. It also installs the default Ollama config at
-  `${XDG_CONFIG_HOME:-$HOME/.config}/fossil/ai-agent.json`.
-- When `make install` runs under `sudo`, the config skeleton is written to the
-  invoking user's config directory rather than `/root/.config/fossil`, and the
-  installed config files are owned by that invoking user.
 
 ## Testing
 
@@ -164,7 +159,7 @@ Codex, or network access. They cover:
 
 - AI schema initialization and self-test review loop
 - `agent note`, `agent embed`, `semantic-index`, `retrieve`, and `eval-report`
-- user-config and repo `agent-config-path` resolution
+- Fossil `agent-*` settings, including versionable settings overrides
 - first-use `/agentui` rendering
 - `/agent-config` JSON for effective provider/model/config state
 - `/agent-config` capability flags for the active backend

@@ -81,7 +81,7 @@ User-Agent: Fossil-TH1-Agent-Test\r
 }]
   }
   fossil http --in $requestFile --out $outFile --ipaddr 127.0.0.1 \
-      $repository --localauth -expectError
+      $repository --localauth --nojail -expectError
   set result [expr {[file exists $outFile] ? [read_file $outFile] : ""}]
   catch {file delete $requestFile}
   catch {file delete $outFile}
@@ -111,20 +111,17 @@ if {[string length $repository] == 0} {
   test_cleanup_then_return
 }
 
-set cfgDir [file normalize [file join [pwd] th1-agent-config]]
-file mkdir $cfgDir
-write_file [file join $cfgDir agent.json] [subst -nocommands {
-{
-  "provider": "ollama",
-  "model": "test-th1-model",
-  "command": "$backend",
-  "thinking_tag": "thought",
-  "embedding_provider": "ollama",
-  "embedding_model": "test-embed-model",
-  "embedding_command": "$backend"
+proc th1_agent_set_config {provider model command embedProvider embedModel embedCommand} {
+  fossil set agent-provider $provider
+  fossil set agent-model $model
+  fossil set agent-command $command
+  fossil set agent-thinking-tag thought
+  fossil set agent-embedding-provider $embedProvider
+  fossil set agent-embedding-model $embedModel
+  fossil set agent-embedding-command $embedCommand
 }
-}]
-fossil set agent-config-path [file join $cfgDir agent.json]
+
+th1_agent_set_config ollama test-th1-model $backend ollama test-embed-model $backend
 
 fossil ai init
 fossil test-th-eval {set out [proc_verify_csrf]; set out}
@@ -430,17 +427,7 @@ test th1-agent-ctx-4 {[string first {"context":true} [normalize_result]]>=0}
 ###############################################################################
 
 # Reconfigure to use the thinking-emitting backend
-write_file [file join $cfgDir agent.json] [subst -nocommands {
-{
-  "provider": "ollama",
-  "model": "test-th1-model",
-  "command": "$thinkingBackend",
-  "thinking_tag": "thought",
-  "embedding_provider": "ollama",
-  "embedding_model": "test-embed-model",
-  "embedding_command": "$backend"
-}
-}]
+th1_agent_set_config ollama test-th1-model $thinkingBackend ollama test-embed-model $backend
 
 set body [subst {sid=0&msg=think+and+answer&model=test-th1-model&context=0&proof=$proof}]
 set response [agent_http_request $repository POST /agent-chat $body]
@@ -469,16 +456,7 @@ test th1-agent-think-6 {[string first {internal reasoning} [normalize_result]]>=
 ###############################################################################
 
 # Change the backend command to an invalid command to force agent_run to fail
-write_file [file join $cfgDir agent.json] [subst -nocommands {
-{
-  "provider": "codex",
-  "model": "test-th1-model",
-  "command": "invalid-backend-command-does-not-exist",
-  "embedding_provider": "ollama",
-  "embedding_model": "test-embed-model",
-  "embedding_command": "$backend"
-}
-}]
+th1_agent_set_config codex test-th1-model invalid-backend-command-does-not-exist ollama test-embed-model $backend
 
 set body [subst {sid=0&msg=hello&model=test-th1-model&context=0&proof=$proof}]
 set response [agent_http_request $repository POST /agent-chat $body]
@@ -493,17 +471,7 @@ test th1-agent-err-2 {[string first {not found} $body2]>=0}
 ###############################################################################
 
 # Restore the normal backend
-write_file [file join $cfgDir agent.json] [subst -nocommands {
-{
-  "provider": "ollama",
-  "model": "test-th1-model",
-  "command": "$backend",
-  "thinking_tag": "thought",
-  "embedding_provider": "ollama",
-  "embedding_model": "test-embed-model",
-  "embedding_command": "$backend"
-}
-}]
+th1_agent_set_config ollama test-th1-model $backend ollama test-embed-model $backend
 
 set body [subst {sid=0&msg=events+and+history&model=test-th1-model&context=0&proof=$proof}]
 set response [agent_http_request $repository POST /agent-chat $body]
@@ -538,17 +506,7 @@ test th1-agent-hist-6 {[string first {User request: events and history} $histBod
 # Empty backend replies must surface as errors
 ###############################################################################
 
-write_file [file join $cfgDir agent.json] [subst -nocommands {
-{
-  "provider": "ollama",
-  "model": "test-th1-model",
-  "command": "$emptyBackend",
-  "thinking_tag": "thought",
-  "embedding_provider": "ollama",
-  "embedding_model": "test-embed-model",
-  "embedding_command": "$backend"
-}
-}]
+th1_agent_set_config ollama test-th1-model $emptyBackend ollama test-embed-model $backend
 
 set body [subst {sid=0&msg=empty+reply&model=test-th1-model&context=0&proof=$proof}]
 set response [agent_http_request $repository POST /agent-chat $body]

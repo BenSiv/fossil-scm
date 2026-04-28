@@ -113,7 +113,7 @@ proc ai_http_request {repository url} {
   set requestFile [file join [pwd] ai-http-test.txt]
   set outFile [file join [pwd] ai-http-out.txt]
   write_file $requestFile "GET $url HTTP/1.0\r\nHost: localhost\r\nUser-Agent: Fossil-AI-Test\r\n\r\n"
-  fossil http --in $requestFile --out $outFile --ipaddr 127.0.0.1 $repository --localauth -expectError
+  fossil http --in $requestFile --out $outFile --ipaddr 127.0.0.1 $repository --localauth --nojail -expectError
   set result [expr {[file exists $outFile] ? [read_file $outFile] : ""}]
   catch {file delete $requestFile}
   catch {file delete $outFile}
@@ -127,16 +127,9 @@ printf '{"embedding":[0.1,0.2,0.3,0.4]}\n'
 }
 file attributes $backend -permissions 0755
 
-set cfgDir [file normalize [file join [pwd] ai-test-config]]
-file mkdir $cfgDir
-write_file [file join $cfgDir agent.json] [subst -nocommands {
-{
-  "embedding_provider": "ollama",
-  "embedding_model": "test-embed-model",
-  "embedding_command": "$backend"
-}
-}]
-fossil set agent-config-path [file join $cfgDir agent.json]
+fossil set agent-embedding-provider ollama
+fossil set agent-embedding-model test-embed-model
+fossil set agent-embedding-command $backend
 
 # Test `/semantic-search` UI wrapper
 set response [ai_http_request $repoFile /semantic-search?q=test]
@@ -144,8 +137,9 @@ test ai-web-search-1 {[string first {Semantic Search} $response]>=0}
 test ai-web-search-2 {[string first {action="/semantic-search"} $response]>=0}
 
 # Verify that `/note` renders successfully without crashing, and yields expected metadata
-# Note nid=1 (Example Note)
-set response [ai_http_request $repoFile /note?id=1]
+fossil sql "SELECT nid FROM ai_note WHERE title='Example Note' ORDER BY nid DESC LIMIT 1"
+set exampleNoteId [normalize_result]
+set response [ai_http_request $repoFile [subst {/note?id=$exampleNoteId}]]
 test ai-web-note-1 {[string first {Note: Example Note} $response]>=0}
 test ai-web-note-2 {[string first {Example Note Body} $response]>=0}
 test ai-web-note-3 {[string first {<th>Type:</th><td>doc</td>} $response]>=0}

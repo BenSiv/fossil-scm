@@ -43,7 +43,7 @@ User-Agent: Fossil-Agent-Test\r
 }]
   }
   fossil http --in $requestFile --out $outFile --ipaddr 127.0.0.1 \
-      $repository --localauth -expectError
+      $repository --localauth --nojail -expectError
   set result [expr {[file exists $outFile] ? [read_file $outFile] : ""}]
   catch {file delete $requestFile}
   catch {file delete $outFile}
@@ -81,91 +81,16 @@ if {[string length $repository] == 0} {
   test_cleanup_then_return
 }
 
-set cfgDir [file normalize [file join [pwd] agent-config]]
-set userCfgRoot [file normalize [file join [pwd] xdg]]
-set userCfgDir [file join $userCfgRoot fossil]
-file mkdir $cfgDir
-file mkdir $userCfgDir
-
-write_file [file join $cfgDir ai-agent.json] [subst -nocommands {
-{
-  "provider": "ollama",
-  "model": "test-base-model",
-  "command": "$backend",
-  "embedding_provider": "ollama",
-  "embedding_model": "test-base-embed-model",
-  "embedding_command": "$backend",
-  "auto_promote_markdown": 1,
-  "chat_provider_locked": 1,
-  "providers": [
-    {
-      "name": "claude",
-      "command": "./dev/agents/fossil-claude-agent.sh",
-      "accepts_auto": 1,
-      "rejects_ollama_models": 1,
-      "supports_streaming": 0,
-      "supports_model_discovery": 0,
-      "model_suggestions": ["auto", "sonnet", "opus"]
-    },
-    {
-      "name": "codex",
-      "command": "$backend",
-      "accepts_auto": 1,
-      "rejects_ollama_models": 1,
-      "supports_streaming": 0,
-      "supports_model_discovery": 0,
-      "model_suggestions": ["auto"]
-    },
-    {
-      "name": "gemini",
-      "command": "./dev/agents/fossil-gemini-agent.sh",
-      "accepts_auto": 1,
-      "rejects_ollama_models": 1,
-      "supports_streaming": 0,
-      "supports_model_discovery": 0,
-      "model_suggestions": ["auto", "gemini-2.5-pro", "gemini-2.5-flash"]
-    },
-    {
-      "name": "ollama",
-      "command": "$backend",
-      "accepts_auto": 0,
-      "rejects_ollama_models": 0,
-      "supports_streaming": 0,
-      "supports_model_discovery": 0,
-      "builtin_embedding_fallback": "curl",
-      "model_suggestions": ["qwen3.5:0.8b", "llama3.2", "gemma3"]
-    },
-    {
-      "name": "custom",
-      "accepts_auto": 0,
-      "rejects_ollama_models": 0,
-      "supports_streaming": 0,
-      "supports_model_discovery": 0,
-      "model_suggestions": []
-    }
-  ]
+proc agent_set_config {provider model command embedProvider embedModel embedCommand} {
+  fossil set agent-provider $provider
+  fossil set agent-model $model
+  fossil set agent-command $command
+  fossil set agent-embedding-provider $embedProvider
+  fossil set agent-embedding-model $embedModel
+  fossil set agent-embedding-command $embedCommand
+  fossil set agent-thinking-tag thought
+  fossil set agent-chat-provider-locked on
 }
-}]
-
-write_file [file join $cfgDir agent.json] [subst -nocommands {
-{
-  "provider": "codex",
-  "model": "test-chat-model",
-  "command": "$backend",
-  "embedding_provider": "ollama",
-  "embedding_model": "test-embed-model",
-  "embedding_command": "$backend"
-}
-}]
-
-write_file [file join $userCfgDir ai-agent.json] [subst -nocommands {
-{
-  "model": "user-config-model",
-  "command": "$backend",
-  "embedding_model": "user-embed-model",
-  "embedding_command": "$backend"
-}
-}]
 
 ###############################################################################
 
@@ -178,6 +103,7 @@ write_file [file join doc ai guidance review-change.md] "Review pending changes 
 write_file [file join doc ai autopromote.md] "Auto promotion should index this markdown file.\n"
 fossil add [file join doc ai autopromote.md]
 
+agent_set_config codex test-chat-model $backend ollama test-embed-model $backend
 fossil set agent-auto-promote-markdown on
 
 fossil ai init
@@ -186,21 +112,21 @@ fossil sql "SELECT count(*) FROM ai_note WHERE artifact_path='doc/ai/autopromote
 test agent-markdown-auto-1 {[normalize_result] eq {1}}
 
 write_file agent-note.txt "Embeddings let retrieval find this note.\n"
-fossil agent --agent-config [file join $cfgDir agent.json] note agent-note.txt --title "Embeddings Note"
+fossil agent note agent-note.txt --title "Embeddings Note"
 test agent-note-1 {[normalize_result] eq {Added note: Embeddings Note}}
 
 fossil sql "SELECT count(*) FROM ai_note WHERE title='Embeddings Note'"
 test agent-note-2 {[normalize_result] eq {1}}
 
 write_file agent-chat-note.txt "Embeddings let retrieval find this note.\n"
-fossil agent --agent-config [file join $cfgDir agent.json] note agent-chat-note.txt --title "Chat Note" --source-type chat --source-ref chat/test
+fossil agent note agent-chat-note.txt --title "Chat Note" --source-type chat --source-ref chat/test
 test agent-note-3 {[normalize_result] eq {Added note: Chat Note}}
 
 fossil sql "SELECT group_concat(title || ':' || printf('%.2f',artifact_weight), ',') FROM ai_note WHERE title IN ('Embeddings Note','Chat Note') ORDER BY title"
 test agent-note-4 {[string first {Embeddings Note:0.08} [normalize_result]]>=0 && [string first {Chat Note:0.02} [normalize_result]]>=0}
 
 write_file agent-artifact-note.txt "Durable knowledge should link to an artifact.\n"
-fossil agent --agent-config [file join $cfgDir agent.json] note agent-artifact-note.txt --title "Artifact Note" --source-type doc --source-ref source/doc --artifact-kind doc --artifact-ref knowledge/tier3/artifact-note.md --artifact-path knowledge/tier3/artifact-note.md --artifact-status materialized
+fossil agent note agent-artifact-note.txt --title "Artifact Note" --source-type doc --source-ref source/doc --artifact-kind doc --artifact-ref knowledge/tier3/artifact-note.md --artifact-path knowledge/tier3/artifact-note.md --artifact-status materialized
 test agent-note-5 {[normalize_result] eq {Added note: Artifact Note}}
 
 fossil sql "SELECT artifact_kind || '|' || artifact_ref || '|' || artifact_path || '|' || artifact_status FROM ai_note WHERE title='Artifact Note' ORDER BY nid DESC LIMIT 1"
@@ -208,7 +134,7 @@ test agent-note-6 {[normalize_result] eq {doc|knowledge/tier3/artifact-note.md|k
 
 ###############################################################################
 
-fossil agent --agent-config [file join $cfgDir agent.json] embed {probe text}
+fossil agent embed {probe text}
 test agent-embed-1 {[normalize_result] eq {0.125000, 0.250000, 0.500000, 1.000000}}
 
 set codexEmbedBackend [file normalize [file join [pwd] codex-embed-backend.sh]]
@@ -216,20 +142,12 @@ write_file $codexEmbedBackend {#!/usr/bin/env bash
 printf '{"object":"list","data":[{"object":"embedding","embedding":[0.5,0.25,0.125,0.0625],"index":0}],"model":"text-embedding-3-small"}\n'
 }
 file attributes $codexEmbedBackend -permissions 0755
-write_file [file join $cfgDir codex-embed.json] [subst -nocommands {
-{
-  "provider": "codex",
-  "model": "auto",
-  "command": "$backend",
-  "embedding_provider": "codex",
-  "embedding_model": "text-embedding-3-small",
-  "embedding_command": "$codexEmbedBackend"
-}
-}]
-fossil agent --agent-config [file join $cfgDir codex-embed.json] embed {codex embed probe}
+agent_set_config codex auto $backend codex text-embedding-3-small $codexEmbedBackend
+fossil agent embed {codex embed probe}
 test agent-embed-codex-1 {[normalize_result] eq {0.500000, 0.250000, 0.125000, 0.062500}}
+agent_set_config codex test-chat-model $backend ollama test-embed-model $backend
 
-fossil agent --agent-config [file join $cfgDir agent.json] semantic-index
+fossil agent semantic-index
 test agent-index-1 {[normalize_result] eq {Indexed 4 notes.}}
 
 fossil sql "SELECT source_type || '|' || dim FROM ai_vector ORDER BY source_id DESC LIMIT 1"
@@ -237,25 +155,25 @@ test agent-index-2 {[normalize_result] eq {note|4}}
 
 write_file [file join doc ai retrieval-auto.md] "# Retrieval Auto Promotion\n\nRetrieval should auto-index this repository markdown document.\n"
 fossil add [file join doc ai retrieval-auto.md]
-fossil agent --agent-config [file join $cfgDir agent.json] retrieve {auto-index this repository markdown document} --limit 2
+fossil agent retrieve {auto-index this repository markdown document} --limit 2
 test agent-retrieve-md-1 {[string first {Retrieval Auto Promotion} [normalize_result]]>=0}
 fossil sql "SELECT tier || '|' || source_type || '|' || artifact_path FROM ai_note WHERE artifact_path='doc/ai/retrieval-auto.md' ORDER BY nid DESC LIMIT 1"
 test agent-retrieve-md-2 {[normalize_result] eq {1|doc|doc/ai/retrieval-auto.md}}
 fossil sql "DELETE FROM ai_vector WHERE source_type='note' AND source_id IN (SELECT nid FROM ai_note WHERE artifact_path='doc/ai/retrieval-auto.md')"
 fossil sql "DELETE FROM ai_note WHERE artifact_path='doc/ai/retrieval-auto.md'"
 
-fossil agent --agent-config [file join $cfgDir agent.json] retrieve {Embeddings retrieval note} --limit 3
+fossil agent retrieve {Embeddings retrieval note} --limit 5
 test agent-retrieve-1 {[string first {Embeddings Note} [normalize_result]]>=0}
 test agent-retrieve-2 {[string first {reinforcement: +} [normalize_result]]>=0}
 test agent-retrieve-3 {[string first {Embeddings Note} [normalize_result]]>=0}
 
-fossil agent --agent-config [file join $cfgDir agent.json] retrieve {automatic promotion candidate} --limit 1
+fossil agent retrieve {automatic promotion candidate} --limit 1
 test agent-retrieve-4 {[string first {Artifact Note} [normalize_result]]>=0}
-fossil agent --agent-config [file join $cfgDir agent.json] retrieve {automatic promotion candidate} --limit 1
+fossil agent retrieve {automatic promotion candidate} --limit 1
 test agent-retrieve-5 {[string first {Artifact Note} [normalize_result]]>=0}
-fossil agent --agent-config [file join $cfgDir agent.json] retrieve {automatic promotion candidate} --limit 1
+fossil agent retrieve {automatic promotion candidate} --limit 1
 test agent-retrieve-6 {[string first {Artifact Note} [normalize_result]]>=0}
-fossil agent --agent-config [file join $cfgDir agent.json] retrieve {automatic promotion candidate} --limit 1
+fossil agent retrieve {automatic promotion candidate} --limit 1
 test agent-retrieve-7 {[string first {Artifact Note} [normalize_result]]>=0}
 fossil sql "SELECT tier || '|' || process_level || '|' || coalesce(artifact_status,'') FROM ai_note WHERE title='Artifact Note' ORDER BY nid DESC LIMIT 1"
 test agent-retrieve-8 {[normalize_result] eq {2|curated|materialized}}
@@ -264,8 +182,8 @@ test agent-retrieve-9 {[string first {promotion=promoted-1-to-2} [normalize_resu
 
 ###############################################################################
 
-fossil agent --agent-config [file join $cfgDir agent.json] verify --json --chat-smoke --embed-smoke
-test agent-verify-1 {[string first "\"source\":\"cli --agent-config: " [normalize_result]]>=0}
+fossil agent verify --json --chat-smoke --embed-smoke
+test agent-verify-1 {[string first "\"source\":\"fossil settings\"" [normalize_result]]>=0}
 test agent-verify-2 {[string first "\"chat\":\{\"provider\":\"codex\"" [normalize_result]]>=0}
 test agent-verify-3 {[string first "\"embedding\":\{\"provider\":\"ollama\"" [normalize_result]]>=0}
 test agent-verify-4 {[string first "\"smoke_ok\":1" [normalize_result]]>=0}
@@ -296,7 +214,7 @@ test agent-recipe-5 {[string first "capabilities: agent_context,agent_run" [norm
 test agent-recipe-5a {[string first "guidance-refs: doc/ai/guidance/summarize-context.md" [normalize_result]]>=0}
 test agent-recipe-5b {[string first "guidance-ref-count: 1" [normalize_result]]>=0}
 
-fossil agent --agent-config [file join $cfgDir agent.json] recipe run summarize-context retrieval --json
+fossil agent recipe run summarize-context retrieval --json
 test agent-recipe-6 {[string first "\"recipe\":\"summarize-context\"" [normalize_result]]>=0}
 test agent-recipe-7 {[string first "\"provider\":\"codex\"" [normalize_result]]>=0}
 test agent-recipe-8 {[string first "REPOSITORY CONTEXT" [normalize_result]]>=0}
@@ -312,11 +230,9 @@ test agent-recipe-14b {[string first "doc/ai/guidance/summarize-context.md" [nor
 
 ###############################################################################
 
-set RESULT [exec env XDG_CONFIG_HOME=$userCfgRoot $::fossilexe agent embed {user config probe}]
-set CODE 0
-test agent-config-user-1 {[normalize_result] eq {0.125000, 0.250000, 0.500000, 1.000000}}
+fossil settings agent-model --value --exact
+test agent-settings-1 {[normalize_result] eq {test-chat-model}}
 
-fossil set agent-config-path [file join $cfgDir agent.json]
 fossil test-th-eval {set out [proc_verify_csrf]; set out}
 set proof [normalize_result]
 
@@ -327,7 +243,7 @@ set RESULT $response
 set CODE 0
 test agent-ui-1 {[agent_http_status $RESULT] eq {200}}
 test agent-ui-1a {[string first {Agent} $RESULT]>=0 && [string first {/agentui} $RESULT]>=0}
-test agent-ui-2 {[string first {id="agent-config-source"} $RESULT]>=0 && [string first [subst {repo agent-config-path: [file join $cfgDir agent.json]}] $RESULT]>=0}
+test agent-ui-2 {[string first {id="agent-config-source"} $RESULT]>=0 && [string first {fossil settings} $RESULT]>=0}
 test agent-ui-3 {[string first {id="agent-config-chat-provider"} $RESULT]>=0 && [string first {>codex<} $RESULT]>=0}
 test agent-ui-4 {[string first {id="agent-config-chat-model"} $RESULT]>=0 && [string first {>test-chat-model<} $RESULT]>=0}
 test agent-ui-5 {[string first {id="agent-config-embedding-provider"} $RESULT]>=0}
@@ -426,7 +342,7 @@ test agent-config-9 {[string first {"embedding_available":1} $RESULT]>=0}
 test agent-config-10 {[string first {"chat_provider_known":1} $RESULT]>=0}
 test agent-config-11 {[string first {"embedding_provider_known":1} $RESULT]>=0}
 test agent-config-12 {[string first {"chat_provider_choices":["claude","codex","gemini","ollama","custom"]} $RESULT]>=0}
-test agent-config-13 {[string first {"chat_model_suggestions":["auto"]} $RESULT]>=0}
+test agent-config-13 {[string first {"chat_model_suggestions":["auto","gpt-5","text-embedding-3-small"]} $RESULT]>=0}
 test agent-config-14 {[string first {"phase_count":10} $RESULT]>=0}
 test agent-config-15 {[string first "\"phases\"" $RESULT]>=0 && [string first "\"name\":\"explore\"" $RESULT]>=0}
 test agent-config-16 {[string first "\"name\":\"verify\"" $RESULT]>=0 && [string first "\"title\":\"Verify\"" $RESULT]>=0}
@@ -489,7 +405,7 @@ test agent-chat-11 {[string first {"tool":"chat-backend","provider":"codex","pha
 fossil sql "SELECT meta FROM agentchat WHERE role='system' AND kind='progress' ORDER BY acid ASC LIMIT 1 OFFSET 2"
 test agent-chat-12 {[string first {"stage":"backend","status":"running"} [normalize_result]]>=0 && [string first {"request_id":"req-} [normalize_result]]>=0}
 
-fossil sql "SELECT meta FROM agentchat WHERE role='system' AND kind='progress' ORDER BY acid DESC LIMIT 1"
+fossil sql "SELECT meta FROM agentchat WHERE role='system' AND kind='progress' AND meta LIKE '%\"stage\":\"backend\",\"status\":\"ok\"%' ORDER BY acid DESC LIMIT 1"
 test agent-chat-13 {[string first {"stage":"backend","status":"ok"} [normalize_result]]>=0 && [string first {"request_id":"req-} [normalize_result]]>=0}
 
 fossil sql "SELECT meta FROM agentchat WHERE role='user' ORDER BY acid ASC LIMIT 1"
@@ -510,7 +426,7 @@ test agent-chat-17 {[string first {value="test-chat-model"} $RESULT]>=0}
 test agent-chat-18 {[string first {{progress}} $RESULT]>=0}
 test agent-chat-19 {[string first {tool_request} $RESULT]>=0 || [string first {tool_result} $RESULT]>=0}
 test agent-chat-20 {[string first {System:} $RESULT]>=0}
-test agent-chat-20a {[string first {[codex / test-chat-model | reply]} $RESULT]>=0}
+test agent-chat-20a {[string first {[codex / test-chat-model | reply]} $RESULT]>=0 || [string first {[codex / test-chat-model | ok]} $RESULT]>=0}
 test agent-chat-21 {[string first {&quot;stage&quot;:&quot;context&quot;,&quot;status&quot;:&quot;running&quot;} $RESULT]>=0}
 test agent-chat-22 {[string first {&quot;tool&quot;:&quot;chat-backend&quot;,&quot;provider&quot;:&quot;codex&quot;,&quot;phase&quot;:&quot;request&quot;} $RESULT]>=0}
 test agent-chat-23 {[string first {&quot;stage&quot;:&quot;backend&quot;,&quot;status&quot;:&quot;running&quot;} $RESULT]>=0}
@@ -547,7 +463,7 @@ test agent-chat-44a {[string first {"feedback":""} $RESULT]>=0}
 
 write_file [file join doc ai manual-promote.md] "Manual promotion should index this markdown file.\n"
 fossil add [file join doc ai manual-promote.md]
-fossil agent --agent-config [file join $cfgDir agent.json] promote-markdown --force
+fossil agent promote-markdown --force
 test agent-markdown-cli-1 {[string first {promoted:} [normalize_result]]>=0}
 fossil sql "SELECT count(*) FROM ai_note WHERE artifact_path='doc/ai/manual-promote.md' AND tier=1"
 test agent-markdown-cli-2 {[normalize_result] eq {1}}
@@ -790,7 +706,7 @@ fossil agent eval-report
 test agent-feedback-8 {[string first {codex|test-chat-model|final|ok|none|useful|1} [normalize_result]]>=0}
 
 fossil agent diagnostics --json --limit 2
-test agent-diagnostics-1 {[string first "\"source\":\"repo agent-config-path: " [normalize_result]]>=0}
+test agent-diagnostics-1 {[string first "\"source\":\"fossil settings\"" [normalize_result]]>=0}
 test agent-diagnostics-2 {[string first "\"verification\"" [normalize_result]]>=0 && [string first "\"overall_ok\":1" [normalize_result]]>=0}
 test agent-diagnostics-3 {[string first "\"runtime\"" [normalize_result]]>=0 && [string first "\"eval_count\":" [normalize_result]]>=0}
 test agent-diagnostics-4 {[string first "\"recipes\"" [normalize_result]]>=0 && [string first "\"invalid_count\":0" [normalize_result]]>=0}

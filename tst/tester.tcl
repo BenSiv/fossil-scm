@@ -267,6 +267,13 @@ proc get_versionable_settings {} {
   #       this list (and procedure) most likely needs to be modified as well.
   #
   set result [list \
+      agent-auto-promote-markdown \
+      agent-chat-provider-locked \
+      agent-embedding-model \
+      agent-embedding-provider \
+      agent-model \
+      agent-provider \
+      agent-thinking-tag \
       binary-glob \
       clean-glob \
       crlf-glob \
@@ -291,6 +298,18 @@ proc get_all_settings {} {
   set result [list \
       access-log \
       admin-log \
+      agent-auto-promote-markdown \
+      agent-chat-provider-locked \
+      agent-command \
+      agent-embedding-command \
+      agent-embedding-model \
+      agent-embedding-provider \
+      agent-history-count \
+      agent-model \
+      agent-ollama-command \
+      agent-ollama-model \
+      agent-provider \
+      agent-thinking-tag \
       allow-symlinks \
       auto-captcha \
       auto-hyperlink \

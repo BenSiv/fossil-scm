@@ -67,10 +67,8 @@ deterministic, and aligned with the original Tcl-based workflow.
   - chat replies
   - embedding generation
 - Cover:
-  - `--agent-config`
-  - `FOSSIL_AGENT_CONFIG`
-  - repo `agent-config-path`
-  - user config fallback
+  - repository and global `agent-*` settings
+  - versionable `.fossil-settings/agent-*` overrides
   - `agent note`
   - `agent embed`
   - `agent semantic-index`
