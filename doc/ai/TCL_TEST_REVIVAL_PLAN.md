@@ -60,9 +60,10 @@ deterministic, and aligned with the original Tcl-based workflow.
 
 ### Phase 3: Port AI/agent regressions into Tcl
 
-- Extend [`tst/ai.test`](../../tst/ai.test) or split coverage into:
-  - `tst/ai-core.test`
-  - `tst/agent.test`
+- Extend the Tcl coverage across:
+  - `tst/agent-config.test`
+  - [`tst/ai.test`](../../tst/ai.test)
+  - [`tst/agent.test`](../../tst/agent.test)
 - Use a hermetic fake backend fixture for:
   - chat replies
   - embedding generation

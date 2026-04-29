@@ -151,6 +151,7 @@ Notes:
 
 - Core AI data-pool tests: [`tst/ai.test`](tst/ai.test)
 - Hermetic agent regression tests: [`tst/agent.test`](tst/agent.test)
+- Agent config migration tests: [`tst/agent-config.test`](tst/agent-config.test)
 - Focused flat-route smoke tests: [`tst/agent-v1-smoke.test`](tst/agent-v1-smoke.test)
 - Fake backend fixture: [`tst/fake-agent-backend.sh`](tst/fake-agent-backend.sh)
 

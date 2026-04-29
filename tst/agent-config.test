@@ -1,0 +1,53 @@
+#
+# Copyright (c) 2026
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the Simplified BSD License (also
+# known as the "2-Clause License" or "FreeBSD License".)
+#
+############################################################################
+#
+# Agent configuration tests. These pin the agent runtime to Fossil's normal
+# settings stack instead of a separate JSON config-file resolver.
+#
+
+require_no_open_checkout
+
+set path [file dirname [info script]]
+set backend [file normalize [file join $path fake-agent-backend.sh]]
+
+test_setup
+
+fossil set agent-provider codex
+fossil set agent-model test-chat-model
+fossil set agent-command $backend
+fossil set agent-embedding-provider ollama
+fossil set agent-embedding-model test-embed-model
+fossil set agent-embedding-command $backend
+fossil set agent-chat-provider-locked on
+fossil set agent-thinking-tag thought
+
+fossil agent verify --json
+set verifyJson [normalize_result]
+test agent-config-settings-1 {[string first {"source":"fossil settings"} $verifyJson]>=0}
+test agent-config-settings-2 {[string first {"provider":"codex","model":"test-chat-model"} $verifyJson]>=0}
+test agent-config-settings-3 {[string first {"provider":"ollama","model":"test-embed-model"} $verifyJson]>=0}
+
+fossil test-th-eval --open-config {agent_config model}
+test agent-config-th1-1 {[normalize_result] eq {test-chat-model}}
+
+fossil test-th-eval --open-config {agent_config thinking_tag}
+test agent-config-th1-2 {[normalize_result] eq {thought}}
+
+file mkdir .fossil-settings
+fossil unset agent-model
+write_file [file join .fossil-settings agent-model] "versioned-model\n"
+
+fossil agent verify --json
+set verifyJson [normalize_result]
+test agent-config-versioned-1 {[string first {"provider":"codex","model":"versioned-model"} $verifyJson]>=0}
+
+fossil agent verify --agent-config does-not-exist.json -expectError
+test agent-config-no-json-1 {[string first {unrecognized command-line option} [normalize_result]]>=0}
+
+test_cleanup
