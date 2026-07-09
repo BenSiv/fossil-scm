@@ -838,12 +838,12 @@ void alert_display_name_func(
 ** Return the hostname portion of an email address - the part following
 ** the @
 */
-char *alert_hostname(const char *zAddr){
-  char *z = strchr(zAddr, '@');
+const char *alert_hostname(const char *zAddr){
+  const char *z = strchr(zAddr, '@');
   if( z ){
     z++;
   }else{
-    z = (char*)zAddr;
+    z = zAddr;
   }
   return z;
 }
@@ -851,7 +851,7 @@ char *alert_hostname(const char *zAddr){
 /*
 ** Return a pointer to a fake email mailbox name that corresponds
 ** to human-readable name zFromName.  The fake mailbox name is based
-** on a hash.  No huge problems arise if there is a hash collisions,
+** on a hash.  No huge problems arise if there is a hash collision,
 ** but it is still better if collisions can be avoided.
 **
 ** The returned string is held in a static buffer and is overwritten

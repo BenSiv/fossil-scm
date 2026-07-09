@@ -2595,7 +2595,8 @@ void commit_cmd(void){
 
   memset(&sCiInfo, 0, sizeof(sCiInfo));
   url_proxy_options();
-  /* --sha1sum is an undocumented alias for --hash for backwards compatibility */
+                               /* Undocumented.  Supported only for backwards
+                               ** compatibility -------vvvvvvv */
   useHash = find_option("hash",0,0)!=0 || find_option("sha1sum",0,0)!=0;
   noSign = find_option("nosign",0,0)!=0;
   if( find_option("nosync",0,0) ) g.fNoSync = 1;
@@ -2994,9 +2995,13 @@ void commit_cmd(void){
       while(  1/*exit-by-break*/ ){
         int rc;
         char *zInit;
+        assert( db_transaction_nesting_depth()==1 );
         zInit = db_text(0,"SELECT value FROM vvar WHERE name='ci-comment'");
         prepare_commit_comment(&comment, zInit, &sCiInfo, vid, dryRunFlag);
         db_multi_exec("REPLACE INTO vvar VALUES('ci-comment',%B)", &comment);
+        assert( db_transaction_nesting_depth()==1 );
+        db_end_transaction(0);
+        db_begin_transaction();
         if( (rc = verify_comment(&comment, ckComFlgs))!=0 ){
           if( rc==COMCK_PREVIEW ){
             prompt_user("Continue, abort, or edit? (C/a/e)? ", &ans);

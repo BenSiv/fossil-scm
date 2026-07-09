@@ -1337,8 +1337,9 @@ int cgi_setup_query_string(void){
     }
   }
   if( !g.syncInfo.zLoginCard && 0!=(z=(char*)P("x-f-l-c")) ){
-    /* x-f-l-c (X-Fossil-Login-Card card transmitted via cookie
-    ** instead of in the sync payload. */
+    /* x-f-l-c (X-Fossil-Login-Card) transmitted via cookie instead of
+    ** in the sync payload. The format of this value is the same as a
+    ** "login" card, as parsed by xfer.c:page_xfer(). */
     rc |= 0x04;
     g.syncInfo.zLoginCard = fossil_strdup(z);
     g.syncInfo.fLoginCardMode |= 0x02;
@@ -1392,7 +1393,7 @@ int cgi_setup_query_string(void){
 void cgi_init(void){
   char *z;
   const char *zType;
-  char *zSemi;
+  const char *zSemi;
   int len;
   const char *zRequestUri = cgi_parameter("REQUEST_URI",0);
   const char *zScriptName = cgi_parameter("SCRIPT_NAME",0);
@@ -1414,7 +1415,7 @@ void cgi_init(void){
     if( zRequestUri==0 || zPathInfo==0 ){
       malformed_request("missing SCRIPT_NAME");  /* Does not return */
     }
-    z = strstr(zRequestUri,zPathInfo);
+    z = (char*)strstr(zRequestUri,zPathInfo);
     if( z==0 ){
       malformed_request("PATH_INFO not found in REQUEST_URI");
     }

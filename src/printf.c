@@ -346,7 +346,7 @@ int vxprintf(
   etByte flag_rtz;           /* True if trailing zeros should be removed */
   etByte flag_exp;           /* True to force display of the exponent */
   int nsd;                   /* Number of significant digits returned */
-  char *zFmtLookup;
+  const char *zFmtLookup;
 
   count = length = 0;
   bufpt = 0;
@@ -1302,17 +1302,6 @@ void fossil_warning(const char *zFormat, ...){
     }
   }
   free(z);
-}
-
-/*
-** Convert text floating-point literals into double.
-*/
-double fossil_atof(const char *z){
-#if SQLITE_VERSION_NUMBER>=3053000
-  return sqlite3_atof(z);
-#else
-  return atof(z);
-#endif
 }
 
 /*

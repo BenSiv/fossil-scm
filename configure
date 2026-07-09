@@ -47,7 +47,10 @@ if [ -z "$openssl_mode" ]; then
   fi
 fi
 
-"`"$dir/autosetup-find-tclsh"`" "$dir/autosetup" "--conf=$autodef" "$@"
+if test -f "$dir/autosetup"
+then "`"$dir/autosetup-find-tclsh"`" "$dir/autosetup" "--conf=$autodef" "$@"
+else autosetup "--conf=$autodef" "$@"
+fi
 rc=$?
 mkdir -p "$root/log"
 if [ -f "config.log" ]; then

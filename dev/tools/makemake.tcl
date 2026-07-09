@@ -289,6 +289,7 @@ set SHELL_OPTIONS [concat $SQLITE_OPTIONS {
   -DUSE_SYSTEM_SQLITE=$(USE_SYSTEM_SQLITE)
   -DSQLITE_SHELL_DBNAME_PROC=sqlcmd_get_dbname
   -DSQLITE_SHELL_INIT_PROC=sqlcmd_init_proc
+  -DSQLITE_PS_APPDEF=sqlcmd_ps_appdef
 }]
 
 # Options used to compile the included SQLite shell on Windows.
@@ -359,7 +360,7 @@ writeln {#
 XBCC = $(BCC) $(BCCFLAGS)
 XTCC = $(TCC) $(CFLAGS_INCLUDE) -I$(OBJDIR) $(TCCFLAGS)
 
-TESTFLAGS := -quiet
+TESTFLAGS = -quiet
 }
 writeln -nonewline "SRC ="
 foreach s [lsort $src] {
@@ -562,13 +563,16 @@ foreach s [lsort $src] {
 }
 
 writeln "\$(SQLITE3_OBJ):\t\$(SQLITE3_SRC)"
+writeln "\t-mkdir -p \$(OBJDIR)"
 writeln "\t\$(XTCC) \$(SQLITE_OPTIONS) \$(SQLITE_CFLAGS) \$(SEE_FLAGS) \\"
 writeln "\t\t-c \$(SQLITE3_SRC) -o \$@"
 
 writeln "\$(OBJDIR)/shell.o:\t\$(SQLITE3_SHELL_SRC) \$(SRCDIR_extsrc)/sqlite3.h"
+writeln "\t-mkdir -p \$(OBJDIR)"
 writeln "\t\$(XTCC) \$(SHELL_OPTIONS) \$(SHELL_CFLAGS) \$(SEE_FLAGS) \$(LINENOISE_DEF.\$(USE_LINENOISE)) -c \$(SQLITE3_SHELL_SRC) -o \$@\n"
 
 writeln "\$(OBJDIR)/linenoise.o:\t\$(SRCDIR_extsrc)/linenoise.c \$(SRCDIR_extsrc)/linenoise.h"
+writeln "\t-mkdir -p \$(OBJDIR)"
 writeln "\t\$(XTCC) -c \$(SRCDIR_extsrc)/linenoise.c -o \$@\n"
 
 writeln "\$(OBJDIR)/th.o:\t\$(SRCDIR)/th.c"
@@ -1853,9 +1857,9 @@ regsub -all {[-]D} [join $SQLITE_WIN32_OPTIONS { }] {/D} MSC_SQLITE_OPTIONS
 set j " \\\n                 "
 writeln "SQLITE_OPTIONS = [join $MSC_SQLITE_OPTIONS $j]\n"
 
-regsub -all {[-]D} [join $SHELL_WIN32_OPTIONS { }] {/D} MSC_SHELL_OPTIONS
 set j " \\\n                "
-writeln "SHELL_OPTIONS = [join $MSC_SHELL_OPTIONS $j]\n"
+writeln [string map {-D /D} \
+         "SHELL_OPTIONS = [join $SHELL_WIN32_OPTIONS $j]"]\n
 
 regsub -all {[-]D} [join $PIKCHR_OPTIONS { }] {/D} MSC_PIKCHR_OPTIONS
 set j " \\\n                "

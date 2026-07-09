@@ -626,6 +626,7 @@ EXTRA_FILES = \
   $(SRCDIR)/diff.js \
   $(SRCDIR)/diff.tcl \
   $(SRCDIR)/forum.js \
+  $(SRCDIR)/fossil.attach.js \
   $(SRCDIR)/fossil.bootstrap.js \
   $(SRCDIR)/fossil.confirmer.js \
   $(SRCDIR)/fossil.copybutton.js \
@@ -676,6 +677,7 @@ EXTRA_FILES = \
   $(SRCDIR)/style.admin_log.css \
   $(SRCDIR)/style.chat.css \
   $(SRCDIR)/style.fileedit.css \
+  $(SRCDIR)/style.forum.css \
   $(SRCDIR)/style.pikchrshow.css \
   $(SRCDIR)/style.uvlist.css \
   $(SRCDIR)/style.wikiedit.css \
@@ -2683,6 +2685,7 @@ SHELL_OPTIONS = -DNDEBUG=1 \
                  -DUSE_SYSTEM_SQLITE=$(USE_SYSTEM_SQLITE) \
                  -DSQLITE_SHELL_DBNAME_PROC=sqlcmd_get_dbname \
                  -DSQLITE_SHELL_INIT_PROC=sqlcmd_init_proc \
+                 -DSQLITE_PS_APPDEF=sqlcmd_ps_appdef \
                  -Daccess=file_access \
                  -Dsystem=fossil_system \
                  -Dgetenv=fossil_getenv \

@@ -1334,6 +1334,7 @@ void db_checkin_mtime_function(
 **     symbolic_name_to_rid('trunk');
 **     symbolic_name_to_rid('trunk','w');
 **
+** Its result is either an RID or NULL.
 */
 void db_sym2rid_function(
   sqlite3_context *context,
@@ -3584,7 +3585,7 @@ char *db_conceal(const char *zContent, int n){
 /*
 ** Attempt to look up the input in the CONCEALED table.  If found,
 ** and if the okRdAddr permission is enabled then return the
-** original value for which the input is a hash.  If okRdAddr is
+** original value for which the input is a hash.  If g.perm.RdAddr is
 ** false or if the lookup fails, return the original string content.
 **
 ** In either case, the string returned is stored in space obtained
@@ -4542,7 +4543,7 @@ void print_setting(const Setting *pSetting, int valueOnly, int bIfChng){
       }else{
         fossil_print("%-24s %-11s\n", pSetting->name, zName);
         while( zVal[0] ){
-          char *zNL = strchr(zVal, '\n');
+          const char *zNL = strchr(zVal, '\n');
           if( zNL==0 ){
             fossil_print("    %s\n", zVal);
             break;

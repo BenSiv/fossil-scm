@@ -13,7 +13,7 @@
 XBCC = $(BCC) $(BCCFLAGS)
 XTCC = $(TCC) $(CFLAGS_INCLUDE) -I$(OBJDIR) $(TCCFLAGS)
 
-TESTFLAGS := -quiet
+TESTFLAGS = -quiet
 
 SRC = \
   $(SRCDIR)/add.c \
@@ -241,6 +241,7 @@ EXTRA_FILES = \
   $(SRCDIR)/diff.js \
   $(SRCDIR)/diff.tcl \
   $(SRCDIR)/forum.js \
+  $(SRCDIR)/fossil.attach.js \
   $(SRCDIR)/fossil.bootstrap.js \
   $(SRCDIR)/fossil.confirmer.js \
   $(SRCDIR)/fossil.copybutton.js \
@@ -291,6 +292,7 @@ EXTRA_FILES = \
   $(SRCDIR)/style.admin_log.css \
   $(SRCDIR)/style.chat.css \
   $(SRCDIR)/style.fileedit.css \
+  $(SRCDIR)/style.forum.css \
   $(SRCDIR)/style.pikchrshow.css \
   $(SRCDIR)/style.uvlist.css \
   $(SRCDIR)/style.wikiedit.css \
@@ -730,7 +732,8 @@ SHELL_OPTIONS = -DNDEBUG=1 \
                 -DSQLITE_OMIT_LOAD_EXTENSION=1 \
                 -DUSE_SYSTEM_SQLITE=$(USE_SYSTEM_SQLITE) \
                 -DSQLITE_SHELL_DBNAME_PROC=sqlcmd_get_dbname \
-                -DSQLITE_SHELL_INIT_PROC=sqlcmd_init_proc
+                -DSQLITE_SHELL_INIT_PROC=sqlcmd_init_proc \
+                -DSQLITE_PS_APPDEF=sqlcmd_ps_appdef
 
 # Setup the options used to compile the included Pikchr formatter.
 PIKCHR_OPTIONS = -DPIKCHR_TOKEN_LIMIT=10000
@@ -2223,12 +2226,15 @@ $(OBJDIR)/zip.o:	$(OBJDIR)/zip_.c $(OBJDIR)/zip.h $(SRCDIR)/config.h
 $(OBJDIR)/zip.h:	$(OBJDIR)/headers
 
 $(SQLITE3_OBJ):	$(SQLITE3_SRC)
+	-mkdir -p $(OBJDIR)
 	$(XTCC) $(SQLITE_OPTIONS) $(SQLITE_CFLAGS) $(SEE_FLAGS) \
 		-c $(SQLITE3_SRC) -o $@
 $(OBJDIR)/shell.o:	$(SQLITE3_SHELL_SRC) $(SRCDIR_extsrc)/sqlite3.h
+	-mkdir -p $(OBJDIR)
 	$(XTCC) $(SHELL_OPTIONS) $(SHELL_CFLAGS) $(SEE_FLAGS) $(LINENOISE_DEF.$(USE_LINENOISE)) -c $(SQLITE3_SHELL_SRC) -o $@
 
 $(OBJDIR)/linenoise.o:	$(SRCDIR_extsrc)/linenoise.c $(SRCDIR_extsrc)/linenoise.h
+	-mkdir -p $(OBJDIR)
 	$(XTCC) -c $(SRCDIR_extsrc)/linenoise.c -o $@
 
 $(OBJDIR)/th.o:	$(SRCDIR)/th.c

@@ -101,6 +101,7 @@ SHELL_OPTIONS += @SQLITE_OPTIONS_EXT@
 distclean: clean
 	-rm -f out/autoconfig.h log/config.log Makefile
 	-rm -f cscope.out tags
+	-rm -f $(EMCC_WRAPPER)
 
 reconfig:
 	@AUTOREMAKE@
