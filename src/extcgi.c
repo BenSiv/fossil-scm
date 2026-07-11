@@ -314,6 +314,15 @@ void ext_page(void){
     }while( toSend>0 );
     fflush(toChild);
   }
+  /* Close the write end of the child's stdin now that the full request
+  ** body (if any) has been sent, so the child sees EOF.  Without this,
+  ** a child CGI that reads stdin to EOF before writing any response (the
+  ** normal way to consume a POST body) deadlocks: it blocks waiting for
+  ** EOF that this process would otherwise not send until after already
+  ** trying to read the child's entire response.
+  */
+  fclose(toChild);
+  toChild = 0;
   if( g.perm.Debug && P("fossil-ext-debug")!=0 ){
     /* For users with Debug privilege, if the "fossil-ext-debug" query
     ** parameter exists, then show raw output from the CGI */
@@ -325,7 +334,6 @@ void ext_page(void){
       if( i==0 ) break;
       if( fossil_strnicmp(zLine,"Location:",9)==0 ){
         fclose(fromChild);
-        fclose(toChild);
         cgi_redirect(&zLine[10]); /* no return */
       }else if( fossil_strnicmp(zLine,"Status:",7)==0 ){
         int j;
