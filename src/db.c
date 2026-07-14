@@ -3159,10 +3159,16 @@ void db_create_default_users(int setupUserOnly, const char *zDefaultUser){
   );
   if( !setupUserOnly ){
     db_multi_exec(
+       /* "anonymous" and "nobody" default to no capabilities at all in
+       ** this fork (upstream Fossil ships 'hz'/'gjorz', granting real
+       ** read/clone/zip access with zero login) -- a fresh repo should
+       ** never be reachable by an unauthenticated caller by default;
+       ** any access for these pseudo-users must be an explicit,
+       ** post-init opt-in, not a silent out-of-the-box default. */
        "INSERT OR IGNORE INTO user(login,pw,cap,info)"
-       "   VALUES('anonymous',hex(randomblob(8)),'hz','Anon');"
+       "   VALUES('anonymous',hex(randomblob(8)),'','Anon');"
        "INSERT OR IGNORE INTO user(login,pw,cap,info)"
-       "   VALUES('nobody','','gjorz','Nobody');"
+       "   VALUES('nobody','','','Nobody');"
        "INSERT OR IGNORE INTO user(login,pw,cap,info)"
        "   VALUES('developer','','ei','Dev');"
        "INSERT OR IGNORE INTO user(login,pw,cap,info)"
