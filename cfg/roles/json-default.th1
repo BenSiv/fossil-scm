@@ -58,6 +58,22 @@ if {[catch {agent_run $provider $model $full_prompt} reply]} {
   return "{\"error\":[agent_json_quote $reply]}"
 }
 
+# Backend wrapper scripts (e.g. dev/agents/fossil-gemini-agent.sh) may
+# prepend their own captured stderr diagnostics ahead of this marker,
+# rather than mixing them into the reply itself or discarding them
+# silently -- split them back out here into a distinct $warnings value
+# so the JSON response can expose them separately (see the UI's
+# dismissible-banner handling of "warnings" below) instead of polluting
+# the visible chat reply. A no-op for any backend that doesn't emit the
+# marker (reply is used as-is, $warnings stays empty).
+set reply_marker "___FOSSIL_AGENT_REPLY___"
+set warnings ""
+set marker_pos [string first $reply_marker $reply]
+if {$marker_pos != -1} {
+  set warnings [string trim [string range $reply 0 [expr {$marker_pos - 1}]]]
+  set reply [string range $reply [expr {$marker_pos + [string length $reply_marker] + 1}] end]
+}
+
 set start_tag "<$thinking_tag>"
 set end_tag "</$thinking_tag>"
 set s [string first $start_tag $reply]
@@ -107,4 +123,4 @@ if {$retrieval_qid > 0 && [string compare [string trim $clean_reply] ""] != 0} {
   agent_save_event $sid $user "progress" $provider $model $event_meta $event_msg
 }
 agent_eval $sid $acid $provider $model "reply" $reply
-return "{\"sid\":$sid,\"provider\":[agent_json_quote $provider],\"model\":[agent_json_quote $model],\"reply\":[agent_json_quote $clean_reply],\"derived_note_nid\":$derived_note_nid}"
+return "{\"sid\":$sid,\"provider\":[agent_json_quote $provider],\"model\":[agent_json_quote $model],\"reply\":[agent_json_quote $clean_reply],\"warnings\":[agent_json_quote $warnings],\"derived_note_nid\":$derived_note_nid}"
