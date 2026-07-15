@@ -2,7 +2,6 @@ set thinking_tag [agent_config thinking_tag]
 if {[string compare $thinking_tag ""] == 0} {set thinking_tag "thought"}
 
 set system_prompt "You are the Fossil AI Agent. Provide concise, direct answers. Do not include chain-of-thought. If you need to reason, put it inside <$thinking_tag>...</$thinking_tag> and do not include it in the final answer."
-set full_prompt "$system_prompt\n\nUser request:\n$msg"
 set context ""
 set retrieval_qid 0
 set derived_note_nid 0
@@ -20,12 +19,26 @@ if {$context_enabled} {
       set event_meta "{\"request_id\":\"$request_id\",\"stage\":\"context\",\"hidden\":true}"
     }
     agent_save_event $sid $user "context" $provider $model $event_meta $context
-    set full_prompt "$system_prompt\n\nContext:\n$context\n\nUser request:\n$msg"
   }
   set event_meta "{\"request_id\":\"$request_id\",\"stage\":\"context\",\"status\":\"ok\"}"
   set event_msg "Repository context assembled"
   agent_save_event $sid $user "progress" $provider $model $event_meta $event_msg
 }
+
+# page_context (set by the caller from whatever page is currently open in
+# the browser, e.g. a wiki page's rendered content -- see agent_web.c's
+# "page_context" param) is folded in unconditionally, independent of
+# context_enabled/retrieval -- a direct "what am I looking at" signal, not
+# a relevance-scored retrieval result, so it shouldn't be gated by the
+# same toggle or silently dropped when retrieval also fires.
+set full_prompt "$system_prompt\n\n"
+if {[string compare $page_context ""] != 0} {
+  set full_prompt "${full_prompt}Currently viewing:\n$page_context\n\n"
+}
+if {[string compare $context ""] != 0} {
+  set full_prompt "${full_prompt}Context:\n$context\n\n"
+}
+set full_prompt "${full_prompt}User request:\n$msg"
 
 set tool_info [agent_tool_info "chat-backend"]
 set event_meta "{\"request_id\":\"$request_id\",\"tool\":\"chat-backend\",\"provider\":\"$provider\",\"phase\":\"request\",\"tool_info\":$tool_info}"

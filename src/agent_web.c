@@ -338,6 +338,7 @@ static void agent_chat_page_impl(int bApiV1){
   const char *zUser;
   const char *zRequestIdParam;
   const char *zUseRequestId;
+  const char *zPageContext;
   int sid;
   int rid = 0;
   int terminalAcid = 0;
@@ -358,6 +359,7 @@ static void agent_chat_page_impl(int bApiV1){
   zModel = PD("model", agent_default_model());
   zUser = (g.zLogin && g.zLogin[0]) ? g.zLogin : "guest";
   zRequestIdParam = PD("request_id", "");
+  zPageContext = PD("page_context", "");
   sid = atoi(PD("sid","0"));
   cgi_set_content_type("application/json");
 
@@ -395,6 +397,7 @@ static void agent_chat_page_impl(int bApiV1){
   Th_SetVar(g.interp, "model", 5, zModel, (int)strlen(zModel));
   Th_SetVar(g.interp, "user", 4, zUser, (int)strlen(zUser));
   Th_SetVar(g.interp, "request_id", 10, zRequestId, -1);
+  Th_SetVar(g.interp, "page_context", 12, zPageContext, (int)strlen(zPageContext));
   Th_StoreInt("context_enabled", PB("context"));
 
   if( agent_orchestration_script("json-default", &script)==0 ){
