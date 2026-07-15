@@ -528,7 +528,7 @@ void agent_chat_render_sessions_to_blob(
                    zTitle, zProvider, (zModel&&zModel[0]?" / ":""), zModel,
                    (zState&&zState[0]?" | ":""), zState);
     }else{
-      blob_appendf(pOut, "<a href=\"%%R/agentui?sid=%d\">%h</a> <span class=\"dimmed\">[%h%s%h%s%h]</span>",
+      blob_appendf(pOut, "<a href=\"%R/agentui?sid=%d\">%h</a> <span class=\"dimmed\">[%h%s%h%s%h]</span>",
                    sid, zTitle, zProvider, (zModel&&zModel[0]?" / ":""), zModel,
                    (zState&&zState[0]?" | ":""), zState);
     }
