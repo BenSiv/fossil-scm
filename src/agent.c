@@ -470,6 +470,15 @@ char *agent_config_get(const char *zKey){
   if( fossil_strcmp(zKey, "chat_provider_locked")==0 ){
     return db_get("agent-chat-provider-locked", "on");
   }
+  if( fossil_strcmp(zKey, "system_prompt_extra")==0 ){
+    /* Generic extension point, deliberately empty by default -- lets a
+    ** particular deployment append its own domain-specific instructions
+    ** (e.g. "here is where the application's own data lives and how to
+    ** query it") to the system prompt without this fork's own role
+    ** script (cfg/roles/json-default.th1) ever needing to know what
+    ** that deployment's domain even is. */
+    return db_get("agent-system-prompt-extra", "");
+  }
   return 0;
 }
 

@@ -2,6 +2,10 @@ set thinking_tag [agent_config thinking_tag]
 if {[string compare $thinking_tag ""] == 0} {set thinking_tag "thought"}
 
 set system_prompt "You are the Fossil AI Agent. Provide concise, direct answers. Do not include chain-of-thought. If you need to reason, put it inside <$thinking_tag>...</$thinking_tag> and do not include it in the final answer."
+set system_prompt_extra [agent_config system_prompt_extra]
+if {[string compare $system_prompt_extra ""] != 0} {
+  set system_prompt "$system_prompt\n\n$system_prompt_extra"
+}
 set context ""
 set retrieval_qid 0
 set derived_note_nid 0
