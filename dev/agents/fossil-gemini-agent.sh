@@ -16,6 +16,9 @@ REPLY_MARKER="___FOSSIL_AGENT_REPLY___"
 # Overriding unconditionally, since there's genuinely no real terminal to
 # describe in this subprocess regardless of what TERM inherited.
 export TERM="xterm-256color"
+# supportsTrueColor() (gemini-cli) checks COLORTERM specifically -- TERM
+# alone silences the 256-color warning but not this separate truecolor one.
+export COLORTERM="truecolor"
 
 if ! command -v "$GEMINI_BIN" >/dev/null 2>&1; then
   echo "gemini CLI not found in PATH" >&2
