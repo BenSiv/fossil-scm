@@ -4,7 +4,6 @@ $ui_css
 
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1em;" data-sid="$sid">
   <div class="section-title" style="margin:0;">AI Agent Configuration</div>
-  <button id="theme-toggle" class="theme-toggle">🌓 Toggle Theme</button>
 </div>
 
 <div id="agent-config-details" style="margin-bottom:1.5em;padding:0.8em;border:1px solid var(--agent-border);background:var(--agent-card-bg);font-size:0.9em;">

@@ -1,3 +1,10 @@
+/* Static defaults for the custom properties this stylesheet's other
+** rules reference -- previously only ever defined inside the
+** theme-light/theme-dark toggle classes, which no longer exist. */
+:root {
+  --agent-border: #cccccc;
+  --agent-card-bg: rgba(0,0,0,0.03);
+}
 .dimmed { color: #888; font-size: 0.9em; }
 .spinner {
   display: inline-block;
@@ -12,24 +19,6 @@
 @keyframes spin { to { transform: rotate(360deg); } }
 .thinking-details[open] summary { margin-bottom: 0.5em; }
 
-/* Theme overrides */
-body.theme-light { 
-  --agent-bg: #ffffff; 
-  --agent-text: #333333; 
-  --agent-border: #cccccc;
-  --agent-card-bg: rgba(0,0,0,0.03); 
-}
-body.theme-dark { 
-  --agent-bg: #1a1a1a; 
-  --agent-text: #e0e0e0; 
-  --agent-border: #444444;
-  --agent-card-bg: rgba(255,255,255,0.05); 
-}
-body[class*="theme-"] {
-  background-color: var(--agent-bg);
-  color: var(--agent-text);
-}
-.theme-toggle { cursor: pointer; padding: 0.3em 0.6em; border: 1px solid var(--agent-border); border-radius: 4px; background: var(--agent-card-bg); color: inherit; font-size: 0.9em; }
 .agent-request-panel { font-size: 0.9em; }
 .agent-request-state {
   display: inline-block;

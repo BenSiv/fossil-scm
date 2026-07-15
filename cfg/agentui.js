@@ -393,21 +393,5 @@
     });
   }
 
-  var toggle = document.getElementById('theme-toggle');
-  var currentTheme = localStorage.getItem('agent-theme') || 'auto';
-  if(currentTheme !== 'auto') document.body.classList.add('theme-' + currentTheme);
-
-  toggle.addEventListener('click', function(){
-    if(document.body.classList.contains('theme-dark')){
-      document.body.classList.remove('theme-dark');
-      document.body.classList.add('theme-light');
-      localStorage.setItem('agent-theme', 'light');
-    }else{
-      document.body.classList.remove('theme-light');
-      document.body.classList.add('theme-dark');
-      localStorage.setItem('agent-theme', 'dark');
-    }
-  });
-
   log.scrollTop = log.scrollHeight;
 })();
