@@ -334,6 +334,15 @@ void agent_apply_pre_prompt_hook(AgentSessionContext *pCtx){
 ** If enabled, automatically promote markdown files in the checkout into tier 1
 ** knowledge notes for retrieval.
 */
+/*
+** SETTING: agent-system-prompt-extra width=200 versionable
+**
+** Optional text appended to the agent's system prompt (see
+** cfg/roles/json-default.th1 and agent_config_get's "system_prompt_extra"
+** key). Empty by default. Lets a particular deployment describe its own
+** domain-specific data/tools to the model without this fork's own role
+** script needing to know what that deployment even is.
+*/
 
 char *agent_config_source(void){
   return mprintf("fossil settings");
