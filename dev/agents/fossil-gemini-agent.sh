@@ -9,12 +9,13 @@ REPLY_MARKER="___FOSSIL_AGENT_REPLY___"
 
 # No real TTY here (stdout is piped to this script), so gemini CLI's own
 # terminal-capability probe (process.stdout.getColorDepth()) finds nothing
-# and falls back to checking $TERM, which is otherwise unset in this
-# subprocess -- causing its harmless-but-noisy "256-color support not
-# detected" compatibility warning on every single call. Standard fix for
-# headless CLI invocations, same as CI systems setting TERM to keep
-# color-aware tools quiet when there's no real terminal to describe.
-export TERM="${TERM:-xterm-256color}"
+# and falls back to checking $TERM. Confirmed live in production: the
+# inherited environment already sets TERM=dumb (not merely unset), so an
+# only-if-unset default here silently never applied -- both the 256-color
+# AND the "Basic terminal detected (TERM=dumb)" warnings still fired.
+# Overriding unconditionally, since there's genuinely no real terminal to
+# describe in this subprocess regardless of what TERM inherited.
+export TERM="xterm-256color"
 
 if ! command -v "$GEMINI_BIN" >/dev/null 2>&1; then
   echo "gemini CLI not found in PATH" >&2
