@@ -7,6 +7,15 @@ PROMPT_FLAG="${FOSSIL_AGENT_GEMINI_PROMPT_FLAG:---prompt}"
 MODEL_FLAG="${FOSSIL_AGENT_GEMINI_MODEL_FLAG:---model}"
 REPLY_MARKER="___FOSSIL_AGENT_REPLY___"
 
+# No real TTY here (stdout is piped to this script), so gemini CLI's own
+# terminal-capability probe (process.stdout.getColorDepth()) finds nothing
+# and falls back to checking $TERM, which is otherwise unset in this
+# subprocess -- causing its harmless-but-noisy "256-color support not
+# detected" compatibility warning on every single call. Standard fix for
+# headless CLI invocations, same as CI systems setting TERM to keep
+# color-aware tools quiet when there's no real terminal to describe.
+export TERM="${TERM:-xterm-256color}"
+
 if ! command -v "$GEMINI_BIN" >/dev/null 2>&1; then
   echo "gemini CLI not found in PATH" >&2
   exit 1
